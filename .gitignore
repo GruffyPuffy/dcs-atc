@@ -1,0 +1,37 @@
+# Local configuration and credentials (keep *.example templates)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# DCS/Wine runtime state, logs, downloaded server files
+.wine/
+Saved Games/
+deploy/dcs/config/
+data/
+logs/
+*.log
+*.log.*
+
+# Python and local tooling
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ATC bot: captured radio audio and downloaded models/voices
+atc/audio/
+atc/rx_*.wav
+atc/tx_*.wav
+atc/samples/
+atc/voices/
+
+# Editor and OS files
+.idea/
+.vscode/
+*~
+.DS_Store

@@ -1,0 +1,47 @@
+name: dcs-atc
+
+services:
+  dcs-server:
+    image: aterfax/dcs-world-dedicated-server:latest
+    container_name: dcs-atc-server
+    environment:
+      PUID: "${PUID:?Set PUID in .env}"
+      PGID: "${PGID:?Set PGID in .env}"
+      TZ: Europe/Stockholm
+      CUSTOM_USER: "${WEBTOP_USER:?Set WEBTOP_USER in .env}"
+      PASSWORD: "${WEBTOP_PASSWORD:?Set WEBTOP_PASSWORD in .env}"
+      DCSAUTOINSTALL: "1"
+      DCSMODULES: CAUCASUS_terrain
+      FORCEREINSTALL: "0"
+      AUTOSTART: "1"
+    ports:
+      - "3001:3001/tcp"
+      - "127.0.0.1:10309:10309/tcp"
+      - "10308:10308/tcp"
+      - "10308:10308/udp"
+    volumes:
+      - /data/dcs-atc/config:/config
+    restart: unless-stopped
+
+  srs-server:
+    image: omltcat/dcs-srs-server:latest
+    container_name: dcs-atc-srs
+    environment:
+      CONSOLE_LOGS: "true"
+      SERVER_PORT: "5002"
+      # EAM lets clients connect and transmit without DCS running (ATC trainer,
+      # LotATC-style clients). LAN-only server, so a simple password is fine.
+      EXTERNAL_AWACS_MODE: "true"
+      EXTERNAL_AWACS_MODE_BLUE_PASSWORD: "atc"
+      CLIENT_EXPORT_ENABLED: "true"
+      HTTP_SERVER_ENABLED: "true"
+      HTTP_SERVER_PORT: "8080"
+      # .NET HttpListener on Linux requires "*" (or "+"), not 0.0.0.0
+      HTTP_SERVER_ADDRESS: "*"
+      # The API key is regenerated on each container start; read it from the
+      # logs (./scripts/dcs.sh srs-logs) when calling the HTTP API.
+    ports:
+      - "5002:5002/tcp"
+      - "5002:5002/udp"
+      - "127.0.0.1:8080:8080/tcp"
+    restart: unless-stopped
