@@ -30,6 +30,9 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=10309)
     commands = parser.add_subparsers(dest="operation", required=True)
     commands.add_parser("status")
+    commands.add_parser("diag", help="Probe which mission-env mechanisms work")
+    ev = commands.add_parser("eval", help="Evaluate a Lua expression in the hook env")
+    ev.add_argument("code")
     test = commands.add_parser("move-test", help="Move Blue ground group 150 m northeast")
     test.add_argument("--group", default="ATC Blue Ground")
     move = commands.add_parser("move", help="Move a ground group to DCS x/z coordinates")
@@ -46,7 +49,9 @@ def main() -> None:
 
     fields = {}
     operation = args.operation
-    if operation == "move-test":
+    if operation == "eval":
+        fields = {"code": args.code}
+    elif operation == "move-test":
         snapshot = exchange(args.host, args.port, "status")
         if not snapshot.get("ok"):
             raise SystemExit(json.dumps(snapshot, indent=2))

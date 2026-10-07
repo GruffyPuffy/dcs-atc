@@ -6,11 +6,16 @@ headless Python ATC bot (SRS client, Whisper STT, Piper TTS, rules-based brain).
 
 Layout
 ------
-- `atc/` — the ATC bot (`atc_bot.py` full bot, `listen.py` listen-only, `debug_stt.py` offline STT tuning, `brain.py` rules brain, `srs_client.py` headless SRS client)
+- `atc/` — the ATC bot (`atc_bot.py` full bot, `listen.py` listen-only, `debug_stt.py` offline STT tuning, `brain.py` rules brain, `callsigns.py` mission callsign recognition, `phonetics.py` STT-variant generation, `atis.py` weather/ATIS, `srs_client.py` headless SRS client, `airspace.py` CTR geometry, `ctr.py` boundary tracker, `state_client.py` DCS state reader, `airspace.json` per-airfield config, `phraseology.json` reply wording)
 - `deploy/dcs/` — docker-compose for the DCS dedicated server and the SRS server
 - `scripts/dcs.sh` — manage the containers (install/start/stop/logs/srs-*)
-- `scripts/state_client.py` — CLI for the DCS state API (JSON socket bridge, port 10309): `status`, `move`, `move-geo`, `hold`
-- `bridge/` — Saved Games hooks: `dcs_state_hook.lua` (state API), `srs_autoconnect.lua` (SRS announce)
+- `scripts/state_client.py` — CLI for the DCS state API (JSON socket bridge, port 10309): `status`, `diag`, `eval`, `move`, `move-geo`, `hold`
+- `bridge/` — Saved Games hooks: `dcs_state_hook.lua` (state API socket + mission-env
+  injection), `dcs_state_body.lua` (mission-side state logic, read fresh per request),
+  `srs_autoconnect.lua` (SRS announce)
+- `ATC.md` — ATC behaviour reference (callsigns, phraseology, controllers, CTR)
+- `TESTING.md` — first live test scenario + how to read the log
+- `atc/tests/` — offline pytest suite (no DCS/SRS needed): `cd atc && uv run pytest`
 
 Install
 -------
@@ -43,11 +48,10 @@ Once DCS is installed and running:
     ./scripts/dcs.sh bridge            # state-API hook (port 10309)
     ./scripts/dcs.sh srs-autoconnect   # optional: SRS announce on player join
 
-Then restart the DCS process (Webtop → stop/start the server, or
-`./scripts/dcs.sh stop && ./scripts/dcs.sh start`) so the hooks load. Verify
-the state API:
+Then restart the DCS process from Webtop (stop/start the server) so the hooks
+load — no need to restart the container. Verify the state API:
 
-    python3 scripts/state_client.py ping
+    python3 scripts/state_client.py status
 
 ### 4. Add a mission
 
@@ -62,7 +66,7 @@ for the ATC bot to talk about; TTI Caucasus works as-is.
 
     cd atc
     uv sync                            # once; creates .venv from uv.lock
-    ./start_bot.sh                     # joins SRS on 251.000 AM
+    ./start_bot.sh                     # joins SRS on 263.000 AM
 
 First bot run downloads the Whisper model (`small.en`). The Piper voice is a
 download too — copy `en_US-amy-medium.onnx(.json)` into `atc/voices/` or fetch
@@ -84,3 +88,59 @@ Read live DCS mission state (groups, airbases, positions) via the socket hook:
 
 The same `exchange()` helper is what the ATC logic will use to get the picture
 (who is where, which runway/base is active) for real ATC decisions.
+
+How it works (no mission edits required)
+----------------------------------------
+DCS runs several isolated Lua VMs. The Simulator Scripting Engine API
+(`coalition`, `Group`, `coord`) only works in the **mission** state, and the
+Saved Games hook runs in the **gui** state (whose `coalition` is a stub). The
+hook therefore injects the mission-side logic into the mission state at runtime:
+
+    hook (gui) --net.dostring_in('mission')--> a_do_script(body) --> SSE API
+
+`bridge/dcs_state_body.lua` holds that mission-side logic and is read fresh on
+every request, so it can be edited and redeployed (`./scripts/dcs.sh bridge`)
+without restarting DCS. Only changes to `dcs_state_hook.lua` itself need a DCS
+restart. This works on any mission (e.g. Through The Inferno) with no `.miz`
+changes and no `MissionScripting.lua` de-sanitize.
+
+Debugging helpers:
+
+    python3 scripts/state_client.py diag          # probe which mechanisms work
+    python3 scripts/state_client.py eval '<expr>' # evaluate Lua in the hook env
+
+Airspace / CTR
+--------------
+Control zones are defined in `atc/airspace.json` (per airfield: tower, frequency,
+active runway, CTR polygon or radius, ceiling, runway thresholds, entry/exit
+gates). The Kutaisi CTR geometry is derived from the Master Arms community wiki
+(https://wiki.masterarms.se/index.php/Airport_Procedures): CTR surface to 1500 ft
+AGL, TMA 1500 ft MSL to 10000 ft, CTA above.
+
+`atc/airspace.py` builds the geometry with shapely (lat/lon projected to a local
+metric plane) and answers containment/distance/bearing queries. `atc/ctr.py`
+tracks per-aircraft inside/outside state and emits `ENTERED_CTR` / `EXITED_CTR`
+events. The bot uses these to make inbound replies distance-aware and to warn on
+unannounced CTR entry:
+
+- inbound call outside the CTR → "report entering the control zone"
+- inbound call inside the CTR → "radar contact <position>, cleared control zone
+  entry, join left downwind runway 25"
+- unannounced entry → "you are entering controlled airspace without clearance..."
+
+The bot reads live positions from the state bridge (`--state-host/--state-port`,
+disable with `--no-state`). It also detects an occupied runway and calls a
+go-around for aircraft on final. See `ATC.md` for the full behaviour reference
+(callsigns, phraseology, per-pilot state machine, CTR and runway logic).
+
+Configuration is data-driven: `atc/airspace.json` is the single source of truth
+for each airfield's tower name, frequency, ATIS frequency, active runway, CTR and
+runways. Start the bot with `--airfield <name>` and everything else follows; CLI
+flags (`--freq`, `--name`, `--atis-freq`) override if needed. Reply wording lives
+in `atc/phraseology.json` (templates with `{placeholders}`), and callsigns are
+read from the loaded mission's player slots (`env.mission`), so the bot only
+reacts to flights that actually exist.
+
+The bot also broadcasts **ATIS** on its own frequency (Kutaisi 270.500 AM),
+built from live DCS weather: active runway from wind, QNH, CAVOK/visibility, and
+an hour-based information letter (Alpha, Bravo, …). See `ATC.md` §10.

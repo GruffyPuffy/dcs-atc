@@ -1,0 +1,40 @@
+{
+  "_comment": "Airspace definitions for the ATC trainer. Coordinates are [lat, lon] in decimal degrees (WGS84). Altitudes are feet. Edit per airfield; the Python code reads this file at startup.",
+  "_attribution": "Kutaisi CTR geometry derived from Master Arms (https://wiki.masterarms.se/index.php/Airport_Procedures), a Swedish DCS community. Their model: CTR surface..1500 ft AGL, TMA 1500 ft MSL..10000 ft, CTA 10000 ft MSL..UNL.",
+  "defaults": {
+    "ctr_ceiling_ft_agl": 1500,
+    "ctr_radius_nm": 5.0
+  },
+  "airfields": {
+    "Kutaisi": {
+      "tower": "Kutaisi Tower",
+      "frequency_mhz": 263.0,
+      "atis_frequency_mhz": 270.5,
+      "ground": "Kutaisi Ground",
+      "ground_frequency_mhz": 250.0,
+      "control": "Kutaisi Control",
+      "control_frequency_mhz": 257.0,
+      "elevation_ft": 148,
+      "active_runway": "25",
+      "ctr": {
+        "ceiling_ft_agl": 1500,
+        "polygon": [
+          [42.141514, 42.617812],
+          [42.108252, 42.364397],
+          [42.213898, 42.341952],
+          [42.245675, 42.593265]
+        ]
+      },
+      "runways": {
+        "25": { "threshold": [42.17947, 42.49603] },
+        "07": { "threshold": [42.17577, 42.46636] }
+      },
+      "gates": {
+        "East": [42.20288, 42.65242],
+        "West": [42.13007, 42.30030],
+        "South": [42.10462, 42.53040],
+        "North": [42.26540, 42.50143]
+      }
+    }
+  }
+}

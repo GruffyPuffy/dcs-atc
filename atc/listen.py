@@ -1,7 +1,7 @@
 """ATC trainer step 1: join SRS, listen on a frequency, STT transmissions to a log.
 
 Usage:
-    uv run listen.py [--host IP] [--port 5002] [--freq 251.0] [--name ATC]
+    uv run listen.py [--host IP] [--port 5002] [--freq 263.0] [--name ATC]
                      [--eam atc] [--model base.en] [--log /tmp/atc_log.txt]
                      [--keep 10] [--gain 1.0]
 """
@@ -45,7 +45,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=5002)
-    parser.add_argument("--freq", type=float, default=251.0, help="MHz, AM")
+    parser.add_argument("--freq", type=float, default=263.0, help="MHz, AM")
     parser.add_argument("--name", default="ATC-Bot")
     parser.add_argument("--eam", default=None, help="External AWACS Mode password")
     parser.add_argument("--model", default="small.en")

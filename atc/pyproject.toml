@@ -8,7 +8,17 @@ dependencies = [
     "av>=14.0.0",
     "faster-whisper>=1.0.0",
     "piper-tts>=1.2.0",
+    "shapely>=2.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
 ]
 
 [tool.uv]
 package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

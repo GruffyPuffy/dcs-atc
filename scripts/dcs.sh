@@ -111,6 +111,7 @@ prepare() {
 
 deploy_state_bridge() {
   deploy_hook "$repo_dir/bridge/dcs_state_hook.lua" "dcs_state_hook.lua"
+  deploy_hook "$repo_dir/bridge/dcs_state_body.lua" "dcs_state_body.lua"
 }
 
 deploy_srs_autoconnect() {

@@ -1,14 +1,23 @@
 """ATC trainer: listen on SRS, STT, rules-based reply, TTS, transmit back.
 
+Frequency, tower name and active runway come from airspace.json (per airfield);
+CLI flags override them.
+
 Usage:
-    uv run atc_bot.py [--host IP] [--port 5002] [--freq 251.0] [--name ATC]
+    uv run atc_bot.py [--airfield Kutaisi] [--airspace airspace.json]
+                      [--host IP] [--port 5002] [--freq 263.0] [--name ATC]
                       [--eam atc] [--stt-model small.en] [--voice en_US-amy-medium]
+                      [--ground-voice en_US-ryan-medium]
+                      [--control-voice en_US-lessac-medium]
+                      [--atis-voice en_GB-alan-medium]
                       [--log /tmp/atc_log.txt] [--keep 10] [--gain 1.0]
+                      [--state-host 127.0.0.1] [--state-port 10309] [--no-state]
 """
 
 import argparse
 import datetime
 import math
+import threading
 import time
 import wave
 from pathlib import Path
@@ -16,8 +25,14 @@ from pathlib import Path
 import av
 import numpy as np
 
-from brain import AtcBrain
+from airspace import Airspace
+from atis import build_atis
+from brain import AtcBrain, Controller, Phraseology
+from callsigns import CallsignRegistry
+from ctr import CtrEvent, CtrTracker
 from srs_client import SrsClient
+from state_client import StateClient
+from workers import ControllerWorker, SharedState
 
 SAMPLE_RATE = 48000
 STT_RATE = 16000
@@ -49,35 +64,117 @@ def resample_to_48k(pcm: bytes, rate: int) -> bytes:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--airfield", default="Kutaisi",
+                        help="airfield key in airspace.json (drives freq/name/runway)")
+    parser.add_argument("--airspace", default=None,
+                        help="path to airspace.json (default: next to this file)")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=5002)
-    parser.add_argument("--freq", type=float, default=251.0, help="MHz, AM")
-    parser.add_argument("--name", default="Kutaisi Tower")
+    parser.add_argument("--freq", type=float, default=None,
+                        help="MHz, AM (default: from airspace.json)")
+    parser.add_argument("--atis-freq", type=float, default=None,
+                        help="ATIS MHz, AM (default: from airspace.json; 0 disables)")
+    parser.add_argument("--ground-freq", type=float, default=None,
+                        help="Ground MHz, AM (default: from airspace.json; 0 disables)")
+    parser.add_argument("--control-freq", type=float, default=None,
+                        help="Control MHz, AM (default: from airspace.json; 0 disables)")
+    parser.add_argument("--atis-interval", type=float, default=60.0,
+                        help="seconds between ATIS broadcasts (0 disables)")
+    parser.add_argument("--name", default=None,
+                        help="SRS client name (default: airfield tower name)")
     parser.add_argument("--eam", default=None, help="External AWACS Mode password")
     parser.add_argument("--stt-model", default="small.en")
-    parser.add_argument("--voice", default="en_US-amy-medium")
+    parser.add_argument("--voice", default="en_US-amy-medium",
+                        help="Piper voice for Tower (default: en_US-amy-medium)")
+    parser.add_argument("--ground-voice", default="en_US-ryan-medium",
+                        help="Piper voice for Ground (default: en_US-ryan-medium)")
+    parser.add_argument("--control-voice", default="en_US-lessac-medium",
+                        help="Piper voice for Control (default: en_US-lessac-medium)")
+    parser.add_argument("--atis-voice", default="en_GB-alan-medium",
+                        help="Piper voice for ATIS (default: en_GB-alan-medium)")
     parser.add_argument("--log", default="/tmp/atc_log.txt")
     parser.add_argument("--audio-dir", default="/tmp/atc_audio")
     parser.add_argument("--keep", type=int, default=10)
     parser.add_argument("--gain", type=float, default=1.0)
     parser.add_argument("--speech-rate", type=float, default=0.7,
                         help="Piper length_scale; lower = faster (0.6-1.0)")
+    parser.add_argument("--state-host", default="127.0.0.1")
+    parser.add_argument("--state-port", type=int, default=10309)
+    parser.add_argument("--no-state", action="store_true",
+                        help="disable the DCS state bridge (no live positions)")
+    parser.add_argument("--debug", action="store_true",
+                        help="log routing/state detail for every transmission")
     args = parser.parse_args()
 
     from faster_whisper import WhisperModel
     from piper import PiperVoice
     from piper.config import SynthesisConfig
 
-    freq_hz = round(args.freq * 1_000_000)
+    # The airfield config is the single source of truth: frequency, tower name
+    # and active runway all come from airspace.json. CLI flags override.
+    airspace = Airspace.load(args.airspace) if args.airspace else Airspace.load()
+    airfield = airspace.get(args.airfield)
+    if airfield is None:
+        raise SystemExit(f"airfield {args.airfield!r} not found in airspace.json")
+    freq_mhz = args.freq if args.freq is not None else airfield.frequency_mhz
+    if not freq_mhz:
+        raise SystemExit(f"airfield {args.airfield!r} has no frequency_mhz in airspace.json")
+    name = args.name if args.name is not None else airfield.tower
+    atis_mhz = args.atis_freq if args.atis_freq is not None else airfield.atis_frequency_mhz
+    ground_mhz = args.ground_freq if args.ground_freq is not None else airfield.ground_frequency_mhz
+    control_mhz = args.control_freq if args.control_freq is not None else airfield.control_frequency_mhz
+
+    freq_hz = round(freq_mhz * 1_000_000)
+    atis_hz = round(atis_mhz * 1_000_000) if atis_mhz else None
+    ground_hz = round(ground_mhz * 1_000_000) if ground_mhz else None
+    control_hz = round(control_mhz * 1_000_000) if control_mhz else None
+    # frequency (Hz) -> controller role, for routing incoming transmissions
+    controller_by_freq = {freq_hz: Controller.TOWER}
+    if ground_hz:
+        controller_by_freq[ground_hz] = Controller.GROUND
+    if control_hz:
+        controller_by_freq[control_hz] = Controller.CONTROL
     log_path = Path(args.log)
     audio_dir = Path(args.audio_dir)
     audio_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"[*] Loading Whisper '{args.stt_model}'...")
     stt = WhisperModel(args.stt_model, device="cpu", compute_type="int8")
-    print(f"[*] Loading Piper voice '{args.voice}'...")
-    tts = PiperVoice.load(f"voices/{args.voice}.onnx")
-    brain = AtcBrain()
+    # A distinct voice per controller adds immersion: Tower, Ground, Control and
+    # ATIS each sound like a different controller.
+    voice_names = {
+        Controller.TOWER: args.voice,
+        Controller.GROUND: args.ground_voice,
+        Controller.CONTROL: args.control_voice,
+    }
+    voices: dict[str, PiperVoice] = {}
+    for voice_name in dict.fromkeys([*voice_names.values(), args.atis_voice]):
+        print(f"[*] Loading Piper voice '{voice_name}'...")
+        voices[voice_name] = PiperVoice.load(f"voices/{voice_name}.onnx")
+    voice_for = {ctrl: voices[v] for ctrl, v in voice_names.items()}
+    atis_voice = voices[args.atis_voice]
+
+    # The brain uses live positions to make inbound replies distance-aware and
+    # to warn on unannounced CTR entry / occupied-runway go-arounds.
+    state = None if args.no_state else StateClient(args.state_host, args.state_port)
+    callsigns = CallsignRegistry()
+    if state is not None:
+        try:
+            slots = state.callsigns()
+            if slots:
+                callsigns = CallsignRegistry.from_mission(slots)
+                print(f"[*] Callsigns from mission: {len(callsigns.names)} flights "
+                      f"({', '.join(callsigns.names[:8])}...)")
+        except (OSError, RuntimeError) as error:
+            print(f"[*] Could not read mission callsigns ({error}); using defaults")
+    brain = AtcBrain(tower=airfield.tower, runway=airfield.active_runway,
+                     phraseology=Phraseology.load(), callsigns=callsigns,
+                     ground=airfield.ground, control=airfield.control,
+                     gates=list(airfield.gates), gate_locator=airfield.nearest_gate)
+    tracker = CtrTracker(airfield)
+    print(f"[*] Airfield {airfield.name}: {airfield.tower}, {freq_mhz:.3f} MHz, "
+          f"runway {airfield.active_runway}, CTR ceiling "
+          f"{airfield.ctr.ceiling_ft_agl:.0f} ft AGL")
     print("[*] Ready.")
 
     def log(line: str) -> None:
@@ -86,6 +183,11 @@ def main() -> None:
         print(text, flush=True)
         with log_path.open("a", encoding="utf-8") as fh:
             fh.write(text + "\n")
+
+    def debug(line: str) -> None:
+        """Extra routing/state detail, only when --debug is set."""
+        if args.debug:
+            log(f"DBG {line}")
 
     def apply_gain(pcm: bytes) -> bytes:
         if args.gain == 1.0:
@@ -101,7 +203,7 @@ def main() -> None:
         return 20 * math.log10(max(peak, 1e-6))
 
     def save_wav(pcm: bytes) -> Path | None:
-        stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         path = audio_dir / f"rx_{stamp}.wav"
         with wave.open(str(path), "wb") as wav:
             wav.setnchannels(1)
@@ -121,29 +223,36 @@ def main() -> None:
         "Batumi": "bah-too-me",
     }
 
-    def speak(text: str) -> None:
-        """TTS the reply and transmit it on the tower frequency."""
+    # Piper synthesis and the SRS tx queue are shared across controller
+    # workers, so serialise them (and the tx wav write) with a lock.
+    tts_lock = threading.Lock()
+
+    def speak(text: str, freq: int = freq_hz, voice=None,
+              controller: Controller | None = None) -> None:
+        """TTS the reply in the given voice and transmit it on the frequency."""
         spoken = text
         for word, phonetic in PRONUNCIATION.items():
             spoken = spoken.replace(word, phonetic)
-        syn_config = SynthesisConfig(length_scale=args.speech_rate)
-        chunks = list(tts.synthesize(spoken, syn_config=syn_config))
-        rate = chunks[0].sample_rate
-        pcm22k = b"".join(c.audio_int16_bytes for c in chunks)
-        pcm48k = resample_to_48k(pcm22k, rate)
-        client.transmit(pcm48k, freq_hz)
-        stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        with wave.open(str(audio_dir / f"tx_{stamp}.wav"), "wb") as wav:
-            wav.setnchannels(1)
-            wav.setsampwidth(2)
-            wav.setframerate(SAMPLE_RATE)
-            wav.writeframes(pcm48k)
-        log(f"ATC (tx): \"{text}\"")
+        voice = voice or voice_for[Controller.TOWER]
+        with tts_lock:
+            syn_config = SynthesisConfig(length_scale=args.speech_rate)
+            chunks = list(voice.synthesize(spoken, syn_config=syn_config))
+            rate = chunks[0].sample_rate
+            pcm22k = b"".join(c.audio_int16_bytes for c in chunks)
+            pcm48k = resample_to_48k(pcm22k, rate)
+            client.transmit(pcm48k, freq)
+            stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            with wave.open(str(audio_dir / f"tx_{stamp}.wav"), "wb") as wav:
+                wav.setnchannels(1)
+                wav.setsampwidth(2)
+                wav.setframerate(SAMPLE_RATE)
+                wav.writeframes(pcm48k)
+        tag = f"[{controller.value}] " if controller else ""
+        log(f"{tag}ATC (tx): \"{text}\"")
 
-    def on_end(freq: float, who: str, pcm: bytes, duration: float) -> None:
-        if freq != freq_hz or duration < MIN_TRANSMISSION_SECONDS:
-            return
-        pcm = apply_gain(pcm)
+    def transcribe(pcm: bytes, who: str, duration: float,
+                   controller: Controller) -> str:
+        """STT one transmission. Runs in the controller's worker thread."""
         peak = peak_dbfs(pcm)
         wav_path = save_wav(pcm)
         started = time.monotonic()
@@ -160,22 +269,137 @@ def main() -> None:
         latency = (time.monotonic() - started) * 1000
         wav_note = f", wav {wav_path.name}" if wav_path else ""
         if not text:
-            log(f"{who}: <unclear>  ({duration:.1f} s, peak {peak:.0f} dBFS{wav_note})")
-            return
-        log(f"{who}: \"{text}\"  (stt {latency:.0f} ms, {duration:.1f} s, "
-            f"peak {peak:.0f} dBFS{wav_note})")
-        reply = brain.handle(text)
-        if reply:
-            speak(reply)
-        else:
-            log("ATC: <no matching intent>")
+            log(f"[{controller.value}] {who}: <unclear>  "
+                f"({duration:.1f} s, peak {peak:.0f} dBFS{wav_note})")
+            return ""
+        log(f"[{controller.value}] {who}: \"{text}\"  (stt {latency:.0f} ms, "
+            f"{duration:.1f} s, peak {peak:.0f} dBFS{wav_note})")
+        return text
 
-    client = SrsClient(args.host, args.port, args.name, [freq_hz],
+    def track_for(who: str):
+        """Live CTR track for the transmitting aircraft, or None."""
+        if state is None:
+            return None
+        try:
+            for ac in state.aircraft():
+                if ac.player.lower() == who.lower():
+                    return tracker.track(ac.callsign, ac.lat, ac.lon, ac.alt_ft)
+        except (OSError, RuntimeError) as error:
+            log(f"state bridge unavailable: {error}")
+        return None
+
+    # One worker thread per controller frequency, sharing the brain + tracker.
+    # The lock guards brain/tracker so two controllers can't interleave a
+    # read-modify-write on the same pilot's state.
+    lock = threading.RLock()
+    shared = SharedState(brain=brain, lock=lock, track_for=track_for,
+                         transcribe=transcribe, speak=speak, log=log,
+                         debug=debug)
+    workers = {hz: ControllerWorker(controller, hz, shared,
+                                    voice=voice_for[controller])
+               for hz, controller in controller_by_freq.items()}
+
+    def on_end(freq: float, who: str, pcm: bytes, duration: float) -> None:
+        """SRS rx callback: enqueue to the right controller worker (never blocks)."""
+        worker = workers.get(round(freq))
+        if worker is None or duration < MIN_TRANSMISSION_SECONDS:
+            return
+        worker.submit(who, apply_gain(pcm), duration)
+
+    def monitor_ctr() -> None:
+        """Poll live positions: warn on unannounced CTR entry, and issue
+        go-arounds when the runway is occupied on final."""
+        while True:
+            time.sleep(2.0)
+            if state is None:
+                continue
+            try:
+                players = state.aircraft()
+                all_units = state.all_units()
+                for ac in players:
+                    with lock:
+                        event, tr = tracker.update(ac.callsign, ac.lat, ac.lon, ac.alt_ft)
+                        warning = brain.on_ctr_event(ac.callsign, event, tr)
+                    if warning:
+                        log(f"CTR {event.value}: {ac.callsign} ({ac.player})")
+                        speak(warning)
+                    on_final = airfield.is_on_final(ac.lat, ac.lon, ac.heading)
+                    if on_final:
+                        occupied = airfield.runway_occupied(
+                            all_units, exclude=ac.callsign)
+                        with lock:
+                            call = brain.check_final(ac.callsign, on_final, occupied)
+                        if call:
+                            log(f"RUNWAY OCCUPIED: {ac.callsign} ({ac.player})")
+                            speak(call)
+                    else:
+                        with lock:
+                            brain.check_final(ac.callsign, False, False)
+            except (OSError, RuntimeError):
+                pass  # bridge down or mission not running; retry next tick
+
+    def refresh_weather() -> "AtisReport | None":
+        """Fetch live weather, update the active runway, return the ATIS report."""
+        try:
+            weather = state.weather()
+        except (OSError, RuntimeError) as error:
+            log(f"weather unavailable: {error}")
+            return None
+        report = build_atis(airfield, weather)
+        brain.set_runway(report.active_runway)
+        brain.set_wind(report.wind_dir, report.wind_speed)
+        return report
+
+    def atis_loop() -> None:
+        """Broadcast ATIS on its own frequency at a fixed interval."""
+        last_letter = None
+        while True:
+            report = refresh_weather()
+            if report is not None:
+                if report.information != last_letter:
+                    log(f"ATIS {report.information}: runway {report.active_runway}, "
+                        f"QNH {report.qnh_inhg:.2f}")
+                    last_letter = report.information
+                speak(report.broadcast(), atis_hz, atis_voice)
+            time.sleep(args.atis_interval)
+
+    def weather_loop() -> None:
+        """Keep the active runway in sync with the wind (no ATIS broadcast)."""
+        while True:
+            refresh_weather()
+            time.sleep(args.atis_interval)
+
+    freqs = [freq_hz]
+    if ground_hz:
+        freqs.append(ground_hz)
+    if control_hz:
+        freqs.append(control_hz)
+    if atis_hz:
+        freqs.append(atis_hz)
+    client = SrsClient(args.host, args.port, name, freqs,
                        eam_password=args.eam, coalition=2)
     client.on_transmission_end = on_end
     client.start()
-    log(f"ATC bot listening on {args.freq:.3f} MHz AM @ {args.host}:{args.port} "
+    for worker in workers.values():
+        worker.start()
+    if state is not None:
+        initial = refresh_weather()
+        if initial is not None:
+            log(f"Active runway {initial.active_runway} (wind "
+                f"{initial.wind_dir:03.0f}/{initial.wind_speed:.0f} m/s)")
+        threading.Thread(target=monitor_ctr, daemon=True).start()
+        if atis_hz and args.atis_interval > 0:
+            threading.Thread(target=atis_loop, daemon=True).start()
+        elif args.atis_interval > 0:
+            threading.Thread(target=weather_loop, daemon=True).start()
+    log(f"ATC bot listening on {freq_mhz:.3f} MHz AM @ {args.host}:{args.port} "
         f"(log: {log_path.resolve()})")
+    for hz, controller in sorted(controller_by_freq.items()):
+        log(f"  {controller.value:8s} {hz / 1e6:.3f} MHz  voice "
+            f"{voice_names[controller]}")
+    if atis_hz:
+        log(f"ATIS broadcasting on {atis_mhz:.3f} MHz AM every "
+            f"{args.atis_interval:.0f}s  voice {args.atis_voice}")
     try:
         while True:
             time.sleep(1)
