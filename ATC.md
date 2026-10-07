@@ -18,12 +18,18 @@ traffic-aware.
 | --- | --- |
 | Tower frequency | 263.000 MHz AM (Kutaisi) — configurable with `--freq` |
 | ATIS frequency | 270.500 MHz AM (Kutaisi) — configurable with `--atis-freq` |
-| Callsign | `Kutaisi Tower` (from `airspace.json`) |
 | SRS | Bot joins as an External AWACS Mode client (password `atc`) |
 | Coalition | Blue (2) |
 
 Pilots call the tower; the tower answers. The bot only responds to transmissions
 on its configured frequency. ATIS broadcasts on its own frequency (see §10).
+
+**Agency naming (Master Arms convention):** an agency identifies itself by
+**role** — *"Tower"*, *"Ground"*, *"Control"* — not the full name. The full name
+(*"Kutaisi Control"*) is only used by the **pilot** when initiating contact, or
+by AWACS when handing off. So the bot replies *"Colt 1, Tower, …"*, never
+*"Colt 1, Kutaisi Tower, …"*. The short name is derived from the configured name
+in `airspace.json` (last word).
 
 ---
 
@@ -64,12 +70,12 @@ the tower replies **"say again"**.
 
 | Pilot says (examples) | Intent | Tower replies |
 | --- | --- | --- |
-| "Kutaisi, Colt 1, requesting taxi to runway" | **taxi** | "Colt 1, Kutaisi Tower, taxi to runway 25 via alpha, hold short of runway 25." |
-| "Colt 1, holding short" | **hold short** (after taxi) | "Colt 1, Kutaisi Tower, hold short runway 25." |
-| "Colt 1, ready for departure" | **departure** (after taxi/holding) | "Colt 1, Kutaisi Tower, wind calm, runway 25, cleared for takeoff." |
+| "Kutaisi, Colt 1, requesting taxi to runway" | **taxi** | "Colt 1, Ground, taxi to runway 25 via alpha, hold short of runway 25." |
+| "Colt 1, holding short" | **hold short** (after taxi) | "Colt 1, Ground, contact Tower on channel 7." |
+| "Colt 1, ready for departure" | **departure** (after taxi/holding) | "Colt 1, Tower, wind calm, runway 25, cleared for takeoff." |
 | "Kutaisi, Colt 1, inbound" | **inbound** | distance-aware, see §4 |
-| "Colt 1, checking in" / "with you" | **check-in** | "Colt 1, Kutaisi Tower, roger." |
-| "Colt 1, roger" / "wilco" / "copy" | **readback** | "Colt 1, Kutaisi Tower, roger." |
+| "Colt 1, checking in" / "with you" | **check-in** | "Colt 1, Tower, roger." |
+| "Colt 1, roger" / "wilco" / "copy" | **readback** | "Colt 1, Tower, roger." |
 | "Colt 1, help" | **help** | a short, state-aware hint (see §3a) |
 
 Intent matching is order-sensitive: the first matching rule wins. Some rules
@@ -115,12 +121,70 @@ relative to the CTR (from the state bridge):
 
 | Position | Tower replies |
 | --- | --- |
-| **Outside** the CTR | "Colt 1, Kutaisi Tower, roger, report entering the control zone, runway 25 active." |
-| **Inside** the CTR | "Colt 1, Kutaisi Tower, radar contact 4 miles north, cleared control zone entry, join left downwind runway 25." |
-| Position unknown (no state bridge) | "Colt 1, Kutaisi Tower, runway 25, wind calm, cleared to land." |
+| **Outside** the CTR | "Colt 1, Tower, roger, report entering the control zone, runway 25 active." |
+| **Inside** the CTR | "Colt 1, Tower, radar contact 4 miles north, cleared control zone entry, join left downwind runway 25." |
+| Position unknown (no state bridge) | "Colt 1, Tower, runway 25, wind calm, cleared to land." |
 
 The position phrase uses distance + 8-point compass from the airfield
 (e.g. "4 miles north").
+
+---
+
+## 4a. Position cross-check (trainer: challenge bad reports)
+
+A real controller does not blindly trust a position report — they cross-check it
+against what they can see. The bot does the same using the live track: when a
+pilot claims a position the radar does not support, the bot **challenges** it
+and **does not advance the pilot's state** (so no clearance is issued on a false
+report).
+
+| Pilot claims | Bot checks (live track) | If it does not match |
+| --- | --- | --- |
+| "holding short runway 25" | within ~0.6 NM of the runway threshold | "…negative. I show you on the airfield. Confirm your position." |
+| "ready for departure" | within ~0.6 NM of the runway threshold | "…negative. I show you 3 miles north. Confirm your position." |
+
+The challenge uses the pilot's **actual** position (distance + compass, or "on
+the airfield" when very close), so the trainee learns to report correctly. The
+wording is the `position_challenge` template in `phraseology.json`.
+
+**Graceful without the bridge:** if there is no live state (no state bridge, or
+the pilot is not found), the bot falls back to trusting the report — the trainer
+still works offline.
+
+---
+
+## 4b. Bearing and distance (trainer aid)
+
+To help find the CTR entry/exit points, a pilot can **request bearing and
+distance**: *"<callsign> request bearing and distance [to Entry East]"*. This is
+real phraseology (used especially in military/GCA control). The bot replies with
+a **bearing and distance** from the pilot's live position to the named gate — or,
+if no gate is named, to the **nearest** gate.
+
+> "Colt 1, Control, bearing 014, distance 32 miles to Entry East."
+
+DCS-style synonyms ("directions", "where is…") are also accepted, but the reply
+uses the standard *"bearing X, distance Y"* format. Naming a CTR gate is an
+**addition beyond the Master Arms SOP** (a training aid). Without a live position
+the bot replies *"unable, no radar contact."* Wording lives in the
+`directions_*` templates in `phraseology.json`.
+
+---
+
+## 4c. Vectors (approach vector, real phraseology)
+
+*"<callsign> request vectors [for runway 25]"* gives a real **approach vector**:
+
+> "Colt 1, Control, fly heading 018, vectors for runway 25."
+
+The heading is the bearing from the pilot's live position to a point on the
+**extended centreline** (10 NM before the threshold), so the pilot can intercept
+the approach — the classic *"090 for 25"* call. The runway can be named in the
+call; otherwise the active runway is used. Without a live position the bot
+replies *"unable, no radar contact."* Template: `vectors` in `phraseology.json`.
+
+> Note: this is distinct from §4b — **vectors** = headings to intercept the
+> approach; **bearing and distance** = where a point is.
 
 ---
 
@@ -165,7 +229,7 @@ aircraft's inside/outside state (`atc/ctr.py`). On a boundary crossing:
 
 | Event | Condition | Tower action |
 | --- | --- | --- |
-| `ENTERED_CTR` | Aircraft enters the CTR **without** having called inbound | Broadcast: "Colt 1, Kutaisi Tower, you are entering controlled airspace without clearance. Squawk 4201 and state intentions." |
+| `ENTERED_CTR` | Aircraft enters the CTR **without** having called inbound | Broadcast: "Colt 1, Tower, you are entering controlled airspace without clearance. Squawk 4201 and state intentions." |
 | `ENTERED_CTR` | Aircraft had called inbound | No action (already cleared) |
 | `EXITED_CTR` | Aircraft leaves the CTR | No action (currently) |
 
@@ -181,7 +245,7 @@ or ground traffic — and warns an aircraft on final.
 
 | Condition | Tower action |
 | --- | --- |
-| Aircraft on final, runway occupied | "Colt 1, Kutaisi Tower, go around, runway 25 is occupied." |
+| Aircraft on final, runway occupied | "Colt 1, Tower, go around, runway 25 is occupied." |
 | Aircraft on final, runway clear | (no call; the landing clearance stands) |
 
 Detection:
@@ -209,8 +273,8 @@ runway number otherwise.
 - No squawk/transponder handling (the "squawk 4201" line is canned).
 - No sequencing of multiple arrivals (first-come, first-served).
 - No IFR clearances, holds, or instrument approaches.
-- No taxi route from live airfield data (route "via alpha" is canned).
-- No departure handoff to Control (Tower does not yet say "contact Control").
+- No taxi route from live airfield data (routes are configured per airfield, see §9).
+- No parking-spot assignment (Ground clears to a named ramp, not a specific spot).
 
 ---
 
@@ -227,7 +291,9 @@ runway number otherwise.
       "active_runway": "25",
       "ctr": { "ceiling_ft_agl": 1500, "polygon": [[lat, lon], ...] },
       "runways": { "25": { "threshold": [lat, lon] } },
-      "gates": { "East": [lat, lon], ... }
+      "gates": { "East": [lat, lon], ... },
+      "taxi_routes": { "alpha": [lat, lon], "bravo": [lat, lon] },
+      "parking_areas": { "Ramp South": [lat, lon], "Ramp North": [lat, lon] }
     }
   }
 }
@@ -235,6 +301,14 @@ runway number otherwise.
 
 Kutaisi CTR geometry is derived from the Master Arms community wiki
 (https://wiki.masterarms.se/index.php/Airport_Procedures).
+
+**Taxi routes:** DCS exposes parking positions but **no taxiway names**, so
+routes are configured per airfield (`taxi_routes`: name → a representative
+[lat, lon], e.g. a parking area). The bot picks the route **nearest the
+aircraft's live position**, so a jet on the west apron gets "via alpha" and one
+on the east apron gets "via bravo". Without a live position it falls back to the
+first route. (The `parking` bridge op can dump an airbase's parking spots to help
+pick representative points.)
 
 `atc/phraseology.json` holds the **reply wording** as templates with
 `{placeholders}` (`{callsign}`, `{tower}`, `{runway}`, `{wind}`, `{position}`,
@@ -267,9 +341,10 @@ from `airspace.json`'s `atis_frequency_mhz`). It repeats every
 The broadcast is built from **live DCS weather** (the bridge's `weather` op) and
 the airfield config:
 
-- **Information letter** — NATO phonetic, derived from the current hour
-  (`Alpha` at 00:00, `Charlie` at 02:00, …). Pilots say "with information
-  Charlie" when contacting Ground.
+- **Information letter** — NATO phonetic, derived from the **mission time of day**
+  (DCS runs on mission time, not the host clock): the bridge reports
+  `mission_time_s` (seconds since midnight), so 14:00 mission time → `Oscar`.
+  Falls back to the host clock only if the bridge does not report it.
 - **Active runway** — chosen from the wind: the runway whose heading is most
   into wind (highest headwind component). Calm wind falls back to the configured
   active runway.
@@ -310,13 +385,14 @@ Frequencies and controller names come from `airspace.json`; CLI flags
 - "ready to copy clearance" → departure clearance with an **exit point**:
   *"after departure turn right East, 1500 ft or below"*.
 - "requesting taxi" → taxi clearance to the active runway.
-- "holding short runway 25" → handoff: *"contact Tower on channel 7"*.
-
+- "holding short runway 25" → handoff: *"contact Tower on channel 7"*.- "requesting taxi to parking" (after landing) → *"cleared taxi to Ramp North
+  via bravo"* (named ramp, or the nearest one to the aircraft).
 ### Tower
 
 - "ready for departure" → takeoff clearance (wind + runway).
 - "runway in sight" → overhead-break clearance.
 - "inbound" / "on final" → distance-aware inbound reply (see §4).
+- "runway vacated" (after landing) → handoff: *"contact Ground on channel 6"*.
 
 ### Control
 
@@ -332,6 +408,8 @@ The bot issues the standard Master Arms handoffs as the flight progresses:
 - Ground → Tower: *"contact Tower on channel 7"* (`contact_tower`).
 - Tower → Control (departures): *"contact Control on channel 8"*
   (`contact_control`).
+- Tower → Ground (after landing): *"contact Ground on channel 6"*
+  (`contact_ground`).
 
 Entry/exit point names and the channel numbers live in `phraseology.json`
 (`tower_channel`, `channel`) and `airspace.json` (`gates`).
@@ -362,3 +440,68 @@ Control and ATIS sound like different people:
 
 Voices live in `atc/voices/` and are fetched with
 `uv run python -m piper.download_voices --download-dir voices <name>`.
+
+---
+
+## 12. Complete flight walkthrough
+
+A full example of a flight from cold start to shutdown, showing every pilot call
+and the bot's reply. Frequencies (AM): **ATIS 270.500**, **Ground 250.000**,
+**Tower 263.000**, **Control 257.000**. Callsign **Colt 1** (use your own).
+
+### Departure
+
+| # | Freq | Pilot says | Bot replies |
+|---|------|-----------|-------------|
+| 1 | ATIS | *(listen only)* | "Kutaisi information Oscar. 25 in use. wind calm. QNH 29.92. CAVOK. Temperature 20. Advise on initial contact you have information Oscar." |
+| 2 | Ground | "Ground, Colt 1, ready to copy clearance." | "Colt 1, Ground, after departure turn right Exit East, 1500 ft or below." |
+| 3 | Ground | "Ground, Colt 1, requesting taxi." | "Colt 1, Ground, taxi to runway 25 via alpha, hold short of runway 25." |
+| 4 | Ground | "Colt 1, holding short runway 25." | "Colt 1, Ground, contact Tower on channel 7." |
+| 5 | Tower | "Tower, Colt 1, ready for departure." | "Colt 1, Tower, wind calm, runway 25, cleared for takeoff." |
+| 6 | Tower | "Tower, Colt 1, airborne." | "Colt 1, Tower, contact Control on channel 8." |
+| 7 | Control | "Control, Colt 1, airborne, 5 miles east climbing." | "Colt 1, Control, radar contact." |
+
+You are now clear of the CTR — the departure is complete. (Steps 2–4 are the
+Ground phase; 5–6 Tower; 7 Control.)
+
+### Arrival
+
+| # | Freq | Pilot says | Bot replies |
+|---|------|-----------|-------------|
+| 1 | Control | "Control, Colt 1, inbound 35 miles north." | "Colt 1, Control, radar contact, turn right heading 150 to join via Entry North." |
+| 2 | Tower | "Tower, Colt 1, inbound." | "Colt 1, Tower, report entering the control zone, runway 25 active." *(outside CTR)* — or "radar contact 4 miles north, cleared control zone entry, join left downwind runway 25." *(inside CTR)* |
+| 3 | Tower | "Tower, Colt 1, runway in sight." | "Colt 1, Tower, wind calm, cleared for left overhead break runway 25." |
+| 4 | Tower | "Tower, Colt 1, on final." | "Colt 1, Tower, runway 25, wind calm, cleared to land." |
+| 5 | Tower | "Tower, Colt 1, runway vacated." | "Colt 1, Tower, contact Ground on channel 6." |
+| 6 | Ground | "Ground, Colt 1, requesting taxi to parking." | "Colt 1, Ground, cleared taxi to Ramp North via bravo." |
+
+You are now cleared to park — the flight is complete. (Steps 1 Control; 2–5
+Tower; 6 Ground.)
+
+### Trainer aids (any frequency)
+
+| Pilot says | Bot replies |
+|-----------|-------------|
+| "Colt 1, help." | "Colt 1, Apollo suggests: …" (state-aware hint, see §3a) |
+| "Control, Colt 1, request bearing and distance to Entry East." | "Colt 1, Control, bearing 014, distance 32 miles to Entry East." |
+| "Control, Colt 1, request vectors for runway 25." | "Colt 1, Control, fly heading 018, vectors for runway 25." |
+
+### Position cross-checks (trainer: the bot checks you)
+
+If a report does not match your live position, the bot **challenges** it and does
+**not** advance your state (see §4a):
+
+| Pilot says (but is elsewhere) | Bot replies |
+|-----------|-------------|
+| "Colt 1, holding short runway 25." *(still on the ramp)* | "Colt 1, Ground, negative. I show you on the airfield. Confirm your position." |
+| "Tower, Colt 1, ready for departure." *(still on the taxiway)* | "Colt 1, Tower, negative. I show you 2 miles south. Confirm your position." |
+| "Tower, Colt 1, on final." *(not on final)* | "Colt 1, Tower, negative. I show you 3 miles north. Confirm your position." |
+
+### Automatic calls (no pilot action)
+
+- **ATIS** broadcasts every 60 s on 270.500 (§10).
+- **CTR warning** if you enter controlled airspace without a clearance:
+  "Colt 1, Tower, you are entering controlled airspace without clearance.
+  Squawk 4201 and state intentions." (§6)
+- **Go-around** if the runway is occupied while you are on final:
+  "Colt 1, Tower, go around, runway 25 is occupied." (§7)

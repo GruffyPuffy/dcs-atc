@@ -101,8 +101,13 @@ def choose_active_runway(airfield: Airfield, wind_dir: float,
 
 def build_atis(airfield: Airfield, weather: dict,
                now: datetime.datetime | None = None) -> AtisReport:
-    """Build an ATIS report from live weather and the airfield config."""
-    now = now or datetime.datetime.now()
+    """Build an ATIS report from live weather and the airfield config.
+
+    The information letter follows the **mission time of day** (DCS runs on
+    mission time, not the host clock): the bridge reports `mission_time_s`
+    (seconds since midnight). If it is missing we fall back to `now` (or the
+    host clock).
+    """
     wind_dir = float(weather.get("wind_dir", 0.0))
     wind_speed = float(weather.get("wind_speed_ms", 0.0))
     qnh_mmhg = float(weather.get("qnh_mmhg", 760.0))
@@ -110,12 +115,18 @@ def build_atis(airfield: Airfield, weather: dict,
     clouds_base_m = float(weather.get("clouds_base_m", 0.0))
     temperature_c = float(weather.get("temperature_c", 15.0))
 
+    mission_time_s = weather.get("mission_time_s")
+    if mission_time_s is not None:
+        hour = int(float(mission_time_s) // 3600) % 24
+    else:
+        hour = (now or datetime.datetime.now()).hour
+
     # CAVOK: visibility >= 10 km, no significant cloud below 5000 ft, no precip
     cavok = visibility_m >= 10000 and clouds_base_m >= 1500
 
     return AtisReport(
         airfield=airfield.name,
-        information=information_letter(now.hour),
+        information=information_letter(hour),
         active_runway=choose_active_runway(airfield, wind_dir, wind_speed),
         wind_dir=wind_dir,
         wind_speed=wind_speed,

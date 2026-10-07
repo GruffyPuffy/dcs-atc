@@ -113,6 +113,27 @@ end
 local op = req.op
 if op == 'status' then
     return envelope(true, snapshot())
+elseif op == 'parking' then
+    -- Parking spots for an airbase (by name). DCS exposes no taxi-route names,
+    -- but each spot has a terminal index and distance to the runway, which we
+    -- use to pick a taxi route per parking area.
+    local out = { spots = {} }
+    for _, b in ipairs(coalition.getAirbases(2)) do
+        if b:getName() == req.airbase then
+            local ok, parking = pcall(function() return b:getParking() end)
+            if ok and parking then
+                for _, p in ipairs(parking) do
+                    local lat, lon, alt = coord.LOtoLL(p.vTerminalPos)
+                    out.spots[#out.spots + 1] = {
+                        term = p.Term_Index,
+                        dist_rwy = p.fDistToRW,
+                        lat = lat, lon = lon, alt = alt,
+                    }
+                end
+            end
+        end
+    end
+    return envelope(true, out)
 elseif op == 'callsigns' then
     return envelope(true, callsigns())
 elseif op == 'weather' then
@@ -122,6 +143,13 @@ elseif op == 'weather' then
     local clouds = w.clouds or {}
     local vis = w.visibility or {}
     local season = w.season or {}
+    -- Mission time of day in seconds since midnight (for the ATIS letter).
+    local mission_time_s = nil
+    if timer and timer.getAbsTime then
+        mission_time_s = timer.getAbsTime()
+    elseif env.mission.start_time then
+        mission_time_s = env.mission.start_time
+    end
     return envelope(true, {
         qnh_mmhg = w.qnh,
         wind_dir = ground.dir,
@@ -135,6 +163,7 @@ elseif op == 'weather' then
         temperature_c = season.temperature,
         fog = w.enable_fog,
         dust = w.enable_dust,
+        mission_time_s = mission_time_s,
     })
 elseif op == 'set_route' then
     local g = Group.getByName(req.group_name)

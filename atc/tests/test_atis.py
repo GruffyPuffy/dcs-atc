@@ -72,3 +72,29 @@ def test_build_atis_calm_wind(airfield):
                "temperature_c": 20}
     report = build_atis(airfield, weather)
     assert "wind calm" in report.broadcast()
+
+
+def test_build_atis_uses_mission_time(airfield):
+    # 14:00 mission time -> Oscar, regardless of the host clock
+    weather = {"wind_dir": 250, "wind_speed_ms": 5, "qnh_mmhg": 760,
+               "visibility_m": 10000, "clouds_base_m": 2000,
+               "temperature_c": 20, "mission_time_s": 14 * 3600}
+    report = build_atis(airfield, weather,
+                        now=datetime.datetime(2026, 10, 7, 3, 0))
+    assert report.information == "Oscar"
+
+
+def test_build_atis_mission_time_wraps(airfield):
+    # 25:00 -> 01:00 -> Bravo
+    weather = {"mission_time_s": 25 * 3600}
+    report = build_atis(airfield, weather)
+    assert report.information == "Bravo"
+
+
+def test_build_atis_falls_back_to_now_without_mission_time(airfield):
+    weather = {"wind_dir": 250, "wind_speed_ms": 5, "qnh_mmhg": 760,
+               "visibility_m": 10000, "clouds_base_m": 2000,
+               "temperature_c": 20}
+    report = build_atis(airfield, weather,
+                        now=datetime.datetime(2026, 10, 7, 14, 0))
+    assert report.information == "Oscar"

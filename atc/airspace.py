@@ -56,6 +56,12 @@ def _compass(bearing: float) -> str:
     return names[int((bearing + 22.5) % 360 // 45)]
 
 
+def bearing_distance(lat1: float, lon1: float, lat2: float,
+                     lon2: float) -> tuple[float, float]:
+    """Bearing (degrees true) and distance (NM) from point 1 to point 2."""
+    return _bearing(lat1, lon1, lat2, lon2), _haversine_nm(lat1, lon1, lat2, lon2)
+
+
 @dataclass
 class ControlZone:
     """A control zone: a horizontal polygon with a vertical ceiling (AGL)."""
@@ -88,7 +94,9 @@ class ControlZone:
 
     def relative_position(self, lat: float, lon: float) -> str:
         """e.g. '4 miles north' — distance + compass from the airfield."""
-        return f"{self.distance_nm(lat, lon):.0f} miles {_compass(self.bearing_from_airfield(lat, lon))}"
+        distance = self.distance_nm(lat, lon)
+        unit = "mile" if round(distance) == 1 else "miles"
+        return f"{distance:.0f} {unit} {_compass(self.bearing_from_airfield(lat, lon))}"
 
     def nearest_gate(self, lat: float, lon: float) -> str | None:
         """Name of the entry/exit gate closest to a position, or None."""
@@ -113,6 +121,27 @@ class Airfield:
     control_frequency_mhz: float = 0.0
     runways: dict[str, tuple[float, float]] = field(default_factory=dict)
     gates: dict[str, tuple[float, float]] = field(default_factory=dict)
+    taxi_routes: dict[str, tuple[float, float]] = field(default_factory=dict)
+    parking_areas: dict[str, tuple[float, float]] = field(default_factory=dict)
+
+    def nearest_taxi_route(self, lat: float, lon: float) -> str | None:
+        """Name of the taxi route whose reference point is nearest, or None.
+
+        DCS does not expose taxiway names, so routes are configured per airfield
+        in `airspace.json` (`taxi_routes`: name -> [lat, lon] of a representative
+        point, e.g. a parking area). The nearest one to the aircraft is used.
+        """
+        if not self.taxi_routes:
+            return None
+        return min(self.taxi_routes, key=lambda r: _haversine_nm(
+            lat, lon, self.taxi_routes[r][0], self.taxi_routes[r][1]))
+
+    def nearest_parking_area(self, lat: float, lon: float) -> str | None:
+        """Name of the parking area (ramp) nearest a position, or None."""
+        if not self.parking_areas:
+            return None
+        return min(self.parking_areas, key=lambda p: _haversine_nm(
+            lat, lon, self.parking_areas[p][0], self.parking_areas[p][1]))
 
     def runway_threshold(self, runway: str | None = None) -> tuple[float, float] | None:
         """Threshold (lat, lon) for a runway (default: the active runway)."""
@@ -160,6 +189,41 @@ class Airfield:
     def nearest_gate(self, lat: float, lon: float) -> str | None:
         """Name of the entry/exit gate closest to a position, or None."""
         return self.ctr.nearest_gate(lat, lon)
+
+    def is_at_runway(self, lat: float, lon: float, runway: str | None = None,
+                     max_nm: float = 0.6) -> bool:
+        """True if the position is at/near the runway threshold (holding point).
+
+        Used to cross-check a pilot's "holding short" / "ready for departure"
+        report against their live position.
+        """
+        thr = self.runway_threshold(runway)
+        if thr is None:
+            return False
+        return _haversine_nm(lat, lon, thr[0], thr[1]) <= max_nm
+
+    def vector_heading(self, lat: float, lon: float, runway: str | None = None,
+                       intercept_nm: float = 10.0) -> float | None:
+        """Heading to fly to intercept the extended centreline of a runway.
+
+        Returns the bearing from the aircraft to a point `intercept_nm` before
+        the threshold on the approach side — i.e. the heading a controller would
+        give as "fly heading X, vectors for runway Y".
+        """
+        thr = self.runway_threshold(runway)
+        rwy_hdg = self.runway_heading(runway)
+        if thr is None or rwy_hdg is None:
+            return None
+        # The approach comes from the reciprocal of the landing direction, so
+        # the intercept point sits `intercept_nm` back along (rwy_hdg + 180).
+        back = math.radians((rwy_hdg + 180) % 360)
+        north_m = intercept_nm * M_PER_NM * math.cos(back)
+        east_m = intercept_nm * M_PER_NM * math.sin(back)
+        ip_lat = thr[0] + math.degrees(north_m / EARTH_RADIUS_M)
+        ip_lon = thr[1] + math.degrees(
+            east_m / (EARTH_RADIUS_M * math.cos(math.radians(thr[0]))))
+        bearing, _ = bearing_distance(lat, lon, ip_lat, ip_lon)
+        return bearing
 
     def is_on_final(self, lat: float, lon: float, heading: float,
                     runway: str | None = None, max_nm: float = 8.0,
@@ -268,6 +332,10 @@ def _build_airfield(name: str, spec: dict, defaults: dict) -> Airfield:
     gates = {g: (float(v[0]), float(v[1])) for g, v in spec.get("gates", {}).items()}
     runways = {r: (float(v["threshold"][0]), float(v["threshold"][1]))
                for r, v in spec.get("runways", {}).items()}
+    taxi_routes = {r: (float(v[0]), float(v[1]))
+                   for r, v in spec.get("taxi_routes", {}).items()}
+    parking_areas = {p: (float(v[0]), float(v[1]))
+                     for p, v in spec.get("parking_areas", {}).items()}
 
     ctr = ControlZone(
         name=f"{name} CTR",
@@ -292,4 +360,6 @@ def _build_airfield(name: str, spec: dict, defaults: dict) -> Airfield:
         control_frequency_mhz=float(spec.get("control_frequency_mhz", 0.0)),
         runways=runways,
         gates=gates,
+        taxi_routes=taxi_routes,
+        parking_areas=parking_areas,
     )

@@ -170,7 +170,8 @@ def main() -> None:
     brain = AtcBrain(tower=airfield.tower, runway=airfield.active_runway,
                      phraseology=Phraseology.load(), callsigns=callsigns,
                      ground=airfield.ground, control=airfield.control,
-                     gates=list(airfield.gates), gate_locator=airfield.nearest_gate)
+                     gates=list(airfield.gates), gate_locator=airfield.nearest_gate,
+                     airfield=airfield)
     tracker = CtrTracker(airfield)
     print(f"[*] Airfield {airfield.name}: {airfield.tower}, {freq_mhz:.3f} MHz, "
           f"runway {airfield.active_runway}, CTR ceiling "
@@ -283,7 +284,8 @@ def main() -> None:
         try:
             for ac in state.aircraft():
                 if ac.player.lower() == who.lower():
-                    return tracker.track(ac.callsign, ac.lat, ac.lon, ac.alt_ft)
+                    return tracker.track(ac.callsign, ac.lat, ac.lon, ac.alt_ft,
+                                         ac.heading)
         except (OSError, RuntimeError) as error:
             log(f"state bridge unavailable: {error}")
         return None

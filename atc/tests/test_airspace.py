@@ -79,3 +79,18 @@ def test_nearest_airfield():
     af = airspace.get("Kutaisi")
     nearest = airspace.nearest(af.ctr.center_lat, af.ctr.center_lon)
     assert nearest.name == "Kutaisi"
+
+
+def test_relative_position_singular_mile(airfield):
+    # a point ~1 NM from the reference should read "1 mile", not "1 miles"
+    import math
+    lat = airfield.ctr.center_lat + (1.0 * 1852.0) / 111_320.0
+    text = airfield.ctr.relative_position(lat, airfield.ctr.center_lon)
+    assert text.startswith("1 mile ")
+    assert "miles" not in text
+
+
+def test_relative_position_plural_miles(airfield):
+    lat = airfield.ctr.center_lat + (4.0 * 1852.0) / 111_320.0
+    text = airfield.ctr.relative_position(lat, airfield.ctr.center_lon)
+    assert text.startswith("4 miles ")

@@ -15,9 +15,12 @@ REQUIRED_TEMPLATES = {
     "inbound_outside", "inbound_inside", "inbound_via_gate",
     "report_runway_in_sight", "cleared_land", "cleared_overhead",
     "departure_exit", "contact_tower", "contact_control", "control_join",
+    "contact_ground", "taxi_parking", "control_contact",
     "go_around", "ctr_warning", "roger", "say_again",
     "help_idle", "help_clearance", "help_taxi", "help_holding",
     "help_departure", "help_airborne", "help_inbound", "help_landing",
+    "position_challenge", "directions_gate", "directions_field",
+    "directions_unknown", "vectors",
 }
 
 
@@ -55,7 +58,9 @@ def test_every_template_renders_with_common_fields():
                   runway="25", wind="calm", squawk="4201", taxi_route="alpha",
                   downwind="left", channel="8", tower_channel="7",
                   ground_channel="6", heading="150", turn="right",
-                  altitude="1500 ft", gate="East", position="4 miles north")
+                  altitude="1500 ft", gate="East", position="4 miles north",
+                  agency="Kutaisi Tower", bearing="090", distance="12",
+                  airfield="Kutaisi", vector_runway="25", parking="Ramp South")
     for key in REQUIRED_TEMPLATES:
         text = ph.render(key, **common)
         assert "{" not in text, f"{key} left a placeholder unfilled"

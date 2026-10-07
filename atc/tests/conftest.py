@@ -37,4 +37,5 @@ def brain(airfield, callsigns):
         tower=airfield.tower, runway=airfield.active_runway,
         phraseology=Phraseology.load(), callsigns=callsigns,
         ground=airfield.ground, control=airfield.control,
-        gates=list(airfield.gates), gate_locator=airfield.nearest_gate)
+        gates=list(airfield.gates), gate_locator=airfield.nearest_gate,
+        airfield=airfield)
