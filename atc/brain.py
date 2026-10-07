@@ -113,6 +113,19 @@ class AtcBrain:
         self.callsigns = callsigns or CallsignRegistry()
         self.pilots: dict[str, PilotState] = {}
         self.wind = "calm"  # updated from live weather
+        # SRS speaker name -> flight callsign, learned from transmissions, so
+        # automatic calls (CTR warning, go-around) can address the pilot by
+        # callsign instead of the raw DCS unit name.
+        self.speaker_callsigns: dict[str, str] = {}
+
+    def remember_speaker(self, who: str, callsign: str) -> None:
+        """Map an SRS speaker name to the callsign they used."""
+        if who and callsign:
+            self.speaker_callsigns[who.lower()] = callsign
+
+    def callsign_for_speaker(self, who: str) -> str:
+        """Flight callsign for an SRS/DCS player name, or the name itself."""
+        return self.speaker_callsigns.get(who.lower(), who)
 
     def _pilot(self, callsign: str) -> PilotState:
         state = self.pilots.get(callsign)
@@ -133,11 +146,20 @@ class AtcBrain:
         else:
             self.wind = f"{direction:03.0f} at {speed:.0f}"
 
-    def _say(self, key: str, callsign: str, **fields: object) -> str:
+    def _say(self, key: str, callsign: str, agency: str | None = None,
+             **fields: object) -> str:
         return self.phraseology.render(
             key, callsign=callsign, tower=self.tower_short,
+            agency=agency or self.tower_short,
             runway=self.runway, wind=self.wind, ground=self.ground_short,
             control=self.control_short, **fields)
+
+    def _agency(self, controller: Controller) -> str:
+        """Short name of the agency handling a controller role."""
+        return {Controller.GROUND: self.ground_short,
+                Controller.CONTROL: self.control_short,
+                Controller.TOWER: self.tower_short}.get(controller,
+                                                         self.tower_short)
 
     def _challenge(self, callsign: str, agency: str,
                    track: AircraftTrack) -> str:
@@ -161,6 +183,11 @@ class AtcBrain:
         """
         callsign = self.callsigns.extract(text)
         if not callsign:
+            # Some calls may omit the flight number (e.g. "Colt help").
+            name = self.callsigns.extract_name(text)
+            if name and re.search(r"\b(help|assist|what do i do|what now|"
+                                  r"remind me)\b", text.lower()):
+                return self._help(name, self._pilot(name))
             return None
         low = text.lower()
         pilot = self._pilot(callsign)
@@ -190,12 +217,13 @@ class AtcBrain:
             return reply
 
         # shared intents, valid on any frequency
+        agency = self._agency(controller)
         if re.search(r"\bchecking (in|out)\b|\bwith you\b|\babort(s|ing)?\b", low):
-            return self._say("roger", callsign)
+            return self._say("roger", callsign, agency=agency)
         if re.search(r"\b(reading back|roger|wilco|copy)\b", low):
-            return self._say("roger", callsign)
+            return self._say("roger", callsign, agency=agency)
         # bare callsign / unintelligible request: ask them to say again
-        return self._say("say_again", callsign)
+        return self._say("say_again", callsign, agency=agency)
 
     # ---------- Ground ----------
 
@@ -219,8 +247,9 @@ class AtcBrain:
             return self._say("taxi_parking", callsign,
                              parking=parking or "the ramp",
                              taxi_route=route or "alpha")
-        if re.search(r"\b(request(?:ing)?|asking for|like)\b.*\btaxi\b"
-                     r"|\btaxi\b.*\b(startup|start up|start|runway)\b", low):
+        if re.search(r"\b(request(?:ing)?|asking for|like)\b.*\btaxi(?:ing)?\b"
+                     r"|\btaxi(?:ing)?\b.*\b(startup|start up|start|runway)\b",
+                     low):
             pilot.phase = Phase.TAXI
             # Pick the taxi route nearest the aircraft (DCS has no taxiway
             # names, so routes are configured per airfield).
@@ -264,6 +293,14 @@ class AtcBrain:
             return self._say("contact_control", callsign)
         if re.search(r"\b(runway in sight|runway insight|visual)\b", low):
             return self._say("cleared_overhead", callsign)
+        # Overhead-break calls. "overhead break" / "initial" is the request for
+        # the break clearance; "in the break" is a position report.
+        if re.search(r"\b(overhead break|initial)\b", low):
+            pilot.phase = Phase.LANDING
+            return self._say("cleared_overhead", callsign)
+        if re.search(r"\b(in the break|the break|overhead)\b", low):
+            pilot.phase = Phase.LANDING
+            return self._say("break_ack", callsign)
         # After landing, Tower hands the flight to Ground.
         if re.search(r"\b(vacated|clear of the runway|off the runway|"
                      r"runway vacated|clear of runway)\b", low):
@@ -301,6 +338,12 @@ class AtcBrain:
             gate = self._pick_entry_gate(track, low)
             pilot.entry_gate = gate
             return self._say("control_join", callsign, gate=gate)
+        # Near the field, Control hands the flight to Tower (e.g. "on final",
+        # "runway in sight", "overhead break").
+        if re.search(r"\b(on final|final|runway in sight|visual|overhead|"
+                     r"break|initial)\b", low):
+            pilot.phase = Phase.LANDING
+            return self._say("contact_tower_from_control", callsign)
         return None
 
     def _inbound_reply(self, callsign: str, pilot: PilotState,
@@ -375,10 +418,7 @@ class AtcBrain:
                     controller: Controller) -> str:
         """Bearing/distance to a named gate (or the field) from the pilot's
         live position. A trainer aid to help find the CTR entry/exit points."""
-        agency = {Controller.GROUND: self.ground_short,
-                  Controller.CONTROL: self.control_short,
-                  Controller.TOWER: self.tower_short}.get(controller,
-                                                          self.tower_short)
+        agency = self._agency(controller)
         if track is None or self.airfield is None:
             return self._say("directions_unknown", callsign, agency=agency)
         # Which gate? Prefer one named in the call, else the nearest.
@@ -412,10 +452,7 @@ class AtcBrain:
         a point on the extended centreline, so the pilot can intercept the
         approach. A trainer aid.
         """
-        agency = {Controller.GROUND: self.ground_short,
-                  Controller.CONTROL: self.control_short,
-                  Controller.TOWER: self.tower_short}.get(controller,
-                                                          self.tower_short)
+        agency = self._agency(controller)
         if track is None or self.airfield is None:
             return self._say("directions_unknown", callsign, agency=agency)
         # Runway named in the call (e.g. "vectors for runway 25"), else active.

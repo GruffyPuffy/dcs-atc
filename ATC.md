@@ -390,9 +390,14 @@ Frequencies and controller names come from `airspace.json`; CLI flags
 ### Tower
 
 - "ready for departure" → takeoff clearance (wind + runway).
-- "runway in sight" → overhead-break clearance.
+- "runway in sight" / "overhead break" / "initial" → overhead-break clearance.
+- "in the break" → acknowledged: *"roger, report on final"*.
 - "inbound" / "on final" → distance-aware inbound reply (see §4).
 - "runway vacated" (after landing) → handoff: *"contact Ground on channel 6"*.
+
+Pilots may address the field as **"Kutaisi Traffic"** (a common VFR call when
+there is no live controller); the bot still recognises the callsign and answers
+as Tower.
 
 ### Control
 
@@ -400,6 +405,9 @@ Frequencies and controller names come from `airspace.json`; CLI flags
   **entry point** nearest the aircraft: *"turn right heading 150 to join via
   Entry East"*. The entry point is chosen from the aircraft's live position
   (`gate_locator`), falling back to a default.
+- "airborne" / "climbing" (departure check-in) → *"radar contact."*
+- "on final" / "runway in sight" / "overhead" → handoff to Tower:
+  *"contact Tower on channel 7"*.
 
 ### Handoffs
 

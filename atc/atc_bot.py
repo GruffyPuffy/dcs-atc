@@ -319,24 +319,28 @@ def main() -> None:
                 players = state.aircraft()
                 all_units = state.all_units()
                 for ac in players:
+                    # Address the pilot by their flight callsign (learned from
+                    # their transmissions), not the raw DCS unit name.
                     with lock:
-                        event, tr = tracker.update(ac.callsign, ac.lat, ac.lon, ac.alt_ft)
-                        warning = brain.on_ctr_event(ac.callsign, event, tr)
+                        callsign = brain.callsign_for_speaker(ac.player)
+                        event, tr = tracker.update(callsign, ac.lat, ac.lon,
+                                                   ac.alt_ft, ac.heading)
+                        warning = brain.on_ctr_event(callsign, event, tr)
                     if warning:
-                        log(f"CTR {event.value}: {ac.callsign} ({ac.player})")
+                        log(f"CTR {event.value}: {callsign} ({ac.player})")
                         speak(warning)
                     on_final = airfield.is_on_final(ac.lat, ac.lon, ac.heading)
                     if on_final:
                         occupied = airfield.runway_occupied(
                             all_units, exclude=ac.callsign)
                         with lock:
-                            call = brain.check_final(ac.callsign, on_final, occupied)
+                            call = brain.check_final(callsign, on_final, occupied)
                         if call:
-                            log(f"RUNWAY OCCUPIED: {ac.callsign} ({ac.player})")
+                            log(f"RUNWAY OCCUPIED: {callsign} ({ac.player})")
                             speak(call)
                     else:
                         with lock:
-                            brain.check_final(ac.callsign, False, False)
+                            brain.check_final(callsign, False, False)
             except (OSError, RuntimeError):
                 pass  # bridge down or mission not running; retry next tick
 

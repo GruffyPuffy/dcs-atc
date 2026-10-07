@@ -78,8 +78,10 @@ class ControllerWorker:
         with self.shared.lock:
             reply = self.shared.brain.handle(
                 text, track, controller=self.controller)
-            state = self.shared.brain.pilots.get(
-                self.shared.brain.callsigns.extract(text) or "")
+            callsign = self.shared.brain.callsigns.extract(text)
+            if callsign:
+                self.shared.brain.remember_speaker(who, callsign)
+            state = self.shared.brain.pilots.get(callsign or "")
         if reply:
             self.shared.debug(
                 f"[{tag}] {who} -> {reply!r}"

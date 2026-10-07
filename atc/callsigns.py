@@ -98,6 +98,24 @@ class CallsignRegistry:
             return f"{canonical} {number}-{_normalise_number(element)}"
         return f"{canonical} {number}"
 
+    def extract_name(self, text: str) -> str | None:
+        """Return just a flight name (no number), e.g. 'Colt', or None.
+
+        Used for calls that may omit the flight number (e.g. "Colt help").
+        """
+        if not self.names:
+            return None
+        alternatives = []
+        for name in self.names:
+            for variant in self.variants.get(name.lower(), [name.lower()]):
+                alternatives.append(re.escape(variant).replace(r"\ ", r"\s*"))
+        pattern = re.compile(rf"\b(?P<name>{'|'.join(alternatives)})\b",
+                             re.IGNORECASE)
+        match = pattern.search(text)
+        if not match:
+            return None
+        return self._canonical_name(match.group("name").strip().title())
+
     def _canonical_name(self, name: str) -> str:
         low = name.lower()
         for known in self.names:

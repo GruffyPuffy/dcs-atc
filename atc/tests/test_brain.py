@@ -69,6 +69,25 @@ def test_tower_runway_in_sight_overhead(brain):
     assert "overhead break" in reply
 
 
+def test_tower_overhead_break_clears_break(brain):
+    reply = brain.handle("Kutaisi Traffic, Colt 1, overhead break runway 25",
+                         controller=Controller.TOWER)
+    assert "overhead break" in reply
+
+
+def test_tower_in_the_break_acknowledged(brain):
+    reply = brain.handle("Tower, Colt 1, in the break",
+                         controller=Controller.TOWER)
+    assert "report on final" in reply
+
+
+def test_ground_taxiing_variant(brain):
+    # "taxiing" (not just "taxi") must match
+    reply = brain.handle("Ground, Colt 1, one ship Hornets, taxiing to runway 25",
+                         controller=Controller.GROUND)
+    assert "taxi to runway" in reply
+
+
 def test_tower_inbound_without_track(brain):
     reply = brain.handle("Tower, Colt 1, inbound", controller=Controller.TOWER)
     assert "Colt 1" in reply
@@ -161,6 +180,39 @@ def test_control_departure_checkin_radar_contact(brain):
     assert "radar contact" in reply
     assert "join via" not in reply
     assert brain.pilots["Colt 1"].phase == Phase.AIRBORNE
+
+
+def test_control_hands_to_tower_on_final(brain):
+    reply = brain.handle("Control, Colt 1, on final", controller=Controller.CONTROL)
+    assert "contact Tower" in reply
+    assert "channel 7" in reply
+
+
+def test_control_hands_to_tower_overhead(brain):
+    reply = brain.handle("Control, Colt 1, overhead break runway 25",
+                         controller=Controller.CONTROL)
+    assert "contact Tower" in reply
+
+
+def test_say_again_uses_correct_agency(brain):
+    assert "Ground" in brain.handle("Ground, Colt 1, banana",
+                                    controller=Controller.GROUND)
+    assert "Control" in brain.handle("Control, Colt 1, banana",
+                                     controller=Controller.CONTROL)
+    assert "Tower" in brain.handle("Tower, Colt 1, banana",
+                                   controller=Controller.TOWER)
+
+
+def test_help_without_flight_number(brain):
+    reply = brain.handle("Colt help", controller=Controller.CONTROL)
+    assert reply and "Apollo suggests" in reply
+
+
+def test_speaker_callsign_mapping(brain):
+    brain.remember_speaker("Caveman", "Colt 1")
+    assert brain.callsign_for_speaker("Caveman") == "Colt 1"
+    assert brain.callsign_for_speaker("caveman") == "Colt 1"
+    assert brain.callsign_for_speaker("Unknown") == "Unknown"
 
 
 # ---------- Shared / fallback ----------
