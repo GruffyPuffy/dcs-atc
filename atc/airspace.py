@@ -56,6 +56,14 @@ def _compass(bearing: float) -> str:
     return names[int((bearing + 22.5) % 360 // 45)]
 
 
+def _offset(lat: float, lon: float, north_m: float,
+            east_m: float) -> tuple[float, float]:
+    """Offset a lat/lon by metres north/east (local flat-earth approximation)."""
+    dlat = math.degrees(north_m / EARTH_RADIUS_M)
+    dlon = math.degrees(east_m / (EARTH_RADIUS_M * math.cos(math.radians(lat))))
+    return lat + dlat, lon + dlon
+
+
 def bearing_distance(lat1: float, lon1: float, lat2: float,
                      lon2: float) -> tuple[float, float]:
     """Bearing (degrees true) and distance (NM) from point 1 to point 2."""
@@ -73,6 +81,9 @@ class ControlZone:
     center_lat: float
     center_lon: float
     gates: dict[str, tuple[float, float]] = field(default_factory=dict)
+    # Original CTR outline in lat/lon (for map display); the shapely `polygon`
+    # is projected to local metres and not directly usable as WGS84.
+    polygon_latlon: list[tuple[float, float]] = field(default_factory=list)
 
     @property
     def ceiling_ft_msl(self) -> float:
@@ -123,6 +134,8 @@ class Airfield:
     gates: dict[str, tuple[float, float]] = field(default_factory=dict)
     taxi_routes: dict[str, tuple[float, float]] = field(default_factory=dict)
     parking_areas: dict[str, tuple[float, float]] = field(default_factory=dict)
+    # Named runway holding positions (P1..P4 on the MA chart), lat/lon.
+    holding_points: dict[str, tuple[float, float]] = field(default_factory=dict)
 
     def nearest_taxi_route(self, lat: float, lon: float) -> str | None:
         """Name of the taxi route whose reference point is nearest, or None.
@@ -143,9 +156,105 @@ class Airfield:
         return min(self.parking_areas, key=lambda p: _haversine_nm(
             lat, lon, self.parking_areas[p][0], self.parking_areas[p][1]))
 
+    def nearest_holding_point(self, lat: float, lon: float) -> str | None:
+        """Name of the runway holding position nearest a position, or None."""
+        if not self.holding_points:
+            return None
+        return min(self.holding_points, key=lambda h: _haversine_nm(
+            lat, lon, self.holding_points[h][0], self.holding_points[h][1]))
+
+    def holding_zone_geometry(self, runway: str | None = None,
+                              thr_nm: float = 0.6,
+                              point_nm: float = 0.2) -> list[dict]:
+        """The areas where a 'holding short' report is accepted, as map circles.
+
+        Mirrors `is_holding_short`: a circle at the threshold plus one at each
+        named holding point. Returns [{center, radius_nm, label}, ...].
+        """
+        zones: list[dict] = []
+        thr = self.runway_threshold(runway)
+        if thr is not None:
+            zones.append({"center": [thr[0], thr[1]], "radius_nm": thr_nm,
+                          "label": "threshold"})
+        for name, (hlat, hlon) in self.holding_points.items():
+            zones.append({"center": [hlat, hlon], "radius_nm": point_nm,
+                          "label": name})
+        return zones
+
+    def final_zone_geometry(self, runway: str | None = None,
+                            max_nm: float = 12.0,
+                            max_offset_deg: float = 30.0) -> dict | None:
+        """The final-approach area, as a wedge (sector) for the map.
+
+        Mirrors `is_on_final`: within `max_nm` of the threshold, on the approach
+        side, within `max_offset_deg` of the runway centreline. Returns a
+        Leaflet-friendly {center, radius_nm, start_deg, end_deg} or None.
+        """
+        thr = self.runway_threshold(runway)
+        rwy_hdg = self.runway_heading(runway)
+        if thr is None or rwy_hdg is None:
+            return None
+        # The approach comes from the reciprocal of the landing direction.
+        inbound = (rwy_hdg + 180) % 360
+        return {
+            "runway": runway or self.active_runway,
+            "center": [thr[0], thr[1]],
+            "radius_nm": max_nm,
+            "start_deg": (inbound - max_offset_deg) % 360,
+            "end_deg": (inbound + max_offset_deg) % 360,
+            "heading": rwy_hdg,
+        }
+
+    def runway_corridor_geometry(self, runway: str | None = None,
+                                 length_nm: float = 1.6,
+                                 half_width_nm: float = 0.02,
+                                 margin_nm: float = 0.25) -> dict | None:
+        """The runway-occupancy corridor as a rectangle for the map.
+
+        Mirrors `runway_occupied`: the full runway length plus `margin_nm` at
+        both ends. Returns {corners: [[lat,lon], ...]} or None.
+        """
+        thr = self.runway_threshold(runway)
+        rwy_hdg = self.runway_heading(runway)
+        if thr is None or rwy_hdg is None:
+            return None
+        length = self.runway_length_nm(runway) or length_nm
+        along = math.radians(rwy_hdg)
+        ax, ay = math.sin(along), math.cos(along)      # east, north
+        px, py = ay, -ax                               # perpendicular
+        start_m = -margin_nm * M_PER_NM
+        end_m = (length + margin_nm) * M_PER_NM
+        half_m = half_width_nm * M_PER_NM
+        corners = []
+        for along_m, across_m in ((start_m, -half_m), (end_m, -half_m),
+                                  (end_m, half_m), (start_m, half_m)):
+            north_m = along_m * ay + across_m * py
+            east_m = along_m * ax + across_m * px
+            corners.append(list(_offset(thr[0], thr[1], north_m, east_m)))
+        return {"corners": corners}
+
     def runway_threshold(self, runway: str | None = None) -> tuple[float, float] | None:
         """Threshold (lat, lon) for a runway (default: the active runway)."""
         return self.runways.get(runway or self.active_runway)
+
+    def set_active_runway(self, runway: str) -> None:
+        """Update the active runway (e.g. when the wind shifts).
+
+        The brain and the airfield must agree, or the go-around / final /
+        occupancy checks would use a different runway than the clearances.
+        """
+        if runway and runway in self.runways:
+            self.active_runway = runway
+
+    def runway_length_nm(self, runway: str | None = None) -> float | None:
+        """Runway length in NM (threshold to opposite threshold), or None."""
+        rwy = runway or self.active_runway
+        opposite = self._opposite_runway(rwy)
+        thr = self.runways.get(rwy)
+        opp_thr = self.runways.get(opposite) if opposite else None
+        if thr and opp_thr:
+            return _haversine_nm(thr[0], thr[1], opp_thr[0], opp_thr[1])
+        return None
 
     def runway_heading(self, runway: str | None = None) -> float | None:
         """Runway heading in degrees true.
@@ -202,6 +311,22 @@ class Airfield:
             return False
         return _haversine_nm(lat, lon, thr[0], thr[1]) <= max_nm
 
+    def is_holding_short(self, lat: float, lon: float,
+                         runway: str | None = None,
+                         point_nm: float = 0.2, thr_nm: float = 0.6) -> bool:
+        """True if the position is at a runway holding position.
+
+        A pilot may hold at the threshold itself or at any named holding point
+        (P1..P4 on the MA chart), which can be over a mile from the threshold —
+        so we accept proximity to either.
+        """
+        if self.is_at_runway(lat, lon, runway, thr_nm):
+            return True
+        for hlat, hlon in self.holding_points.values():
+            if _haversine_nm(lat, lon, hlat, hlon) <= point_nm:
+                return True
+        return False
+
     def vector_heading(self, lat: float, lon: float, runway: str | None = None,
                        intercept_nm: float = 10.0) -> float | None:
         """Heading to fly to intercept the extended centreline of a runway.
@@ -226,7 +351,7 @@ class Airfield:
         return bearing
 
     def is_on_final(self, lat: float, lon: float, heading: float,
-                    runway: str | None = None, max_nm: float = 8.0,
+                    runway: str | None = None, max_nm: float = 12.0,
                     max_offset_deg: float = 30.0) -> bool:
         """True if the aircraft looks like it is on final approach.
 
@@ -251,9 +376,19 @@ class Airfield:
 
     def runway_occupied(self, units, runway: str | None = None,
                         exclude: str | None = None, length_nm: float = 1.6,
-                        half_width_nm: float = 0.12,
-                        max_alt_ft_agl: float = 500.0) -> bool:
+                        half_width_nm: float = 0.02,
+                        max_alt_ft_agl: float = 500.0,
+                        margin_nm: float = 0.25) -> bool:
         """True if any unit is on the runway (within a corridor around it).
+
+        The corridor runs the length of the runway and extends `margin_nm`
+        beyond **both** ends, so an aircraft just entering or rolling out past
+        the far threshold still counts as occupying the runway.
+
+        The half-width is the **real runway half-width** (~30 m for Kutaisi's
+        60 m runway), not a generous margin: a wider corridor would swallow the
+        parallel taxiway holding positions (P1/P2 are only ~50 m from the
+        centreline) and wrongly block landing for a pilot holding short.
 
         `units` is any iterable of objects with `.lat`, `.lon`, `.alt_ft` and
         optionally `.callsign`. `exclude` skips one callsign (e.g. the aircraft
@@ -263,7 +398,9 @@ class Airfield:
         rwy_hdg = self.runway_heading(runway)
         if thr is None or rwy_hdg is None:
             return False
-        # The runway extends from the threshold in the landing direction.
+        # The runway extends from the threshold in the landing direction; use
+        # the real threshold-to-threshold length when both ends are known.
+        length = self.runway_length_nm(runway) or length_nm
         along_dir = math.radians(rwy_hdg)
         ax, ay = math.sin(along_dir), math.cos(along_dir)  # east, north
         for unit in units:
@@ -275,7 +412,9 @@ class Airfield:
             ex, ny = _project(unit.lat, unit.lon, thr[0], thr[1])
             along = ex * ax + ny * ay
             across = ex * ay - ny * ax
-            if 0.0 <= along <= length_nm * M_PER_NM and abs(across) <= half_width_nm * M_PER_NM:
+            if (-margin_nm * M_PER_NM <= along
+                    <= (length + margin_nm) * M_PER_NM
+                    and abs(across) <= half_width_nm * M_PER_NM):
                 return True
         return False
 
@@ -319,6 +458,7 @@ def _build_airfield(name: str, spec: dict, defaults: dict) -> Airfield:
         center_lon = sum(p[1] for p in polygon_pts) / len(polygon_pts)
         projected = [_project(p[0], p[1], center_lat, center_lon) for p in polygon_pts]
         polygon = Polygon(projected)
+        polygon_latlon = [(float(p[0]), float(p[1])) for p in polygon_pts]
     else:
         # circular CTR around the airfield reference point
         ref = spec.get("reference", spec.get("runways", {}).get("25", {}).get("threshold"))
@@ -328,6 +468,14 @@ def _build_airfield(name: str, spec: dict, defaults: dict) -> Airfield:
         radius_nm = float(ctr_spec.get("radius_nm", defaults.get("ctr_radius_nm", 5.0)))
         radius_m = radius_nm * M_PER_NM
         polygon = Point(0.0, 0.0).buffer(radius_m, quad_segs=64)
+        # Sample the circle back to lat/lon for the map.
+        polygon_latlon = []
+        for i in range(64):
+            angle = 2 * math.pi * i / 64
+            dlat = math.degrees(radius_m * math.cos(angle) / EARTH_RADIUS_M)
+            dlon = math.degrees(radius_m * math.sin(angle)
+                                / (EARTH_RADIUS_M * math.cos(math.radians(center_lat))))
+            polygon_latlon.append((center_lat + dlat, center_lon + dlon))
 
     gates = {g: (float(v[0]), float(v[1])) for g, v in spec.get("gates", {}).items()}
     runways = {r: (float(v["threshold"][0]), float(v["threshold"][1]))
@@ -336,6 +484,8 @@ def _build_airfield(name: str, spec: dict, defaults: dict) -> Airfield:
                    for r, v in spec.get("taxi_routes", {}).items()}
     parking_areas = {p: (float(v[0]), float(v[1]))
                      for p, v in spec.get("parking_areas", {}).items()}
+    holding_points = {h: (float(v[0]), float(v[1]))
+                      for h, v in spec.get("holding_points", {}).items()}
 
     ctr = ControlZone(
         name=f"{name} CTR",
@@ -345,6 +495,7 @@ def _build_airfield(name: str, spec: dict, defaults: dict) -> Airfield:
         center_lat=center_lat,
         center_lon=center_lon,
         gates=gates,
+        polygon_latlon=polygon_latlon,
     )
     return Airfield(
         name=name,
@@ -362,4 +513,5 @@ def _build_airfield(name: str, spec: dict, defaults: dict) -> Airfield:
         gates=gates,
         taxi_routes=taxi_routes,
         parking_areas=parking_areas,
+        holding_points=holding_points,
     )

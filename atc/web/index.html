@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>ATC Map</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+  <link rel="stylesheet" href="/map.css">
+</head>
+<body>
+  <header class="topbar">
+    <strong id="title">ATC Map</strong>
+    <span id="status" class="status">connecting…</span>
+    <span class="legend">
+      <span class="dot ground"></span>Ground
+      <span class="dot tower"></span>Tower
+      <span class="dot control"></span>Control
+    </span>
+    <label class="toggle"><input type="checkbox" id="chart-toggle" checked> Chart</label>
+  </header>
+  <div id="map"></div>
+  <aside id="panel">
+    <h2>Traffic</h2>
+    <table id="traffic">
+      <thead><tr><th>Callsign</th><th>Phase</th><th>Alt</th><th>Hdg</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <p id="error" class="error" hidden></p>
+  </aside>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+          integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <script src="/map.js"></script>
+</body>
+</html>

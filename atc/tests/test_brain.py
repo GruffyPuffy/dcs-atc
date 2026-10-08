@@ -331,6 +331,64 @@ def test_go_around_resets_when_not_on_final(brain):
     assert "go around" in again
 
 
+# ---------- Traffic sequencing (players + AI) ----------
+
+class _Unit:
+    def __init__(self, callsign, lat, lon, alt_ft):
+        self.callsign = callsign
+        self.lat = lat
+        self.lon = lon
+        self.alt_ft = alt_ft
+
+
+def test_line_up_held_when_runway_occupied(brain, airfield):
+    thr = airfield.runway_threshold("25")
+    blocker = _Unit("AI-1", thr[0], thr[1], airfield.elevation_ft + 10)
+    at_rwy = _track(airfield, thr[0], thr[1])
+    reply = brain.handle("Tower, Colt 1, ready for departure", track=at_rwy,
+                         controller=Controller.TOWER, traffic=[blocker])
+    assert "hold short" in reply.lower()
+    assert brain.pilots["Colt 1"].phase == Phase.HOLDING
+
+
+def test_line_up_cleared_when_runway_clear(brain, airfield):
+    thr = airfield.runway_threshold("25")
+    at_rwy = _track(airfield, thr[0], thr[1])
+    reply = brain.handle("Tower, Colt 1, ready for departure", track=at_rwy,
+                         controller=Controller.TOWER, traffic=[])
+    assert "line up and wait" in reply
+
+
+def test_landing_sequenced_when_runway_occupied(brain, airfield):
+    import math
+    thr = airfield.runway_threshold("25")
+    hdg = airfield.runway_heading("25")
+    back = math.radians((hdg + 180) % 360)
+    lat = thr[0] + math.degrees(5 * 1852 * math.cos(back) / 6_371_000)
+    lon = thr[1] + math.degrees(5 * 1852 * math.sin(back)
+                                / (6_371_000 * math.cos(math.radians(thr[0]))))
+    on_final = _track(airfield, lat, lon, heading=hdg)
+    blocker = _Unit("AI-1", thr[0], thr[1], airfield.elevation_ft + 10)
+    reply = brain.handle("Tower, Colt 1, on final", track=on_final,
+                         controller=Controller.TOWER, traffic=[blocker])
+    assert "continue approach" in reply.lower()
+    assert brain.pilots["Colt 1"].phase != Phase.LANDING
+
+
+def test_landing_cleared_when_runway_clear(brain, airfield):
+    import math
+    thr = airfield.runway_threshold("25")
+    hdg = airfield.runway_heading("25")
+    back = math.radians((hdg + 180) % 360)
+    lat = thr[0] + math.degrees(5 * 1852 * math.cos(back) / 6_371_000)
+    lon = thr[1] + math.degrees(5 * 1852 * math.sin(back)
+                                / (6_371_000 * math.cos(math.radians(thr[0]))))
+    on_final = _track(airfield, lat, lon, heading=hdg)
+    reply = brain.handle("Tower, Colt 1, on final", track=on_final,
+                         controller=Controller.TOWER, traffic=[])
+    assert "cleared to land" in reply
+
+
 # ---------- Wind / runway ----------
 
 def test_set_wind_and_runway(brain):
@@ -450,7 +508,7 @@ def test_help_mentions_escape_hatches(brain):
 def test_holding_short_challenged_when_on_ramp(brain, airfield):
     brain.handle("Ground, Colt 1, requesting taxi", controller=Controller.GROUND)
     # pilot is still on the ramp (far from the runway) but claims holding short
-    ramp = _track(airfield, airfield.ctr.center_lat, airfield.ctr.center_lon)
+    ramp = _track(airfield, *airfield.parking_areas["Ramp West"])
     reply = brain.handle("Colt 1, holding short runway 25",
                          track=ramp, controller=Controller.GROUND)
     assert "negative" in reply.lower()
@@ -469,8 +527,19 @@ def test_holding_short_accepted_when_at_runway(brain, airfield):
     assert brain.pilots["Colt 1"].phase == Phase.HOLDING
 
 
+def test_holding_short_names_the_holding_position(brain, airfield):
+    brain.handle("Ground, Colt 1, requesting taxi", controller=Controller.GROUND)
+    # sit at Holding C (P1) and report holding short
+    p1 = airfield.holding_points["Holding C"]
+    at_p1 = _track(airfield, p1[0], p1[1])
+    reply = brain.handle("Colt 1, holding short runway 25",
+                         track=at_p1, controller=Controller.GROUND)
+    assert "Holding C" in reply
+    assert brain.pilots["Colt 1"].phase == Phase.HOLDING
+
+
 def test_ready_for_departure_challenged_when_not_at_runway(brain, airfield):
-    ramp = _track(airfield, airfield.ctr.center_lat, airfield.ctr.center_lon)
+    ramp = _track(airfield, *airfield.parking_areas["Ramp West"])
     reply = brain.handle("Tower, Colt 1, ready for departure",
                          track=ramp, controller=Controller.TOWER)
     assert "negative" in reply.lower()

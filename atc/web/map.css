@@ -1,0 +1,41 @@
+:root {
+  --bg: #0d1117;
+  --panel: #161b22;
+  --line: #30363d;
+  --text: #e6edf3;
+  --muted: #8b949e;
+  --ground: #d29922;
+  --tower: #3fb950;
+  --control: #58a6ff;
+  --ctr: #58a6ff;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+  font: 13px/1.4 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+.topbar { display: flex; align-items: center; gap: 16px; padding: 8px 14px;
+  background: var(--panel); border-bottom: 1px solid var(--line); }
+.topbar strong { font-size: 15px; letter-spacing: .04em; }
+.status { color: var(--muted); }
+.status.ok { color: var(--tower); }
+.status.bad { color: #f85149; }
+.legend { margin-left: auto; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+.toggle { color: var(--muted); display: flex; align-items: center; gap: 5px; cursor: pointer; }
+.dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; margin-left: 10px; }
+.dot.ground { background: var(--ground); }
+.dot.tower { background: var(--tower); }
+.dot.control { background: var(--control); }
+/* Aircraft markers: a divIcon with no default Leaflet box/border. */
+.ac { background: none; border: none; }
+.ac .ac-arrow { font-size: 18px; line-height: 1; }
+.ac .ac-label { font-size: 11px; white-space: nowrap; text-shadow: 0 0 3px #000; }
+#map { position: absolute; inset: 44px 260px 0 0; }
+#panel { position: absolute; top: 44px; right: 0; bottom: 0; width: 260px;
+  background: var(--panel); border-left: 1px solid var(--line); padding: 10px 12px;
+  overflow: auto; }
+#panel h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em;
+  color: var(--muted); margin: 4px 0 8px; }
+#traffic { width: 100%; border-collapse: collapse; }
+#traffic th, #traffic td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--line); }
+#traffic th { color: var(--muted); font-weight: 500; }
+.error { color: #f85149; margin-top: 10px; }
+.leaflet-container { background: #0b0f14; }

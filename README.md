@@ -6,7 +6,7 @@ headless Python ATC bot (SRS client, Whisper STT, Piper TTS, rules-based brain).
 
 Layout
 ------
-- `atc/` — the ATC bot (`atc_bot.py` full bot, `listen.py` listen-only, `debug_stt.py` offline STT tuning, `brain.py` rules brain, `callsigns.py` mission callsign recognition, `phonetics.py` STT-variant generation, `atis.py` weather/ATIS, `srs_client.py` headless SRS client, `airspace.py` CTR geometry, `ctr.py` boundary tracker, `state_client.py` DCS state reader, `airspace.json` per-airfield config, `phraseology.json` reply wording)
+- `atc/` — the ATC bot (`atc_bot.py` full bot, `listen.py` listen-only, `debug_stt.py` offline STT tuning, `brain.py` rules brain, `callsigns.py` mission callsign recognition, `phonetics.py` STT-variant generation, `atis.py` weather/ATIS, `srs_client.py` headless SRS client, `airspace.py` CTR geometry, `ctr.py` boundary tracker, `state_client.py` DCS state reader, `map_server.py` live map view, `airspace.json` per-airfield config, `phraseology.json` reply wording, `web/` map page)
 - `deploy/dcs/` — docker-compose for the DCS dedicated server and the SRS server
 - `scripts/dcs.sh` — manage the containers (install/start/stop/logs/srs-*)
 - `scripts/state_client.py` — CLI for the DCS state API (JSON socket bridge, port 10309): `status`, `diag`, `eval`, `move`, `move-geo`, `hold`
@@ -144,6 +144,23 @@ reacts to flights that actually exist.
 The bot also broadcasts **ATIS** on its own frequency (Kutaisi 270.500 AM),
 built from live DCS weather: active runway from wind, QNH, CAVOK/visibility, and
 an hour-based information letter (Alpha, Bravo, …). See `ATC.md` §10.
+
+Map view
+--------
+
+The bot can serve a **live map** (Leaflet + OpenStreetMap) showing the CTR,
+gates, runways, taxi routes and parking, plus every player aircraft with its
+callsign, flight phase and current controller. `start_bot.sh` enables it by
+default on port 8090; to run the bot directly, pass `--map-port`:
+
+    ./atc/start_bot.sh                      # map on http://<host>:8090/
+    uv run atc_bot.py --airfield Kutaisi --map-port 8090
+
+Then open `http://<host>:8090/`. It can also run standalone (no bot) with
+`uv run map_server.py --airfield Kutaisi --port 8090`. No extra Python
+dependencies — the server is stdlib `http.server`; Leaflet loads from a CDN.
+If the port is already in use the bot logs a warning and keeps running without
+the map.
 
 License
 -------

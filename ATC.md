@@ -200,12 +200,39 @@ report).
 
 | Pilot claims | Bot checks (live track) | If it does not match |
 | --- | --- | --- |
-| "holding short runway 25" | within ~0.6 NM of the runway threshold | "…negative. I show you on the ground. Confirm your position." |
-| "ready for departure" | within ~0.6 NM of the runway threshold | "…negative. I show you 3 miles north. Confirm your position." |
+| "holding short runway 25" | at the threshold **or any named holding position** (P1–P4) | "…negative. I show you on the ground. Confirm your position." |
+| "ready for departure" | at the threshold or any named holding position | "…negative. I show you 3 miles north. Confirm your position." |
 
 The challenge uses the pilot's **actual** position (distance + compass, or "on
-the airfield" when very close), so the trainee learns to report correctly. The
+the ground" when very close), so the trainee learns to report correctly. The
 wording is the `position_challenge` template in `phraseology.json`.
+
+**Holding positions (P1–P4).** The MA aerodrome chart names four runway holding
+positions, and the bot knows where they are (`airspace.json` → `holding_points`):
+
+| Point | Name | Lat, lon |
+| --- | --- | --- |
+| P1 | Holding C | 42.17912, 42.48922 |
+| P2 | Holding B | 42.17705, 42.47302 |
+| P3 | Holding A/N | 42.17923, 42.46583 |
+| P4 | Holding S/W | 42.17232, 42.46738 |
+
+When a pilot reports holding short, the bot **names the holding position** it
+shows them at: *"Colt 1, Ground, roger, holding at Holding C. Contact Tower on
+channel 7."* A report is accepted if the aircraft is at the threshold **or** at
+any holding point (`Airfield.is_holding_short`), so holding at B/A/N/S/W is not
+wrongly challenged.
+
+**Check areas on the map.** The map draws the areas the bot actually checks,
+derived from the **same parameters** the brain uses (so the map cannot drift
+from the logic):
+
+- **Holding** (amber dashed circles): the threshold (0.6 NM) plus each named
+  holding point (0.2 NM) — exactly where a "holding short" report is accepted.
+- **Final approach** (blue dashed wedge): 12 NM from the threshold, ±30° of the
+  runway centreline — exactly where `is_on_final` is true.
+- **Runway corridor** (red dashed rectangle): the occupancy corridor
+  (`runway_occupied`) — the full runway length plus a margin at both ends.
 
 **Graceful without the bridge:** if there is no live state (no state bridge, or
 the pilot is not found), the bot falls back to trusting the report — the trainer
@@ -315,10 +342,13 @@ or ground traffic — and warns an aircraft on final.
 
 Detection:
 1. **Runway occupancy** (`Airfield.runway_occupied`): any unit within a corridor
-   around the runway centreline (default 1.6 NM long, ±0.12 NM wide) and below
-   500 ft AGL. The aircraft being cleared is excluded so it does not count
-   itself.
-2. **Final approach** (`Airfield.is_on_final`): within 8 NM of the threshold,
+   around the runway centreline (the full runway length plus a 0.25 NM margin at
+   **both** ends, ±0.02 NM — the real runway half-width) and below 500 ft AGL.
+   The aircraft being cleared is excluded so it does not count itself. The
+   corridor is deliberately narrow: a wider one would swallow the parallel
+   taxiway holding positions (P1/P2 are only ~50 m from the centreline) and
+   wrongly block landing for a pilot holding short.
+2. **Final approach** (`Airfield.is_on_final`): within 12 NM of the threshold,
    with both the bearing-to-threshold and the aircraft heading aligned with the
    runway within 30°.
 3. The go-around fires **once per approach** (reset when the aircraft is no
@@ -328,8 +358,30 @@ Runway heading is computed from the actual threshold-to-threshold bearing when
 both runway ends are defined in `airspace.json` (accurate), falling back to the
 runway number otherwise.
 
+**Wind-based runway.** The active runway follows the wind (see §10): the bot
+calls `Airfield.set_active_runway()` whenever the weather refreshes, so the
+final-approach, occupancy and go-around checks use the **same** runway (07 or
+25) as the clearances and the ATIS. Without this the checks would keep using the
+configured runway even when the wind had shifted.
+
 > Status: **implemented** (`brain.check_final`, `airspace.runway_occupied`,
 > `airspace.is_on_final`).
+
+### Traffic sequencing (players + AI)
+
+The bot sequences clearances against **all live traffic** — players *and* AI
+aircraft (`state.all_units()`), not just the pilot it is talking to:
+
+| Pilot asks | Runway occupied? | Tower replies |
+| --- | --- | --- |
+| "ready for departure" | yes | "hold short, runway 25 is occupied." (stays `Holding`) |
+| "ready for departure" | no | "line up and wait runway 25." |
+| "on final" | yes | "continue approach, traffic on the runway." (stays `Inbound`) |
+| "on final" | no | "cleared to land." |
+
+So an AI aircraft on the runway blocks a line-up, and one on final ahead of you
+is sequenced. The aircraft being cleared is excluded so it never blocks itself.
+Without live traffic the bot trusts the pilot (offline behaviour unchanged).
 
 ---
 
@@ -358,7 +410,10 @@ runway number otherwise.
       "runways": { "25": { "threshold": [lat, lon] } },
       "gates": { "East": [lat, lon], ... },
       "taxi_routes": { "Sierra Echo": [lat, lon], "Alpha November": [lat, lon] },
-      "parking_areas": { "Ramp South": [lat, lon], "Ramp North": [lat, lon] }
+      "parking_areas": { "Ramp West": [lat, lon], "Ramp North": [lat, lon],
+                         "Ramp East": [lat, lon], "Ramp South": [lat, lon] },
+      "holding_points": { "Holding C": [lat, lon], "Holding B": [lat, lon],
+                          "Holding A/N": [lat, lon], "Holding S/W": [lat, lon] }
     }
   }
 }
@@ -599,3 +654,58 @@ If a report does not match your live position, the bot **challenges** it and doe
   Squawk 4201 and state intentions." (§6)
 - **Go-around** if the runway is occupied while you are on final:
   "Colt 1, Tower, go around, runway 25 is occupied." (§7)
+
+---
+
+## 13. Live map view
+
+The bot can serve a **live map** of the airfield it is managing, for an
+overview of the traffic and each pilot's state. Start it with `--map-port`:
+
+    uv run atc_bot.py --airfield Kutaisi --map-port 8080
+
+Then open `http://<host>:8080/`. It can also run standalone (no bot, no SRS)
+with `uv run map_server.py --airfield Kutaisi --port 8080`.
+
+The page is **Leaflet + OpenStreetMap** (loaded from a CDN) and shows:
+
+- **Airspace** from `airspace.json`: the CTR polygon (surface–ceiling), the
+  entry/exit gates, runway thresholds, taxi routes and parking areas.
+- **Aircraft**: every player aircraft, positioned live from the state bridge,
+  labelled with **callsign · flight phase** and coloured by the **controller**
+  they last talked to (Ground amber, Tower green, Control blue). A tooltip
+  shows type, altitude and heading; a side table lists callsign, phase, altitude
+  and heading.
+- **AI air traffic**: AI planes/helicopters within 150 NM of the field, as small
+  grey (blue) / red (red) triangles, so you can see the traffic the bot
+  sequences against. The page draws only those in the **current viewport**, so
+  zooming and panning declutter naturally.
+
+Data comes from the same sources the bot uses — positions from the state bridge
+(`state_client`), phases from the shared `AtcBrain` (`PilotState.phase`), and
+geometry from `airspace.json` — so the map always agrees with what the
+controllers are saying. The JSON endpoint is `/api/atc`; the page polls it every
+2 seconds.
+
+> No extra Python dependencies: the server is stdlib `http.server`
+> (`atc/map_server.py`), and the page is plain HTML/JS in `atc/web/`. If the
+> state bridge is down the map still renders the airspace and shows a
+> "DCS offline" note.
+
+### Chart overlay (georeferenced kneeboard)
+
+The map can overlay the **Master Arms aerodrome chart** (from their Kutaisi
+kneeboard) at the correct scale and position, toggled with the **Chart**
+checkbox. The chart is georeferenced from control points whose lat/lon are
+printed on the chart itself (P1–P4, the holding positions) and whose pixel
+positions are read off the image; an affine transform maps lat/lon → pixel.
+Because the chart is rotated ~5° from north, it is **warped to a north-up
+grid** first (Leaflet's `imageOverlay` is axis-aligned).
+
+`atc/georef.py` does this and writes `atc/web/overlays/<airfield>.png` +
+`.json` (lat/lon bounds). Regenerate with:
+
+    uv run --with pillow georef.py --source <chart.png> --out web/overlays/kutaisi
+
+The overlay is optional: if no `<airfield>.png`/`.json` exists, the map just
+skips it. The same georeferencing was used to place the parking areas (see §9).

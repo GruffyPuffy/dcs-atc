@@ -40,8 +40,16 @@
         "Alpha November": [42.183, 42.490]
       },
       "parking_areas": {
-        "Ramp South": [42.182, 42.470],
-        "Ramp North": [42.183, 42.490]
+        "Ramp West": [42.18316, 42.47238],
+        "Ramp North": [42.18293, 42.48265],
+        "Ramp East": [42.17691, 42.49890],
+        "Ramp South": [42.17120, 42.47316]
+      },
+      "holding_points": {
+        "Holding C": [42.17912, 42.48922],
+        "Holding B": [42.17705, 42.47302],
+        "Holding A/N": [42.17923, 42.46583],
+        "Holding S/W": [42.17232, 42.46738]
       }
     }
   }

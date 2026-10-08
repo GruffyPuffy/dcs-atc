@@ -102,6 +102,10 @@ def main() -> None:
     parser.add_argument("--state-port", type=int, default=10309)
     parser.add_argument("--no-state", action="store_true",
                         help="disable the DCS state bridge (no live positions)")
+    parser.add_argument("--map-port", type=int, default=0,
+                        help="serve the live map view on this port (0 disables)")
+    parser.add_argument("--map-host", default="0.0.0.0",
+                        help="bind address for the map view")
     parser.add_argument("--debug", action="store_true",
                         help="log routing/state detail for every transmission")
     args = parser.parse_args()
@@ -290,16 +294,31 @@ def main() -> None:
             log(f"state bridge unavailable: {error}")
         return None
 
+    def traffic() -> list:
+        """Every live unit (players + AI), for sequencing clearances."""
+        if state is None:
+            return []
+        try:
+            return state.all_units()
+        except (OSError, RuntimeError):
+            return []
+
     # One worker thread per controller frequency, sharing the brain + tracker.
     # The lock guards brain/tracker so two controllers can't interleave a
     # read-modify-write on the same pilot's state.
     lock = threading.RLock()
     shared = SharedState(brain=brain, lock=lock, track_for=track_for,
                          transcribe=transcribe, speak=speak, log=log,
-                         debug=debug)
+                         debug=debug, traffic=traffic)
     workers = {hz: ControllerWorker(controller, hz, shared,
                                     voice=voice_for[controller])
                for hz, controller in controller_by_freq.items()}
+
+    # Optional live map view (Leaflet) showing aircraft + their flight phase.
+    if args.map_port:
+        from map_server import start_map_server
+        start_map_server(airfield, brain, state, args.map_port,
+                         host=args.map_host, lock=lock, log=log)
 
     def on_end(freq: float, who: str, pcm: bytes, duration: float) -> None:
         """SRS rx callback: enqueue to the right controller worker (never blocks)."""
@@ -353,6 +372,10 @@ def main() -> None:
             return None
         report = build_atis(airfield, weather)
         brain.set_runway(report.active_runway)
+        # Keep the airfield's active runway in sync too: the go-around, final
+        # and runway-occupancy checks all read it, so they must follow the wind
+        # (07 vs 25) just like the clearances do.
+        airfield.set_active_runway(report.active_runway)
         brain.set_wind(report.wind_dir, report.wind_speed)
         brain.set_qnh(report.qnh_inhg)
         return report

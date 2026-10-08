@@ -68,6 +68,7 @@ class PilotState:
     exit_gate: str = ""  # assigned departure exit point
     entry_gate: str = ""  # assigned arrival entry point
     last_reply: str = ""  # last clearance, replayed on "say again"
+    last_controller: str = ""  # last agency talked to (for the map view)
 
 
 class Phraseology:
@@ -181,14 +182,33 @@ class AtcBrain:
         return self._say("position_challenge", callsign, agency=agency,
                          position=position)
 
+    def _holding_point(self, track: AircraftTrack | None) -> str:
+        """Name of the holding position nearest the aircraft, or ''."""
+        if track is None or self.airfield is None:
+            return ""
+        return self.airfield.nearest_holding_point(track.lat, track.lon) or ""
+
+    def _runway_busy(self, traffic: list | None, exclude: str = "") -> bool:
+        """True if the active runway is occupied by other traffic (players + AI).
+
+        Used to sequence clearances: don't line up / clear to land onto an
+        occupied runway. Without live traffic we trust the pilot (offline).
+        """
+        if not traffic or self.airfield is None:
+            return False
+        return self.airfield.runway_occupied(traffic, exclude=exclude or None)
+
     def handle(self, text: str, track: AircraftTrack | None = None,
-               controller: Controller = Controller.TOWER) -> str | None:
+               controller: Controller = Controller.TOWER,
+               traffic: list | None = None) -> str | None:
         """Return the ATC reply for a pilot transmission, or None if we
         did not understand it (no callsign, unknown request).
 
         `track` is the aircraft's live position (if known), used to make
         inbound replies distance-aware. `controller` is which agency the
         transmission was addressed to (from the frequency it arrived on).
+        `traffic` is every live unit (players + AI), used to sequence clearances
+        against other traffic (e.g. hold short if the runway is occupied).
         """
         callsign = self.callsigns.extract(text)
         if not callsign:
@@ -200,7 +220,8 @@ class AtcBrain:
             return None
         low = text.lower()
         pilot = self._pilot(callsign)
-        reply = self._dispatch(callsign, pilot, low, track, controller)
+        pilot.last_controller = controller.value
+        reply = self._dispatch(callsign, pilot, low, track, controller, traffic)
         if reply:
             # Remember the last clearance so the pilot can ask for it again
             # ("say again") — a trainer aid for missed readbacks.
@@ -209,7 +230,8 @@ class AtcBrain:
 
     def _dispatch(self, callsign: str, pilot: PilotState, low: str,
                   track: AircraftTrack | None,
-                  controller: Controller) -> str | None:
+                  controller: Controller,
+                  traffic: list | None = None) -> str | None:
         """Route one transmission to the right intent handler."""
         # Trainer aid: "<callsign> help" returns a short, state-aware hint.
         if re.search(r"\b(help|assist|what do i do|what now|remind me)\b", low):
@@ -247,7 +269,7 @@ class AtcBrain:
         elif controller == Controller.CONTROL:
             reply = self._handle_control(callsign, pilot, low, track)
         else:
-            reply = self._handle_tower(callsign, pilot, low, track)
+            reply = self._handle_tower(callsign, pilot, low, track, traffic)
         if reply is not None:
             return reply
 
@@ -364,9 +386,14 @@ class AtcBrain:
             # claims to be holding short but is still on the ramp gets
             # challenged, and their state does NOT advance.
             if track is not None and self.airfield is not None \
-                    and not self.airfield.is_at_runway(track.lat, track.lon):
+                    and not self.airfield.is_holding_short(track.lat, track.lon):
                 return self._challenge(callsign, self.ground_short, track)
             pilot.phase = Phase.HOLDING
+            # Name the holding position the pilot is actually at (P1..P4).
+            holding = self._holding_point(track)
+            if holding:
+                return self._say("contact_tower_holding", callsign,
+                                 holding=holding)
             return self._say("contact_tower", callsign)
         # Initial check-in: "Ground, Adder11" -> "Adder11, Ground". If the pilot
         # gives a position/formation ("two-ship Hornets on Ramp South") without
@@ -383,7 +410,8 @@ class AtcBrain:
     # ---------- Tower ----------
 
     def _handle_tower(self, callsign: str, pilot: PilotState, low: str,
-                      track: AircraftTrack | None) -> str | None:
+                      track: AircraftTrack | None,
+                      traffic: list | None = None) -> str | None:
         # "ready for departure/takeoff" is unambiguous; a bare "ready" only
         # counts once Ground has advanced the phase (avoids false positives).
         # Master Arms: Tower answers with "line up and wait"; the takeoff
@@ -392,8 +420,12 @@ class AtcBrain:
             # Cross-check: a pilot who says "ready for departure" but is not at
             # the runway gets challenged, and is NOT cleared to line up.
             if track is not None and self.airfield is not None \
-                    and not self.airfield.is_at_runway(track.lat, track.lon):
+                    and not self.airfield.is_holding_short(track.lat, track.lon):
                 return self._challenge(callsign, self.tower_short, track)
+            # Traffic: do not let them line up if the runway is occupied.
+            if self._runway_busy(traffic, exclude=callsign):
+                pilot.phase = Phase.HOLDING
+                return self._say("hold_short_traffic", callsign)
             pilot.phase = Phase.LINEUP
             return self._say("line_up", callsign)
         if re.search(r"\bready\b", low) and pilot.phase in (
@@ -433,6 +465,10 @@ class AtcBrain:
                     and not self.airfield.is_on_final(track.lat, track.lon,
                                                       track.heading):
                 return self._challenge(callsign, self.tower_short, track)
+            # Traffic: if the runway is occupied, sequence instead of clearing.
+            if self._runway_busy(traffic, exclude=callsign):
+                pilot.phase = Phase.INBOUND
+                return self._say("continue_approach", callsign)
             pilot.phase = Phase.LANDING
             pilot.cleared_landing = True
             return self._say("cleared_land", callsign)

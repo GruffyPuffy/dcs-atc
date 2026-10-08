@@ -37,6 +37,7 @@ class SharedState:
     speak: Callable[..., None]
     log: Callable[[str], None]
     debug: Callable[[str], None] = lambda _line: None
+    traffic: Callable[[], list] = lambda: []
 
 
 class ControllerWorker:
@@ -75,9 +76,10 @@ class ControllerWorker:
         if not text:
             return
         track = self.shared.track_for(who)
+        traffic = self.shared.traffic()
         with self.shared.lock:
             reply = self.shared.brain.handle(
-                text, track, controller=self.controller)
+                text, track, controller=self.controller, traffic=traffic)
             callsign = self.shared.brain.callsigns.extract(text)
             if callsign:
                 self.shared.brain.remember_speaker(who, callsign)

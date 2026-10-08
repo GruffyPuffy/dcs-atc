@@ -12,10 +12,11 @@ PHRASEOLOGY = Path(__file__).resolve().parent.parent / "phraseology.json"
 # Every template key the brain can render. Keep in sync with brain.py.
 REQUIRED_TEMPLATES = {
     "taxi", "hold_short", "takeoff", "line_up", "lineup_readback",
+    "hold_short_traffic", "continue_approach",
     "ground_ack", "ground_info", "readback_correct",
     "inbound_outside", "inbound_inside", "inbound_via_gate",
     "report_runway_in_sight", "cleared_land", "cleared_overhead", "break_ack",
-    "departure_exit", "contact_tower", "contact_control", "control_join",
+    "departure_exit", "contact_tower", "contact_tower_holding", "contact_control", "control_join",
     "contact_ground", "taxi_parking", "control_contact",
     "control_climb", "control_descend",
     "contact_tower_from_control",
@@ -67,7 +68,8 @@ def test_every_template_renders_with_common_fields():
                   descent_altitude="1500 feet",
                   gate="East", position="4 miles north",
                   agency="Kutaisi Tower", bearing="090", distance="12",
-                  airfield="Kutaisi", vector_runway="25", parking="Ramp South")
+                  airfield="Kutaisi", vector_runway="25", parking="Ramp South",
+                  holding="Holding C")
     for key in REQUIRED_TEMPLATES:
         text = ph.render(key, **common)
         assert "{" not in text, f"{key} left a placeholder unfilled"

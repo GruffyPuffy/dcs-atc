@@ -25,6 +25,7 @@ class Aircraft:
     alt_ft: float
     heading: float
     coalition: int
+    category: int = 0  # DCS group category: 0 plane, 1 helicopter, 2 ground, 3 ship
 
 
 class StateClient:
@@ -74,6 +75,7 @@ class StateClient:
                     alt_ft=float(unit["alt"]) * 3.280839895,
                     heading=float(unit.get("heading", 0.0)),
                     coalition=int(group.get("coalition", 0)),
+                    category=int(group.get("category", 0)),
                 ))
         return out
 
