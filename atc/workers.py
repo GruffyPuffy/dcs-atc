@@ -79,7 +79,8 @@ class ControllerWorker:
         traffic = self.shared.traffic()
         with self.shared.lock:
             reply = self.shared.brain.handle(
-                text, track, controller=self.controller, traffic=traffic)
+                text, track, controller=self.controller, traffic=traffic,
+                speaker=who)
             callsign = self.shared.brain.callsigns.extract(text)
             if callsign:
                 self.shared.brain.remember_speaker(who, callsign)

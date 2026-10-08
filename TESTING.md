@@ -12,7 +12,7 @@ check the log together.
 
 ## 0. Before you fly
 
-- [ ] Offline suite is green: `cd atc && uv run pytest` → **142 passed**
+- [ ] Offline suite is green: `cd atc && uv run pytest` → **153 passed**
 - [ ] Start the bot: `./start_bot.sh --debug`
 - [ ] You see the controller table + `[*] Ready.`
 - [ ] Second terminal: `tail -f /tmp/atc_log.txt`
@@ -113,7 +113,8 @@ check the log together.
 - [ ] **Check zones** — holding circles, final wedge, runway corridor
 - [ ] **Traffic table** — live list of aircraft
 - [ ] **Chatter drawer** — shows what was heard + replied; filter by agency
-      (e.g. de-select ATIS)
+      (e.g. de-select ATIS); pilot lines show the SRS name + flight callsign
+      (e.g. "Caveman (Colt 1)")
 
 ---
 

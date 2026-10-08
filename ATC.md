@@ -81,7 +81,7 @@ the tower replies **"say again"**.
 | "Tower, Colt 1, at runway 25, ready for departure" | **departure** (after taxi/holding) | "Colt 1, Tower, line up and wait runway 25." |
 | "Line up and wait 25, Colt 1" | **readback** | "Colt 1, Tower, readback correct, wind calm, runway 25, right turnout, cleared for takeoff." |
 | "Control, Colt 1, at 1500 ft" | **departure check-in** | "Colt 1, Control, radar contact, climb to Angels 15." |
-| "Kutaisi Control, Colt 1, inbound 35 miles north at Angels 12" | **inbound** | "Colt 1, Control, radar contact, turn right heading 150 to join via Entry North." |
+| "Kutaisi Control, Colt 1, inbound 35 miles north at Angels 12" | **inbound** | "Colt 1, Control, radar contact, turn right heading 150 to join via Entry North." (heading is **computed** from the live position) |
 | "150 to join via Entry North, Colt 1" | **readback** | "Colt 1, Control, descend to 1500 feet." |
 | "Tower, Colt 1, Entry East" | **entry** | "Colt 1, Tower, report runway in sight." |
 | "Tower, Colt 1, runway in sight" | **runway in sight** | "Colt 1, Tower, wind calm, cleared for left overhead break runway 25." |
@@ -230,7 +230,7 @@ from the logic):
 
 - **Holding** (amber dashed circles): the threshold (0.6 NM) plus each named
   holding point (0.2 NM) — exactly where a "holding short" report is accepted.
-- **Final approach** (blue dashed wedge): 12 NM from the threshold, ±30° of the
+- **Final approach** (blue dashed wedge): 12 NM from the threshold, ±40° of the
   runway centreline — exactly where `is_on_final` is true.
 - **Runway corridor** (red dashed rectangle): the occupancy corridor
   (`runway_occupied`) — the full runway length plus a margin at both ends.
@@ -351,7 +351,7 @@ Detection:
    wrongly block landing for a pilot holding short.
 2. **Final approach** (`Airfield.is_on_final`): within 12 NM of the threshold,
    with both the bearing-to-threshold and the aircraft heading aligned with the
-   runway within 30°.
+   runway within 40°.
 3. The go-around fires **once per approach** (reset when the aircraft is no
    longer on final).
 
@@ -560,9 +560,13 @@ never broadcast their arrival; pilots call them). Disable it with
 
 - "inbound" / "checking in" → radar contact and routing to join via the
   **entry point** nearest the aircraft: *"turn right heading 150 to join via
-  Entry East"*. The entry point is chosen from the aircraft's live position
-  (`gate_locator`), falling back to a default. The pilot's readback triggers the
-  descent: *"descend to 1500 feet"*.
+  Entry East"*. The heading is **computed** from the pilot's live position to
+  the entry point (not a canned value); without a live position the heading is
+  omitted (*"join via Entry East"*). The entry point is chosen from the
+  aircraft's live position (`gate_locator`), falling back to a default. The
+  pilot's readback triggers the descent: *"descend to 1500 feet"*.
+- "passing the entry point" (already inbound) → handoff to Tower:
+  *"contact Tower on channel 7"*.
 - "airborne" / "climbing" / "at 1500 ft" (departure check-in) → *"radar
   contact, climb to Angels 15"*.
 - "on final" / "runway in sight" / "overhead" → handoff to Tower:
@@ -639,7 +643,7 @@ Ground phase; 8–10 Tower; 11 Control.)
 
 | # | Freq | Pilot says | Bot replies |
 |---|------|-----------|-------------|
-| 1 | Control | "Kutaisi Control, Colt 1, inbound 35 miles north at Angels 12." | "Colt 1, Control, radar contact, turn right heading 150 to join via Entry North." |
+| 1 | Control | "Kutaisi Control, Colt 1, inbound 35 miles north at Angels 12." | "Colt 1, Control, radar contact, turn right heading 150 to join via Entry North." (heading computed) |
 | 2 | Control | "150 to join via Entry North, Colt 1." | "Colt 1, Control, descend to 1500 feet." |
 | 3 | Tower | "Tower, Colt 1, Entry North." | "Colt 1, Tower, report runway in sight." |
 | 4 | Tower | "Tower, Colt 1, runway in sight." | "Colt 1, Tower, wind calm, cleared for left overhead break runway 25." |

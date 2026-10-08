@@ -372,9 +372,19 @@ class Airfield:
         bearing, _ = bearing_distance(lat, lon, ip_lat, ip_lon)
         return bearing
 
+    def join_heading(self, lat: float, lon: float, gate: str) -> float | None:
+        """Heading to fly to join the CTR via a named gate, from the pilot's
+        live position. Used for the Control join clearance ("turn heading X to
+        join via Entry East") so the heading is computed, not canned."""
+        target = self.gates.get(gate.split()[-1]) if gate else None
+        if target is None:
+            return None
+        bearing, _ = bearing_distance(lat, lon, target[0], target[1])
+        return bearing
+
     def is_on_final(self, lat: float, lon: float, heading: float,
                     runway: str | None = None, max_nm: float = 12.0,
-                    max_offset_deg: float = 30.0) -> bool:
+                    max_offset_deg: float = 40.0) -> bool:
         """True if the aircraft looks like it is on final approach.
 
         Heuristic: within `max_nm` of the threshold, heading roughly aligned
@@ -413,8 +423,10 @@ class Airfield:
         centreline) and wrongly block landing for a pilot holding short.
 
         `units` is any iterable of objects with `.lat`, `.lon`, `.alt_ft` and
-        optionally `.callsign`. `exclude` skips one callsign (e.g. the aircraft
-        we are clearing, so it does not count itself).
+        optionally `.callsign`/`.player`. `exclude` skips one aircraft (e.g. the
+        aircraft we are clearing, so it does not count itself) — matched against
+        both the unit name and the player name, since the brain works in flight
+        callsigns while the live units are keyed by DCS unit name.
         """
         thr = self.runway_threshold(runway)
         rwy_hdg = self.runway_heading(runway)
@@ -426,7 +438,9 @@ class Airfield:
         along_dir = math.radians(rwy_hdg)
         ax, ay = math.sin(along_dir), math.cos(along_dir)  # east, north
         for unit in units:
-            if exclude is not None and getattr(unit, "callsign", None) == exclude:
+            if exclude is not None and exclude in (
+                    getattr(unit, "callsign", None),
+                    getattr(unit, "player", None)):
                 continue
             if unit.alt_ft - self.elevation_ft > max_alt_ft_agl:
                 continue

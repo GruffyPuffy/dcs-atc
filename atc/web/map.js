@@ -215,9 +215,13 @@ function renderChatter(list) {
   log.innerHTML = rows.map(e => {
     const cls = `chat-row ${e.kind} ${e.controller || ''}`;
     const who = e.kind === 'tx' ? `ATC ${e.controller || ''}`.trim() : e.who;
+    // Show the flight callsign next to the SRS name once the brain has learned
+    // it (e.g. "Caveman (Colt 1)"), so the log is easy to follow.
+    const tag = (e.kind !== 'tx' && e.callsign)
+      ? `${who} <span class="cs">(${e.callsign})</span>` : who;
     return `<div class="${cls}"><span class="t">${e.t}</span>`
       + `<span class="f">${e.freq.toFixed(3)}</span>`
-      + `<span class="who">${who}</span>`
+      + `<span class="who">${tag}</span>`
       + `<span class="txt">${e.text}</span></div>`;
   }).join('');
   log.scrollTop = log.scrollHeight;

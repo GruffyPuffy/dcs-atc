@@ -121,11 +121,21 @@ class MapService:
     def log_chatter(self, kind: str, freq_mhz: float, who: str,
                     text: str, controller: str = "") -> None:
         """Record one radio event (kind: 'rx' pilot, 'tx' ATC, 'sys')."""
+        # Resolve the flight callsign for a pilot transmission (the brain learns
+        # SRS-name -> callsign from what the pilot says), so the log can show
+        # "Colt 1" instead of the raw DCS/SRS name. Empty for ATC/system lines.
+        callsign = ""
+        if kind == "rx" and who:
+            with self.lock:
+                callsign = self.brain.callsign_for_speaker(who)
+            if callsign == who:
+                callsign = ""  # not learned yet; don't duplicate the name
         entry = {
             "t": time.strftime("%H:%M:%S"),
             "kind": kind,
             "freq": round(freq_mhz, 3),
             "who": who,
+            "callsign": callsign,
             "text": text,
             "controller": controller,
         }

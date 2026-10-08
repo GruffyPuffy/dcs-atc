@@ -193,6 +193,12 @@ class AtcBrain:
 
         Used to sequence clearances: don't line up / clear to land onto an
         occupied runway. Without live traffic we trust the pilot (offline).
+
+        `exclude` is the transmitting pilot's SRS/DCS name. The live units are
+        keyed by DCS unit name, while the brain works in flight callsigns, so we
+        exclude by the *player* name (falling back to the unit name) — otherwise
+        the pilot counts as occupying the runway themselves and is wrongly told
+        to hold short.
         """
         if not traffic or self.airfield is None:
             return False
@@ -200,7 +206,8 @@ class AtcBrain:
 
     def handle(self, text: str, track: AircraftTrack | None = None,
                controller: Controller = Controller.TOWER,
-               traffic: list | None = None) -> str | None:
+               traffic: list | None = None,
+               speaker: str = "") -> str | None:
         """Return the ATC reply for a pilot transmission, or None if we
         did not understand it (no callsign, unknown request).
 
@@ -209,6 +216,8 @@ class AtcBrain:
         transmission was addressed to (from the frequency it arrived on).
         `traffic` is every live unit (players + AI), used to sequence clearances
         against other traffic (e.g. hold short if the runway is occupied).
+        `speaker` is the transmitting pilot's SRS/DCS name, used to exclude them
+        from the runway-occupancy check (they are not traffic to themselves).
         """
         callsign = self.callsigns.extract(text)
         if not callsign:
@@ -221,7 +230,8 @@ class AtcBrain:
         low = text.lower()
         pilot = self._pilot(callsign)
         pilot.last_controller = controller.value
-        reply = self._dispatch(callsign, pilot, low, track, controller, traffic)
+        reply = self._dispatch(callsign, pilot, low, track, controller, traffic,
+                               speaker)
         if reply:
             # Remember the last clearance so the pilot can ask for it again
             # ("say again") — a trainer aid for missed readbacks.
@@ -231,7 +241,8 @@ class AtcBrain:
     def _dispatch(self, callsign: str, pilot: PilotState, low: str,
                   track: AircraftTrack | None,
                   controller: Controller,
-                  traffic: list | None = None) -> str | None:
+                  traffic: list | None = None,
+                  speaker: str = "") -> str | None:
         """Route one transmission to the right intent handler."""
         # Trainer aid: "<callsign> help" returns a short, state-aware hint.
         if re.search(r"\b(help|assist|what do i do|what now|remind me)\b", low):
@@ -269,7 +280,8 @@ class AtcBrain:
         elif controller == Controller.CONTROL:
             reply = self._handle_control(callsign, pilot, low, track)
         else:
-            reply = self._handle_tower(callsign, pilot, low, track, traffic)
+            reply = self._handle_tower(callsign, pilot, low, track, traffic,
+                                       speaker)
         if reply is not None:
             return reply
 
@@ -281,7 +293,8 @@ class AtcBrain:
         # Only expected in phases where a readback is actually due.
         readback = re.search(
             r"\b(readback|read back|copy|roger|wilco|cleared|hold short|line up|"
-            r"turn|heading|descend|climb|angels|exit|via|in use|qnh)\b", low)
+            r"lined up|turn|heading|descend|climb|angels|exit|via|in use|qnh)\b",
+            low)
         if readback and pilot.phase == Phase.LINEUP:
             # Readback of "line up and wait" -> the takeoff clearance.
             pilot.phase = Phase.DEPARTURE
@@ -418,7 +431,8 @@ class AtcBrain:
 
     def _handle_tower(self, callsign: str, pilot: PilotState, low: str,
                       track: AircraftTrack | None,
-                      traffic: list | None = None) -> str | None:
+                      traffic: list | None = None,
+                      speaker: str = "") -> str | None:
         # "ready for departure/takeoff" is unambiguous; a bare "ready" only
         # counts once Ground has advanced the phase (avoids false positives).
         # Master Arms: Tower answers with "line up and wait"; the takeoff
@@ -430,7 +444,7 @@ class AtcBrain:
                     and not self.airfield.is_holding_short(track.lat, track.lon):
                 return self._challenge(callsign, self.tower_short, track)
             # Traffic: do not let them line up if the runway is occupied.
-            if self._runway_busy(traffic, exclude=callsign):
+            if self._runway_busy(traffic, exclude=speaker):
                 pilot.phase = Phase.HOLDING
                 return self._say("hold_short_traffic", callsign)
             pilot.phase = Phase.LINEUP
@@ -440,8 +454,8 @@ class AtcBrain:
             pilot.phase = Phase.LINEUP
             return self._say("line_up", callsign)
         # Departure handoff: once airborne, Tower hands the flight to Control.
-        if re.search(r"\b(airborne|departing|leaving|departed|on the way out)\b",
-                     low):
+        if re.search(r"\b(airborne|departing|leaving|departed|on the way out|"
+                     r"taking off|rolling|rolling out)\b", low):
             pilot.phase = Phase.AIRBORNE
             return self._say("contact_control", callsign)
         if re.search(r"\b(runway in sight|runway insight|visual)\b", low):
@@ -473,7 +487,7 @@ class AtcBrain:
                                                       track.heading):
                 return self._challenge(callsign, self.tower_short, track)
             # Traffic: if the runway is occupied, sequence instead of clearing.
-            if self._runway_busy(traffic, exclude=callsign):
+            if self._runway_busy(traffic, exclude=speaker):
                 pilot.phase = Phase.INBOUND
                 return self._say("continue_approach", callsign)
             pilot.phase = Phase.LANDING
@@ -499,6 +513,13 @@ class AtcBrain:
                 return self._say("control_descend", callsign)
             return self._say("readback_correct", callsign,
                              agency=self.control_short)
+        # Already inbound and reporting they have reached the entry point ->
+        # hand to Tower (must come before the generic inbound regex, which also
+        # matches "entry"/"inbound").
+        if pilot.phase == Phase.INBOUND and re.search(
+                r"\b(passing|entering|at the entry|established|abeam)\b", low):
+            pilot.phase = Phase.LANDING
+            return self._say("contact_tower_from_control", callsign)
         # Departure check-in ("airborne, 5 miles east climbing" / "at 1500 ft"):
         # radar contact and a climb clearance. Arrival check-in ("inbound 35
         # miles north"): radar contact + routing to join via an entry point.
@@ -511,11 +532,19 @@ class AtcBrain:
             pilot.cleared_inbound = True
             gate = self._pick_entry_gate(track, low)
             pilot.entry_gate = gate
-            return self._say("control_join", callsign, gate=gate)
+            # Compute the join heading from the pilot's live position (not a
+            # canned value); fall back to the static variable without a track.
+            heading = None
+            if track is not None and self.airfield is not None:
+                heading = self.airfield.join_heading(track.lat, track.lon, gate)
+            if heading is None:
+                return self._say("control_join_nohdg", callsign, gate=gate)
+            return self._say("control_join", callsign, gate=gate,
+                             heading=f"{heading:03.0f}")
         # Near the field, Control hands the flight to Tower (e.g. "on final",
-        # "runway in sight", "overhead break").
+        # "runway in sight", "overhead break", "passing the entry point").
         if re.search(r"\b(on final|final|runway in sight|visual|overhead|"
-                     r"break|initial)\b", low):
+                     r"break|initial|passing|entering)\b", low):
             pilot.phase = Phase.LANDING
             return self._say("contact_tower_from_control", callsign)
         return None

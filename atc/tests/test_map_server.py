@@ -77,6 +77,30 @@ def test_snapshot_survives_state_bridge_error(brain, airfield):
     assert "bridge down" in snap["error"]
 
 
+def test_chatter_resolves_pilot_callsign(brain, airfield):
+    # once the brain has learned the SRS name -> callsign, the chatter log
+    # should carry the flight callsign so the map can show "Caveman (Colt 1)".
+    brain.remember_speaker("Caveman", "Colt 1")
+    service = MapService(airfield, brain, FakeState([]))
+    service.log_chatter("rx", 250.0, "Caveman", "Ground, Colt 1, requesting taxi",
+                        "ground")
+    entry = service.chatter()[-1]
+    assert entry["who"] == "Caveman"
+    assert entry["callsign"] == "Colt 1"
+
+
+def test_chatter_callsign_empty_before_learned(brain, airfield):
+    service = MapService(airfield, brain, FakeState([]))
+    service.log_chatter("rx", 250.0, "Caveman", "Ground, Colt 1", "ground")
+    assert service.chatter()[-1]["callsign"] == ""
+
+
+def test_chatter_atc_lines_have_no_callsign(brain, airfield):
+    service = MapService(airfield, brain, FakeState([]))
+    service.log_chatter("tx", 250.0, "ATC", "Colt 1, Ground.", "ground")
+    assert service.chatter()[-1]["callsign"] == ""
+
+
 def test_http_endpoints_serve_api_and_page(brain, airfield):
     service = MapService(airfield, brain, FakeState([_ac()]))
     server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(service))

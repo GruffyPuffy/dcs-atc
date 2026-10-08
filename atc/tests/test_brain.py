@@ -649,3 +649,105 @@ def test_vectors_without_track(brain):
     reply = brain.handle("Control, Colt 1, request vectors",
                          controller=Controller.CONTROL)
     assert "unable" in reply.lower()
+
+
+# ---------- Computed join heading (not hardcoded) ----------
+
+def test_control_join_heading_is_computed(brain, airfield):
+    # from the south, the join heading toward Entry North should point north
+    south = _track(airfield, airfield.ctr.center_lat - 0.3,
+                   airfield.ctr.center_lon)
+    reply = brain.handle("Control, Colt 1, inbound 35 miles south",
+                         track=south, controller=Controller.CONTROL)
+    import re
+    heading = int(re.search(r"heading (\d{3})", reply).group(1))
+    assert heading <= 45 or heading >= 315  # roughly north
+
+
+def test_control_join_heading_varies_with_position(brain, airfield):
+    # two different positions must not produce the same canned heading
+    south = _track(airfield, airfield.ctr.center_lat - 0.3,
+                   airfield.ctr.center_lon)
+    west = _track(airfield, airfield.ctr.center_lat,
+                  airfield.ctr.center_lon - 0.3)
+    import re
+    r1 = brain.handle("Control, Colt 1, inbound 35 miles south",
+                      track=south, controller=Controller.CONTROL)
+    brain.pilots.clear()
+    r2 = brain.handle("Control, Colt 1, inbound 35 miles west",
+                      track=west, controller=Controller.CONTROL)
+    h1 = int(re.search(r"heading (\d{3})", r1).group(1))
+    h2 = int(re.search(r"heading (\d{3})", r2).group(1))
+    assert h1 != h2
+
+
+def test_control_join_without_track_has_no_heading(brain):
+    reply = brain.handle("Control, Colt 1, inbound 35 miles north",
+                         controller=Controller.CONTROL)
+    assert "join via Entry North" in reply
+    assert "heading" not in reply
+
+
+# ---------- Self-exclusion from runway occupancy ----------
+
+class _PlayerUnit:
+    def __init__(self, callsign, player, lat, lon, alt_ft):
+        self.callsign = callsign
+        self.player = player
+        self.lat = lat
+        self.lon = lon
+        self.alt_ft = alt_ft
+
+
+def test_pilot_does_not_block_own_lineup(brain, airfield):
+    # the transmitting pilot sitting on the runway must not count as traffic
+    thr = airfield.runway_threshold("25")
+    me = _PlayerUnit("Colt-1-1", "Caveman", thr[0], thr[1],
+                     airfield.elevation_ft + 10)
+    at_rwy = _track(airfield, thr[0], thr[1])
+    reply = brain.handle("Tower, Colt 1, ready for departure", track=at_rwy,
+                         controller=Controller.TOWER, traffic=[me],
+                         speaker="Caveman")
+    assert "line up and wait" in reply
+    assert brain.pilots["Colt 1"].phase == Phase.LINEUP
+
+
+def test_other_player_still_blocks_lineup(brain, airfield):
+    thr = airfield.runway_threshold("25")
+    other = _PlayerUnit("Ford-2-1", "Someone", thr[0], thr[1],
+                        airfield.elevation_ft + 10)
+    at_rwy = _track(airfield, thr[0], thr[1])
+    reply = brain.handle("Tower, Colt 1, ready for departure", track=at_rwy,
+                         controller=Controller.TOWER, traffic=[other],
+                         speaker="Caveman")
+    assert "hold short" in reply.lower()
+
+
+# ---------- Line-up readback variants ----------
+
+def test_lined_up_and_waiting_clears_takeoff(brain):
+    brain.handle("Tower, Colt 1, ready for departure", controller=Controller.TOWER)
+    assert brain.pilots["Colt 1"].phase == Phase.LINEUP
+    reply = brain.handle("Tower, Colt 1, lined up and waiting",
+                         controller=Controller.TOWER)
+    assert "cleared for takeoff" in reply
+    assert brain.pilots["Colt 1"].phase == Phase.DEPARTURE
+
+
+def test_taking_off_hands_off_to_control(brain):
+    reply = brain.handle("Tower, Colt 1, taking off",
+                         controller=Controller.TOWER)
+    assert "contact Control" in reply
+    assert brain.pilots["Colt 1"].phase == Phase.AIRBORNE
+
+
+# ---------- Passing the entry point (Control -> Tower) ----------
+
+def test_control_passing_entry_hands_to_tower(brain):
+    brain.handle("Control, Colt 1, inbound 35 miles east",
+                 controller=Controller.CONTROL)
+    assert brain.pilots["Colt 1"].phase == Phase.INBOUND
+    reply = brain.handle("Control, Colt 1, passing entry east, inbound",
+                         controller=Controller.CONTROL)
+    assert "contact Tower" in reply
+    assert brain.pilots["Colt 1"].phase == Phase.LANDING

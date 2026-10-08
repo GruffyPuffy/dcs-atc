@@ -60,7 +60,8 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
 .chat-row { display: flex; gap: 8px; padding: 1px 0; white-space: nowrap; }
 .chat-row .t { color: var(--muted); }
 .chat-row .f { color: var(--muted); width: 62px; }
-.chat-row .who { width: 120px; overflow: hidden; text-overflow: ellipsis; }
+.chat-row .who { width: 170px; overflow: hidden; text-overflow: ellipsis; }
+.chat-row .who .cs { color: var(--muted); }
 .chat-row .txt { white-space: pre-wrap; }
 .chat-row.rx .who { color: #e6edf3; }
 .chat-row.tx .who { color: var(--tower); }

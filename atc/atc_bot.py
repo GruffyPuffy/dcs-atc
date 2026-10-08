@@ -378,7 +378,7 @@ def main() -> None:
                     on_final = airfield.is_on_final(ac.lat, ac.lon, ac.heading)
                     if on_final:
                         occupied = airfield.runway_occupied(
-                            all_units, exclude=ac.callsign)
+                            all_units, exclude=ac.player)
                         with lock:
                             call = brain.check_final(callsign, on_final, occupied)
                         if call:
