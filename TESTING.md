@@ -92,43 +92,73 @@ Tune Radio 4 to **270.500** and listen. You should hear a British voice reading
 the weather, e.g. *"Kutaisi information Oscar. 25 in use. wind calm. QNH 29.92.
 CAVOK…"*. Note the **information letter** and **active runway**.
 
-### 2b. Ground — clearance + taxi (Radio 2, 250.000)
+### 2b. Ground — check-in, clearance + taxi (Radio 2, 250.000)
 
-1. **"Ground, Colt 1, ready to copy clearance."**
-   → expect: *"Colt 1, Kutaisi Ground, after departure turn right East, 1500 ft or below."*
-2. **"Ground, Colt 1, requesting taxi."**
-   → expect: *"Colt 1, Kutaisi Ground, taxi to runway 25 via alpha, hold short of runway 25."*
-3. **"Colt 1, holding short runway 25."**
-   → expect: *"Colt 1, Kutaisi Ground, contact Kutaisi Tower on channel 7."*
+1. **"Ground, Colt 1, two-ship Hornets on Ramp South with information Oscar."**
+   → expect: *"Colt 1, Ground."* (without "with information" you instead get
+   *"Colt 1, Ground, runway 25 in use, QNH 2992."*)
+2. **"Ground, Colt 1, ready to copy clearance."**
+   → expect: *"Colt 1, Ground, after departure turn right Exit East, 1500 ft or below."*
+3. **"After departure turn right Exit East, 1500 ft or below, Colt 1."**
+   → expect: *"Colt 1, Ground, readback correct."*
+4. **"Ground, Colt 1, requesting taxi."**
+   → expect: *"Colt 1, Ground, cleared taxi Sierra Echo and hold short runway 25."*
+5. **"Cleared taxi Sierra Echo and hold short runway 25, Colt 1."**
+   → expect: *"Colt 1, Ground, readback correct."*
+6. **"Colt 1, holding short runway 25."**
+   → expect: *"Colt 1, Ground, contact Tower on channel 7."*
 
-### 2c. Tower — departure (Radio 1, 263.000)
+### 2c. Tower — line up + departure (Radio 1, 263.000)
 
-4. **"Tower, Colt 1, ready for departure."**
-   → expect: *"Colt 1, Kutaisi Tower, wind …, runway 25, cleared for takeoff."*
+7. **"Tower, Colt 1, at runway 25, ready for departure."**
+   → expect: *"Colt 1, Tower, line up and wait runway 25."*
+8. **"Line up and wait 25, Colt 1."**
+   → expect: *"Colt 1, Tower, readback correct, wind …, runway 25, right turnout, cleared for takeoff."*
 
-### 2d. Control — inbound (Radio 3, 257.000)
+### 2d. Control — departure check-in + inbound (Radio 3, 257.000)
 
-5. **"Control, Colt 1, inbound 35 miles north."**
-   → expect: *"Colt 1, Kutaisi Control, radar contact, turn right heading 150 to join via Entry East."*
+9. **"Control, Colt 1, at 1500 ft."**
+   → expect: *"Colt 1, Control, radar contact, climb to Angels 15."*
+10. **"Kutaisi Control, Colt 1, inbound 35 miles north at Angels 12."**
+    → expect: *"Colt 1, Control, radar contact, turn right heading 150 to join via Entry North."*
+11. **"150 to join via Entry North, Colt 1."**
+    → expect: *"Colt 1, Control, descend to 1500 feet."*
 
 ### 2e. Tower — landing (Radio 1, 263.000)
 
-6. **"Tower, Colt 1, inbound."**
-   → expect a distance-aware reply (report entering the control zone, or a
-   radar-contact + downwind clearance if you are inside the CTR).
+12. **"Tower, Colt 1, Entry North."**
+    → expect: *"Colt 1, Tower, report runway in sight."*
+13. **"Tower, Colt 1, runway in sight."**
+    → expect: *"Colt 1, Tower, wind …, cleared for left overhead break runway 25."*
+14. **"Tower, Colt 1, on final."**
+    → expect: *"Colt 1, Tower, runway 25, wind …, cleared to land."*
+15. **"Tower, Colt 1, runway vacated."**
+    → expect: *"Colt 1, Tower, contact Ground on channel 6."*
 
 ### 2f. Deliberate failure (optional)
 
-7. **"Tower, Colt 1, banana banana."**
-   → expect: *"Colt 1, Kutaisi Tower, say again."* (proves the fallback works)
+16. **"Tower, Colt 1, banana banana."**
+    → expect: *"Colt 1, Tower, say again."* (proves the fallback works)
 
 ### 2g. Help (trainer aid)
 
-8. **"Colt 1, help."** (on any frequency)
-   → expect a short hint for your current phase, prefixed with **"Apollo suggests:"**,
-   e.g. on the ground: *"Colt 1, Apollo suggests: contact Kutaisi Ground on channel 6
-   for clearance and taxi, then Kutaisi Tower on channel 7 for takeoff."*
-   Repeat it after each step to see the hint change with your state.
+17. **"Colt 1, help."** (on any frequency)
+    → expect a short hint for your current phase, prefixed with **"Apollo suggests:"**,
+    e.g. on the ground: *"Colt 1, Apollo suggests: contact Ground on channel 6
+    for clearance and taxi, then Tower on channel 7 for takeoff. Say reset to
+    start over, or cancel to undo a clearance."*
+    Repeat it after each step to see the hint change with your state.
+
+### 2h. Escape hatches (never get stuck)
+
+18. **"Colt 1, say again."**
+    → expect the **last clearance** replayed verbatim.
+19. **"Colt 1, cancel."**
+    → expect *"Colt 1, <agency>, clearance cancelled."* and your phase to step
+    back one (e.g. Line-up → Holding).
+20. **"Colt 1, reset."**
+    → expect *"Colt 1, <agency>, state reset. Contact Ground on channel 6 when
+    ready."* and your phase to return to Idle.
 
 ---
 
@@ -143,7 +173,7 @@ Stop the bot with **Ctrl+C** in its terminal. Then we look at the log:
 For **each** call you made, look for a pair of lines:
 
     [HH:MM:SS] [ground] <your SRS name>: "Ground, Colt 1, requesting taxi"  (stt 320 ms, 2.1 s, peak -18 dBFS, wav rx_….wav)
-    [HH:MM:SS] DBG [ground@250.000] <your SRS name> -> 'Colt 1, Kutaisi Ground, taxi to runway 25 via alpha, hold short of runway 25.'  [phase=Taxi entry='' exit='']
+    [HH:MM:SS] DBG [ground@250.000] <your SRS name> -> 'Colt 1, Ground, cleared taxi Sierra Echo and hold short runway 25.'  [phase=Taxi entry='' exit='']
 
 - **`[ground]` / `[tower]` / `[control]`** — which frequency the call arrived on.
   If this is wrong, the radio was on the wrong frequency.
@@ -185,16 +215,19 @@ For **each** call you made, look for a pair of lines:
 | 1 | SRS connect + multi-frequency listen | bot hears you on 250/263/257 |
 | 2 | ATIS broadcast | British voice, weather + info letter |
 | 3 | Callsign recognition | "Colt 1" recognized from speech |
-| 4 | Ground clearance | exit point in reply |
-| 5 | Ground taxi | taxi route + hold short |
-| 6 | Ground→Tower handoff | "contact Tower on channel 7" |
-| 7 | Tower takeoff | wind + runway + cleared for takeoff |
-| 8 | Control inbound | radar contact + entry gate |
-| 9 | Tower landing | distance-aware inbound reply |
-| 10 | Say-again fallback | unknown request → "say again" |
-| 11 | Per-controller voices | Ground/Tower/Control sound different |
-| 12 | Live state (if bridge up) | distance-aware replies, CTR warnings |
-| 13 | Help (trainer aid) | "Colt 1 help" → state-aware hint |
+| 4 | Ground check-in | "Colt 1, Ground" (or runway + QNH without ATIS info) |
+| 5 | Ground clearance + readback | exit point, then "readback correct" |
+| 6 | Ground taxi + readback | taxi route + hold short, then "readback correct" |
+| 7 | Ground→Tower handoff | "contact Tower on channel 7" |
+| 8 | Tower line-up + readback | "line up and wait", then takeoff clearance |
+| 9 | Control departure check-in | radar contact + climb to Angels |
+| 10 | Control inbound + readback | radar contact + entry gate, then descend |
+| 11 | Tower landing | report runway in sight → overhead break → cleared to land |
+| 12 | Say-again fallback | unknown request → "say again" |
+| 13 | Per-controller voices | Ground/Tower/Control sound different |
+| 14 | Live state (if bridge up) | distance-aware replies, CTR warnings |
+| 15 | Help (trainer aid) | "Colt 1 help" → state-aware hint |
+| 16 | Escape hatches | reset → Idle, cancel → step back, say again → replay |
 
 ---
 

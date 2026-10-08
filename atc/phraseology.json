@@ -4,7 +4,7 @@
   "variables": {
     "wind": "calm",
     "squawk": "4201",
-    "taxi_route": "alpha",
+    "taxi_route": "Sierra Echo",
     "downwind": "left",
     "control": "Kutaisi Control",
     "channel": "8",
@@ -13,13 +13,21 @@
     "help_prefix": "Apollo suggests",
     "heading": "150",
     "turn": "right",
-    "altitude": "1500 ft"
+    "turnout": "right",
+    "altitude": "1500 ft",
+    "descent_altitude": "1500 feet",
+    "angels": "15",
+    "qnh": "2992"
   },
   "templates": {
-    "taxi": "{callsign}, {ground}, taxi to runway {runway} via {taxi_route}, hold short of runway {runway}.",
+    "taxi": "{callsign}, {ground}, cleared taxi {taxi_route} and hold short runway {runway}.",
     "hold_short": "{callsign}, {tower}, hold short runway {runway}.",
-    "takeoff": "{callsign}, {tower}, wind {wind}, runway {runway}, cleared for takeoff.",
+    "takeoff": "{callsign}, {tower}, wind {wind}, runway {runway}, {turnout} turnout, cleared for takeoff.",
     "line_up": "{callsign}, {tower}, line up and wait runway {runway}.",
+    "lineup_readback": "{callsign}, {tower}, readback correct, wind {wind}, runway {runway}, {turnout} turnout, cleared for takeoff.",
+    "ground_ack": "{callsign}, {ground}.",
+    "ground_info": "{callsign}, {ground}, runway {runway} in use, QNH {qnh}.",
+    "readback_correct": "{callsign}, {agency}, readback correct.",
     "inbound_outside": "{callsign}, {tower}, roger, report entering the control zone, runway {runway} active.",
     "inbound_inside": "{callsign}, {tower}, radar contact {position}, cleared control zone entry, join {downwind} downwind runway {runway}.",
     "inbound_via_gate": "{callsign}, {tower}, roger, report entering the control zone via {gate}, runway {runway} active.",
@@ -35,10 +43,14 @@
     "contact_control": "{callsign}, {tower}, contact {control} on channel {channel}.",
     "control_join": "{callsign}, {control}, radar contact, turn {turn} heading {heading} to join via {gate}.",
     "control_contact": "{callsign}, {control}, radar contact.",
+    "control_climb": "{callsign}, {control}, radar contact, climb to Angels {angels}.",
+    "control_descend": "{callsign}, {control}, descend to {descent_altitude}.",
     "go_around": "{callsign}, {tower}, go around, runway {runway} is occupied.",
     "ctr_warning": "{callsign}, {tower}, you are entering controlled airspace without clearance. Squawk {squawk} and state intentions.",
     "roger": "{callsign}, {agency}, roger.",
     "say_again": "{callsign}, {agency}, say again.",
+    "state_reset": "{callsign}, {agency}, state reset. Contact {ground} on channel {ground_channel} when ready.",
+    "cancel_ack": "{callsign}, {agency}, clearance cancelled.",
     "position_challenge": "{callsign}, {agency}, negative. I show you {position}. Confirm your position.",
     "directions_gate": "{callsign}, {agency}, bearing {bearing}, distance {distance} miles to {gate}.",
     "directions_field": "{callsign}, {agency}, bearing {bearing}, distance {distance} miles to {airfield}.",
@@ -48,9 +60,11 @@
     "help_clearance": "{callsign}, {help_prefix}: read back your clearance, then request taxi.",
     "help_taxi": "{callsign}, {help_prefix}: taxi to runway {runway} via {taxi_route}, then report holding short of runway {runway}.",
     "help_holding": "{callsign}, {help_prefix}: you are holding short. Contact {tower} on channel {tower_channel} and report ready for departure.",
+    "help_lineup": "{callsign}, {help_prefix}: line up and wait runway {runway}, then report ready for departure.",
     "help_departure": "{callsign}, {help_prefix}: you are cleared for takeoff runway {runway}. After departure turn {turn} {gate}, {altitude} or below, then contact {control} on channel {channel}.",
     "help_airborne": "{callsign}, {help_prefix}: contact {control} on channel {channel} and report your position and intentions.",
     "help_inbound": "{callsign}, {help_prefix}: report entering the control zone, then report runway in sight.",
-    "help_landing": "{callsign}, {help_prefix}: runway {runway} is active. Report on final for landing clearance."
+    "help_landing": "{callsign}, {help_prefix}: runway {runway} is active. Report on final for landing clearance.",
+    "help_escape": "Say reset to start over, or cancel to undo a clearance."
   }
 }

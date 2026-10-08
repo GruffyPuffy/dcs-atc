@@ -29,7 +29,7 @@ def test_worker_routes_to_controller(brain):
     controller, freq, text = spoken[0]
     assert controller == Controller.GROUND
     assert freq == 250_000_000
-    assert "taxi to runway" in text
+    assert "cleared taxi" in text
 
 
 def test_workers_share_pilot_state(brain):

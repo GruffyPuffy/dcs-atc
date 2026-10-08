@@ -3,6 +3,8 @@ name = "atc"
 version = "0.1.0"
 description = "Headless SRS ATC trainer client: listen, STT, log"
 requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "Stefan Grufman (Caveman)" }]
 dependencies = [
     "numpy>=1.26",
     "av>=14.0.0",

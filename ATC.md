@@ -70,17 +70,36 @@ the tower replies **"say again"**.
 
 | Pilot says (examples) | Intent | Tower replies |
 | --- | --- | --- |
-| "Kutaisi, Colt 1, requesting taxi to runway" | **taxi** | "Colt 1, Ground, taxi to runway 25 via alpha, hold short of runway 25." |
-| "Colt 1, holding short" | **hold short** (after taxi) | "Colt 1, Ground, contact Tower on channel 7." |
-| "Colt 1, ready for departure" | **departure** (after taxi/holding) | "Colt 1, Tower, wind calm, runway 25, cleared for takeoff." |
-| "Kutaisi, Colt 1, inbound" | **inbound** | distance-aware, see §4 |
+| "Ground, Colt 1" | **check-in** | "Colt 1, Ground." |
+| "Ground, Colt 1, two-ship Hornets on Ramp South" | **check-in + position** | "Colt 1, Ground, runway 25 in use, QNH 2992." |
+| "…with information Charlie" | **check-in + ATIS** | "Colt 1, Ground." (runway/QNH already read from ATIS) |
+| "Ground, Colt 1, ready to copy clearance" | **clearance** | "Colt 1, Ground, after departure turn right Exit East, 1500 ft or below." |
+| "After departure turn right Exit East, 1500 ft or below, Colt 1" | **readback** | "Colt 1, Ground, readback correct." |
+| "Ground, Colt 1, requesting taxi" | **taxi** | "Colt 1, Ground, cleared taxi Sierra Echo and hold short runway 25." |
+| "Cleared taxi Sierra Echo and hold short runway 25, Colt 1" | **readback** | "Colt 1, Ground, readback correct." |
+| "Colt 1, holding short runway 25" | **hold short** (after taxi) | "Colt 1, Ground, contact Tower on channel 7." |
+| "Tower, Colt 1, at runway 25, ready for departure" | **departure** (after taxi/holding) | "Colt 1, Tower, line up and wait runway 25." |
+| "Line up and wait 25, Colt 1" | **readback** | "Colt 1, Tower, readback correct, wind calm, runway 25, right turnout, cleared for takeoff." |
+| "Control, Colt 1, at 1500 ft" | **departure check-in** | "Colt 1, Control, radar contact, climb to Angels 15." |
+| "Kutaisi Control, Colt 1, inbound 35 miles north at Angels 12" | **inbound** | "Colt 1, Control, radar contact, turn right heading 150 to join via Entry North." |
+| "150 to join via Entry North, Colt 1" | **readback** | "Colt 1, Control, descend to 1500 feet." |
+| "Tower, Colt 1, Entry East" | **entry** | "Colt 1, Tower, report runway in sight." |
+| "Tower, Colt 1, runway in sight" | **runway in sight** | "Colt 1, Tower, wind calm, cleared for left overhead break runway 25." |
+| "Tower, Colt 1, on final" | **final** | "Colt 1, Tower, runway 25, wind calm, cleared to land." |
+| "Tower, Colt 1, runway vacated" | **vacated** | "Colt 1, Tower, contact Ground on channel 6." |
+| "Ground, Colt 1, rolling off runway 25, requesting taxi to parking" | **taxi to parking** | "Colt 1, Ground, cleared taxi to Ramp North via Alpha November." |
 | "Colt 1, checking in" / "with you" | **check-in** | "Colt 1, Tower, roger." |
-| "Colt 1, roger" / "wilco" / "copy" | **readback** | "Colt 1, Tower, roger." |
 | "Colt 1, help" | **help** | a short, state-aware hint (see §3a) |
 
 Intent matching is order-sensitive: the first matching rule wins. Some rules
-require a prior state (e.g. "ready for departure" only clears takeoff if the
+require a prior state (e.g. "ready for departure" only clears line-up if the
 aircraft has already been cleared to taxi).
+
+**Readbacks (Master Arms).** The bot expects a readback of the departure
+clearance, the taxi clearance, the line-up, and the Control join, and answers
+**"readback correct"**. A readback is only recognised in the phase where one is
+due, so a stray "roger" on Tower does not trigger it. The line-up readback is
+special: it is what triggers the **takeoff clearance** (see §11).
 
 ---
 
@@ -89,28 +108,69 @@ aircraft has already been cleared to taxi).
 Because this is a *trainer*, a pilot who is unsure what to do can call
 **"<callsign> help"** (also "assist", "what do I do", "what now", "remind me").
 The bot replies with a short hint for the pilot's **current phase**, so it
-always tells them the *next* call to make. It works on any controller
-frequency.
+always tells them the *next* call to make. It works on **every controller
+frequency** (Ground, Tower, Control) and in **every phase** — you never have to
+be on the "right" channel to ask for help.
 
 Every hint is prefixed with a clear marker — **"Apollo suggests:"** — so it is
 obvious the reply is training guidance, not a real clearance. (Apollo is the
 Master Arms "Master of CTR" — a nod to the community whose SOP this trainer
 follows.) The marker is the `help_prefix` variable in `phraseology.json`
-(change it to taste, e.g. "ATC suggests" or "Training hint").
+(change it to taste, e.g. "Training hint").
 
-| Pilot phase | Help reply (after the "ATC suggests:" marker) |
+| Pilot phase | Help reply (after the "Apollo suggests:" marker) |
 | --- | --- |
 | Idle (on the ground) | "contact Ground on channel 6 for clearance and taxi, then Tower on channel 7 for takeoff." |
 | Cleared (clearance copied) | "read back your clearance, then request taxi." |
-| Taxi | "taxi to runway 25 via alpha, then report holding short of runway 25." |
+| Taxi | "taxi to runway 25 via Sierra Echo, then report holding short of runway 25." |
 | Holding short | "you are holding short. Contact Tower on channel 7 and report ready for departure." |
+| Line up | "line up and wait runway 25, then report ready for departure." |
 | Departure | "you are cleared for takeoff runway 25. After departure turn right Exit East, 1500 ft or below, then contact Control on channel 8." |
 | Airborne | "contact Control on channel 8 and report your position and intentions." |
 | Inbound | "report entering the control zone, then report runway in sight." |
 | Landing | "runway 25 is active. Report on final for landing clearance." |
 
 The hint wording lives in `phraseology.json` (`help_*` templates); the
-phase→template mapping is in `brain._help()`.
+phase→template mapping is in `brain._help()`. Every hint ends with the escape
+reminder *"Say reset to start over, or cancel to undo a clearance."* (see §3b).
+
+---
+
+## 3b. Escape hatches (never get stuck)
+
+A rules-based state machine can trap a pilot: if a call is mis-heard, or the
+pilot does the wrong thing, they can end up in a phase where the bot no longer
+understands them. So there are three explicit ways out, valid on **every
+controller frequency** (Ground, Tower, Control) and in **every phase**. Like
+every other call, they are **addressed to a callsign** — the bot ignores a
+transmission with no callsign, so always say who you are:
+
+| Pilot says | Effect | Reply |
+| --- | --- | --- |
+| **"Colt 1, reset"** (also "restart", "start over", "new flight") | Full reset to the default `Idle` state — clears phase, gates, and flags | "Colt 1, Tower, state reset. Contact Ground on channel 6 when ready." |
+| **"Colt 1, cancel"** (also "disregard", "scratch that"; "abort" accepted) | Cancels the current clearance and **steps back one phase** | "Colt 1, Tower, clearance cancelled." |
+| **"Colt 1, say again"** (also "repeat") | Replays the **last clearance** the bot issued | the previous reply, verbatim |
+
+`cancel` is the standard ATC word for withdrawing a clearance ("cancel"), so it
+reads like real phraseology; `abort` is accepted as a pilot synonym. It steps
+back along the flow, so it doubles as the natural "undo":
+
+| Current phase | After `cancel` |
+| --- | --- |
+| Clearance / Taxi | Idle |
+| Holding | Taxi |
+| Line-up / Departure | Holding |
+| Inbound | Airborne |
+| Landing | Inbound (i.e. go around) |
+
+`reset` is the blunt instrument (back to square one); `cancel` is the surgical
+one (undo the last step). Both are **trainer aids** — a real controller would
+not say "state reset", but in a trainer it is better to be unstuck than stuck.
+
+> Design note: the escape words are matched **before** the controller handlers,
+> so they work regardless of which frequency the pilot is on or what phase they
+> are in. `say again` is also the natural response to a missed readback, so it
+> replays the last clearance rather than the generic "say again" prompt.
 
 ---
 
@@ -140,7 +200,7 @@ report).
 
 | Pilot claims | Bot checks (live track) | If it does not match |
 | --- | --- | --- |
-| "holding short runway 25" | within ~0.6 NM of the runway threshold | "…negative. I show you on the airfield. Confirm your position." |
+| "holding short runway 25" | within ~0.6 NM of the runway threshold | "…negative. I show you on the ground. Confirm your position." |
 | "ready for departure" | within ~0.6 NM of the runway threshold | "…negative. I show you 3 miles north. Confirm your position." |
 
 The challenge uses the pilot's **actual** position (distance + compass, or "on
@@ -196,10 +256,12 @@ multiplayer. States and transitions:
 ```mermaid
 stateDiagram-v2
     [*] --> Idle
-    Idle --> Taxi: request taxi
+    Idle --> Clearance: ready to copy clearance
+    Clearance --> Taxi: request taxi
     Taxi --> Holding: hold short
-    Taxi --> Departure: ready for departure
-    Holding --> Departure: ready for departure
+    Taxi --> Lineup: ready for departure
+    Holding --> Lineup: ready for departure
+    Lineup --> Departure: line-up readback
     Departure --> Airborne: (leaves CTR)
     Airborne --> Inbound: calls inbound
     Inbound --> Landing: cleared to land
@@ -209,15 +271,18 @@ stateDiagram-v2
 | State | Meaning |
 | --- | --- |
 | `Idle` | On the ground, no clearance yet |
+| `Clearance` | Departure clearance issued, awaiting readback |
 | `Taxi` | Cleared to taxi to the runway |
 | `Holding` | Holding short of the runway |
+| `Lineup` | Cleared to line up and wait, awaiting readback |
 | `Departure` | Cleared for takeoff |
 | `Airborne` | Departed, outside the CTR |
 | `Inbound` | Called inbound, cleared into the CTR |
 | `Landing` | Cleared to land |
 
 Each `PilotState` also tracks `cleared_inbound` (used to decide whether a CTR
-entry is announced, see §6), `cleared_landing`, and `go_around_issued` (so a
+entry is announced, see §6), `cleared_landing`, `descend_issued` (so Control
+only issues the descent to 1500 ft once, see §11), and `go_around_issued` (so a
 go-around is only called once per approach, see §7).
 
 ---
@@ -292,7 +357,7 @@ runway number otherwise.
       "ctr": { "ceiling_ft_agl": 1500, "polygon": [[lat, lon], ...] },
       "runways": { "25": { "threshold": [lat, lon] } },
       "gates": { "East": [lat, lon], ... },
-      "taxi_routes": { "alpha": [lat, lon], "bravo": [lat, lon] },
+      "taxi_routes": { "Sierra Echo": [lat, lon], "Alpha November": [lat, lon] },
       "parking_areas": { "Ramp South": [lat, lon], "Ramp North": [lat, lon] }
     }
   }
@@ -305,10 +370,10 @@ Kutaisi CTR geometry is derived from the Master Arms community wiki
 **Taxi routes:** DCS exposes parking positions but **no taxiway names**, so
 routes are configured per airfield (`taxi_routes`: name → a representative
 [lat, lon], e.g. a parking area). The bot picks the route **nearest the
-aircraft's live position**, so a jet on the west apron gets "via alpha" and one
-on the east apron gets "via bravo". Without a live position it falls back to the
-first route. (The `parking` bridge op can dump an airbase's parking spots to help
-pick representative points.)
+aircraft's live position**, so a jet on the west apron gets "Sierra Echo" and
+one on the east apron gets "Alpha November". Without a live position it falls
+back to the first route. (The `parking` bridge op can dump an airbase's parking
+spots to help pick representative points.)
 
 `atc/phraseology.json` holds the **reply wording** as templates with
 `{placeholders}` (`{callsign}`, `{tower}`, `{runway}`, `{wind}`, `{position}`,
@@ -382,16 +447,27 @@ Frequencies and controller names come from `airspace.json`; CLI flags
 
 ### Ground
 
+- "Ground, Colt 1" → check-in: *"Colt 1, Ground."*
+- "…on Ramp South" (no ATIS info) → *"Colt 1, Ground, runway 25 in use,
+  QNH 2992."* (with "information Charlie" → just *"Colt 1, Ground."*)
 - "ready to copy clearance" → departure clearance with an **exit point**:
-  *"after departure turn right East, 1500 ft or below"*.
-- "requesting taxi" → taxi clearance to the active runway.
-- "holding short runway 25" → handoff: *"contact Tower on channel 7"*.- "requesting taxi to parking" (after landing) → *"cleared taxi to Ramp North
-  via bravo"* (named ramp, or the nearest one to the aircraft).
+  *"after departure turn right Exit East, 1500 ft or below"*; the readback is
+  confirmed with *"readback correct"*.
+- "requesting taxi" → taxi clearance: *"cleared taxi Sierra Echo and hold short
+  runway 25"*; the readback is confirmed with *"readback correct"*.
+- "holding short runway 25" → handoff: *"contact Tower on channel 7"*.
+- "requesting taxi to parking" (after landing) → *"cleared taxi to Ramp North
+  via Alpha November"* (named ramp, or the nearest one to the aircraft).
+
 ### Tower
 
-- "ready for departure" → takeoff clearance (wind + runway).
+- "ready for departure" → **line up and wait**: *"line up and wait runway 25"*.
+  The pilot's readback (*"line up and wait 25"*) triggers the takeoff clearance:
+  *"readback correct, wind calm, runway 25, right turnout, cleared for takeoff"*.
 - "runway in sight" / "overhead break" / "initial" → overhead-break clearance.
 - "in the break" → acknowledged: *"roger, report on final"*.
+- "Entry East" (arrival check-in at the entry point) → *"report runway in
+  sight"*.
 - "inbound" / "on final" → distance-aware inbound reply (see §4).
 - "runway vacated" (after landing) → handoff: *"contact Ground on channel 6"*.
 
@@ -404,8 +480,10 @@ as Tower.
 - "inbound" / "checking in" → radar contact and routing to join via the
   **entry point** nearest the aircraft: *"turn right heading 150 to join via
   Entry East"*. The entry point is chosen from the aircraft's live position
-  (`gate_locator`), falling back to a default.
-- "airborne" / "climbing" (departure check-in) → *"radar contact."*
+  (`gate_locator`), falling back to a default. The pilot's readback triggers the
+  descent: *"descend to 1500 feet"*.
+- "airborne" / "climbing" / "at 1500 ft" (departure check-in) → *"radar
+  contact, climb to Angels 15"*.
 - "on final" / "runway in sight" / "overhead" → handoff to Tower:
   *"contact Tower on channel 7"*.
 
@@ -462,35 +540,43 @@ and the bot's reply. Frequencies (AM): **ATIS 270.500**, **Ground 250.000**,
 | # | Freq | Pilot says | Bot replies |
 |---|------|-----------|-------------|
 | 1 | ATIS | *(listen only)* | "Kutaisi information Oscar. 25 in use. wind calm. QNH 29.92. CAVOK. Temperature 20. Advise on initial contact you have information Oscar." |
-| 2 | Ground | "Ground, Colt 1, ready to copy clearance." | "Colt 1, Ground, after departure turn right Exit East, 1500 ft or below." |
-| 3 | Ground | "Ground, Colt 1, requesting taxi." | "Colt 1, Ground, taxi to runway 25 via alpha, hold short of runway 25." |
-| 4 | Ground | "Colt 1, holding short runway 25." | "Colt 1, Ground, contact Tower on channel 7." |
-| 5 | Tower | "Tower, Colt 1, ready for departure." | "Colt 1, Tower, wind calm, runway 25, cleared for takeoff." |
-| 6 | Tower | "Tower, Colt 1, airborne." | "Colt 1, Tower, contact Control on channel 8." |
-| 7 | Control | "Control, Colt 1, airborne, 5 miles east climbing." | "Colt 1, Control, radar contact." |
+| 2 | Ground | "Ground, Colt 1, two-ship Hornets on Ramp South with information Oscar." | "Colt 1, Ground." |
+| 3 | Ground | "Ground, Colt 1, ready to copy clearance." | "Colt 1, Ground, after departure turn right Exit East, 1500 ft or below." |
+| 4 | Ground | "After departure turn right Exit East, 1500 ft or below, Colt 1." | "Colt 1, Ground, readback correct." |
+| 5 | Ground | "Ground, Colt 1, requesting taxi." | "Colt 1, Ground, cleared taxi Sierra Echo and hold short runway 25." |
+| 6 | Ground | "Cleared taxi Sierra Echo and hold short runway 25, Colt 1." | "Colt 1, Ground, readback correct." |
+| 7 | Ground | "Colt 1, holding short runway 25." | "Colt 1, Ground, contact Tower on channel 7." |
+| 8 | Tower | "Tower, Colt 1, at runway 25, ready for departure." | "Colt 1, Tower, line up and wait runway 25." |
+| 9 | Tower | "Line up and wait 25, Colt 1." | "Colt 1, Tower, readback correct, wind calm, runway 25, right turnout, cleared for takeoff." |
+| 10 | Tower | "Tower, Colt 1, airborne." | "Colt 1, Tower, contact Control on channel 8." |
+| 11 | Control | "Control, Colt 1, at 1500 ft." | "Colt 1, Control, radar contact, climb to Angels 15." |
 
-You are now clear of the CTR — the departure is complete. (Steps 2–4 are the
-Ground phase; 5–6 Tower; 7 Control.)
+You are now clear of the CTR — the departure is complete. (Steps 2–7 are the
+Ground phase; 8–10 Tower; 11 Control.)
 
 ### Arrival
 
 | # | Freq | Pilot says | Bot replies |
 |---|------|-----------|-------------|
-| 1 | Control | "Control, Colt 1, inbound 35 miles north." | "Colt 1, Control, radar contact, turn right heading 150 to join via Entry North." |
-| 2 | Tower | "Tower, Colt 1, inbound." | "Colt 1, Tower, report entering the control zone, runway 25 active." *(outside CTR)* — or "radar contact 4 miles north, cleared control zone entry, join left downwind runway 25." *(inside CTR)* |
-| 3 | Tower | "Tower, Colt 1, runway in sight." | "Colt 1, Tower, wind calm, cleared for left overhead break runway 25." |
-| 4 | Tower | "Tower, Colt 1, on final." | "Colt 1, Tower, runway 25, wind calm, cleared to land." |
-| 5 | Tower | "Tower, Colt 1, runway vacated." | "Colt 1, Tower, contact Ground on channel 6." |
-| 6 | Ground | "Ground, Colt 1, requesting taxi to parking." | "Colt 1, Ground, cleared taxi to Ramp North via bravo." |
+| 1 | Control | "Kutaisi Control, Colt 1, inbound 35 miles north at Angels 12." | "Colt 1, Control, radar contact, turn right heading 150 to join via Entry North." |
+| 2 | Control | "150 to join via Entry North, Colt 1." | "Colt 1, Control, descend to 1500 feet." |
+| 3 | Tower | "Tower, Colt 1, Entry North." | "Colt 1, Tower, report runway in sight." |
+| 4 | Tower | "Tower, Colt 1, runway in sight." | "Colt 1, Tower, wind calm, cleared for left overhead break runway 25." |
+| 5 | Tower | "Tower, Colt 1, on final." | "Colt 1, Tower, runway 25, wind calm, cleared to land." |
+| 6 | Tower | "Tower, Colt 1, runway vacated." | "Colt 1, Tower, contact Ground on channel 6." |
+| 7 | Ground | "Ground, Colt 1, rolling off runway 25, requesting taxi to parking." | "Colt 1, Ground, cleared taxi to Ramp North via Alpha November." |
 
-You are now cleared to park — the flight is complete. (Steps 1 Control; 2–5
-Tower; 6 Ground.)
+You are now cleared to park — the flight is complete. (Steps 1–2 Control; 3–6
+Tower; 7 Ground.)
 
 ### Trainer aids (any frequency)
 
 | Pilot says | Bot replies |
 |-----------|-------------|
 | "Colt 1, help." | "Colt 1, Apollo suggests: …" (state-aware hint, see §3a) |
+| "Colt 1, reset." | "Colt 1, Tower, state reset. Contact Ground on channel 6 when ready." (see §3b) |
+| "Colt 1, cancel." | "Colt 1, Tower, clearance cancelled." (steps back one phase, see §3b) |
+| "Colt 1, say again." | replays the last clearance (see §3b) |
 | "Control, Colt 1, request bearing and distance to Entry East." | "Colt 1, Control, bearing 014, distance 32 miles to Entry East." |
 | "Control, Colt 1, request vectors for runway 25." | "Colt 1, Control, fly heading 018, vectors for runway 25." |
 
@@ -501,7 +587,7 @@ If a report does not match your live position, the bot **challenges** it and doe
 
 | Pilot says (but is elsewhere) | Bot replies |
 |-----------|-------------|
-| "Colt 1, holding short runway 25." *(still on the ramp)* | "Colt 1, Ground, negative. I show you on the airfield. Confirm your position." |
+| "Colt 1, holding short runway 25." *(still on the ramp)* | "Colt 1, Ground, negative. I show you on the ground. Confirm your position." |
 | "Tower, Colt 1, ready for departure." *(still on the taxiway)* | "Colt 1, Tower, negative. I show you 2 miles south. Confirm your position." |
 | "Tower, Colt 1, on final." *(not on final)* | "Colt 1, Tower, negative. I show you 3 miles north. Confirm your position." |
 

@@ -11,15 +11,19 @@ PHRASEOLOGY = Path(__file__).resolve().parent.parent / "phraseology.json"
 
 # Every template key the brain can render. Keep in sync with brain.py.
 REQUIRED_TEMPLATES = {
-    "taxi", "hold_short", "takeoff", "line_up",
+    "taxi", "hold_short", "takeoff", "line_up", "lineup_readback",
+    "ground_ack", "ground_info", "readback_correct",
     "inbound_outside", "inbound_inside", "inbound_via_gate",
     "report_runway_in_sight", "cleared_land", "cleared_overhead", "break_ack",
     "departure_exit", "contact_tower", "contact_control", "control_join",
     "contact_ground", "taxi_parking", "control_contact",
+    "control_climb", "control_descend",
     "contact_tower_from_control",
     "go_around", "ctr_warning", "roger", "say_again",
-    "help_idle", "help_clearance", "help_taxi", "help_holding",
+    "state_reset", "cancel_ack",
+    "help_idle", "help_clearance", "help_taxi", "help_holding", "help_lineup",
     "help_departure", "help_airborne", "help_inbound", "help_landing",
+    "help_escape",
     "position_challenge", "directions_gate", "directions_field",
     "directions_unknown", "vectors",
 }
@@ -56,10 +60,12 @@ def test_every_template_renders_with_common_fields():
     ph = Phraseology.load()
     common = dict(callsign="Colt 1", tower="Kutaisi Tower",
                   ground="Kutaisi Ground", control="Kutaisi Control",
-                  runway="25", wind="calm", squawk="4201", taxi_route="alpha",
+                  runway="25", wind="calm", squawk="4201", taxi_route="Sierra Echo",
                   downwind="left", channel="8", tower_channel="7",
                   ground_channel="6", heading="150", turn="right",
-                  altitude="1500 ft", gate="East", position="4 miles north",
+                  turnout="right", altitude="1500 ft", angels="15", qnh="2992",
+                  descent_altitude="1500 feet",
+                  gate="East", position="4 miles north",
                   agency="Kutaisi Tower", bearing="090", distance="12",
                   airfield="Kutaisi", vector_runway="25", parking="Ramp South")
     for key in REQUIRED_TEMPLATES:

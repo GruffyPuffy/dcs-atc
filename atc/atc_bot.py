@@ -354,6 +354,7 @@ def main() -> None:
         report = build_atis(airfield, weather)
         brain.set_runway(report.active_runway)
         brain.set_wind(report.wind_dir, report.wind_speed)
+        brain.set_qnh(report.qnh_inhg)
         return report
 
     def atis_loop() -> None:

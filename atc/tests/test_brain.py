@@ -27,21 +27,21 @@ def test_ground_clearance_assigns_exit_gate(brain):
 def test_ground_taxi(brain):
     reply = brain.handle("Ground, Colt 1, requesting taxi",
                          controller=Controller.GROUND)
-    assert "taxi to runway" in reply
+    assert "cleared taxi" in reply
     assert brain.pilots["Colt 1"].phase == Phase.TAXI
 
 
 def test_ground_taxi_route_by_position(brain, airfield):
-    # west apron -> alpha, east apron -> bravo (routes configured per airfield)
+    # west apron -> Sierra Echo, east apron -> Alpha November (per airfield)
     west = _track(airfield, 42.182, 42.470)
     reply = brain.handle("Ground, Colt 1, requesting taxi", track=west,
                          controller=Controller.GROUND)
-    assert "via alpha" in reply
+    assert "Sierra Echo" in reply
     brain.pilots.clear()
     east = _track(airfield, 42.183, 42.490)
     reply = brain.handle("Ground, Colt 1, requesting taxi", track=east,
                          controller=Controller.GROUND)
-    assert "via bravo" in reply
+    assert "Alpha November" in reply
 
 
 def test_ground_hold_short_hands_off_to_tower(brain):
@@ -58,6 +58,11 @@ def test_ground_hold_short_hands_off_to_tower(brain):
 def test_tower_takeoff(brain):
     brain.handle("Ground, Colt 1, requesting taxi", controller=Controller.GROUND)
     reply = brain.handle("Tower, Colt 1, ready for departure",
+                         controller=Controller.TOWER)
+    # Master Arms: Tower answers "line up and wait"; takeoff follows the readback.
+    assert "line up and wait" in reply
+    assert brain.pilots["Colt 1"].phase == Phase.LINEUP
+    reply = brain.handle("Line up and wait 25, Colt 1",
                          controller=Controller.TOWER)
     assert "cleared for takeoff" in reply
     assert brain.pilots["Colt 1"].phase == Phase.DEPARTURE
@@ -81,11 +86,79 @@ def test_tower_in_the_break_acknowledged(brain):
     assert "report on final" in reply
 
 
+# ---------- Master Arms Mission Procedures flow ----------
+
+def test_ground_checkin_acknowledged(brain):
+    # "Ground, Adder11" -> "Adder11, Ground"
+    reply = brain.handle("Ground, Colt 1", controller=Controller.GROUND)
+    assert reply == "Colt 1, Ground."
+
+
+def test_ground_gives_runway_and_qnh_without_atis(brain):
+    # no "with information X" -> Ground passes runway + QNH
+    reply = brain.handle("Ground, Colt 1, two-ship Hornets on Ramp South",
+                         controller=Controller.GROUND)
+    assert "runway 25 in use" in reply
+    assert "QNH" in reply
+
+
+def test_ground_acknowledges_with_information(brain):
+    reply = brain.handle(
+        "Ground, Colt 1, two-ship Hornets on Ramp South with information Charlie",
+        controller=Controller.GROUND)
+    assert reply == "Colt 1, Ground."
+
+
+def test_ground_clearance_readback_correct(brain):
+    brain.handle("Ground, Colt 1, ready to copy clearance",
+                 controller=Controller.GROUND)
+    reply = brain.handle("After departure turn right Exit East, 1500 ft or below, Colt 1",
+                         controller=Controller.GROUND)
+    assert "readback correct" in reply
+
+
+def test_ground_taxi_readback_correct(brain):
+    brain.handle("Ground, Colt 1, requesting taxi", controller=Controller.GROUND)
+    reply = brain.handle("Cleared taxi Sierra Echo and hold short runway 25, Colt 1",
+                         controller=Controller.GROUND)
+    assert "readback correct" in reply
+
+
+def test_tower_lineup_readback_clears_takeoff(brain):
+    brain.handle("Ground, Colt 1, requesting taxi", controller=Controller.GROUND)
+    brain.handle("Tower, Colt 1, ready for departure", controller=Controller.TOWER)
+    reply = brain.handle("Line up and wait 25, Colt 1", controller=Controller.TOWER)
+    assert "cleared for takeoff" in reply
+    assert "turnout" in reply
+    assert brain.pilots["Colt 1"].phase == Phase.DEPARTURE
+
+
+def test_control_departure_checkin_climb(brain):
+    reply = brain.handle("Control, Colt 1, at 1500 ft",
+                         controller=Controller.CONTROL)
+    assert "radar contact" in reply
+    assert "climb to Angels" in reply
+
+
+def test_control_join_readback_descends(brain):
+    brain.handle("Control, Colt 1, inbound 35 miles north",
+                 controller=Controller.CONTROL)
+    reply = brain.handle("150 to join via Entry North, Colt 1",
+                         controller=Controller.CONTROL)
+    assert "descend to 1500 feet" in reply
+    assert brain.pilots["Colt 1"].descend_issued
+
+
+def test_tower_entry_call_reports_runway_in_sight(brain):
+    reply = brain.handle("Tower, Colt 1, Entry East", controller=Controller.TOWER)
+    assert "report runway in sight" in reply
+
+
 def test_ground_taxiing_variant(brain):
     # "taxiing" (not just "taxi") must match
     reply = brain.handle("Ground, Colt 1, one ship Hornets, taxiing to runway 25",
                          controller=Controller.GROUND)
-    assert "taxi to runway" in reply
+    assert "cleared taxi" in reply
 
 
 def test_tower_inbound_without_track(brain):
@@ -298,8 +371,78 @@ def test_help_works_on_any_controller(brain):
         assert reply and "Colt 1" in reply
 
 
+def test_escape_hatches_work_on_every_agency_and_phase(brain):
+    # help / reset / cancel must work on ALL agencies in ALL states — a pilot
+    # must never be stuck because they are on the "wrong" frequency or phase.
+    from brain import PilotState
+    for controller in (Controller.GROUND, Controller.TOWER, Controller.CONTROL):
+        for phase in Phase:
+            brain.pilots.clear()
+            brain.pilots["Colt 1"] = PilotState(callsign="Colt 1", phase=phase)
+            help_reply = brain.handle("Colt 1 help", controller=controller)
+            reset_reply = brain.handle("Colt 1 reset", controller=controller)
+            cancel_reply = brain.handle("Colt 1 cancel", controller=controller)
+            assert help_reply and "Apollo suggests" in help_reply, (controller, phase)
+            assert reset_reply and "state reset" in reset_reply, (controller, phase)
+            assert cancel_reply and "cancelled" in cancel_reply, (controller, phase)
+
+
 def test_help_requires_callsign(brain):
     assert brain.handle("help me please", controller=Controller.TOWER) is None
+
+
+# ---------- Escape hatches (never get stuck in a wrong state) ----------
+
+def test_reset_returns_to_idle(brain):
+    brain.handle("Ground, Colt 1, requesting taxi", controller=Controller.GROUND)
+    brain.handle("Tower, Colt 1, ready for departure", controller=Controller.TOWER)
+    assert brain.pilots["Colt 1"].phase == Phase.LINEUP
+    reply = brain.handle("Colt 1, reset", controller=Controller.TOWER)
+    assert "state reset" in reply
+    assert brain.pilots["Colt 1"].phase == Phase.IDLE
+    assert brain.pilots["Colt 1"].exit_gate == ""
+
+
+def test_cancel_steps_back_one_phase(brain):
+    brain.handle("Ground, Colt 1, requesting taxi", controller=Controller.GROUND)
+    brain.handle("Tower, Colt 1, ready for departure", controller=Controller.TOWER)
+    assert brain.pilots["Colt 1"].phase == Phase.LINEUP
+    reply = brain.handle("Colt 1, cancel", controller=Controller.TOWER)
+    assert "cancelled" in reply
+    assert brain.pilots["Colt 1"].phase == Phase.HOLDING
+
+
+def test_abort_is_accepted_as_synonym(brain):
+    brain.handle("Ground, Colt 1, requesting taxi", controller=Controller.GROUND)
+    brain.handle("Tower, Colt 1, ready for departure", controller=Controller.TOWER)
+    reply = brain.handle("Colt 1, abort", controller=Controller.TOWER)
+    assert "cancelled" in reply
+    assert brain.pilots["Colt 1"].phase == Phase.HOLDING
+
+
+def test_cancel_from_landing_goes_around(brain):
+    brain.handle("Tower, Colt 1, on final", controller=Controller.TOWER)
+    assert brain.pilots["Colt 1"].phase == Phase.LANDING
+    brain.handle("Colt 1, cancel", controller=Controller.TOWER)
+    assert brain.pilots["Colt 1"].phase == Phase.INBOUND
+
+
+def test_say_again_replays_last_clearance(brain):
+    first = brain.handle("Ground, Colt 1, requesting taxi",
+                         controller=Controller.GROUND)
+    reply = brain.handle("Colt 1, say again", controller=Controller.GROUND)
+    assert reply == first
+
+
+def test_say_again_without_history(brain):
+    reply = brain.handle("Colt 1, say again", controller=Controller.TOWER)
+    assert "say again" in reply
+
+
+def test_help_mentions_escape_hatches(brain):
+    reply = brain.handle("Colt 1 help", controller=Controller.TOWER)
+    assert "reset" in reply.lower()
+    assert "cancel" in reply.lower()
 
 
 # ---------- Position cross-check (trainer: challenge bad reports) ----------
@@ -339,8 +482,8 @@ def test_ready_for_departure_accepted_at_runway(brain, airfield):
     at_rwy = _track(airfield, thr[0], thr[1])
     reply = brain.handle("Tower, Colt 1, ready for departure",
                          track=at_rwy, controller=Controller.TOWER)
-    assert "cleared for takeoff" in reply
-    assert brain.pilots["Colt 1"].phase == Phase.DEPARTURE
+    assert "line up and wait" in reply
+    assert brain.pilots["Colt 1"].phase == Phase.LINEUP
 
 
 def test_no_track_trusts_pilot(brain):

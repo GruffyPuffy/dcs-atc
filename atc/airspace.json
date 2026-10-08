@@ -36,8 +36,8 @@
         "North": [42.26540, 42.50143]
       },
       "taxi_routes": {
-        "alpha": [42.182, 42.470],
-        "bravo": [42.183, 42.490]
+        "Sierra Echo": [42.182, 42.470],
+        "Alpha November": [42.183, 42.490]
       },
       "parking_areas": {
         "Ramp South": [42.182, 42.470],

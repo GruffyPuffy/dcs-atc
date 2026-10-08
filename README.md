@@ -144,3 +144,8 @@ reacts to flights that actually exist.
 The bot also broadcasts **ATIS** on its own frequency (Kutaisi 270.500 AM),
 built from live DCS weather: active runway from wind, QNH, CAVOK/visibility, and
 an hour-based information letter (Alpha, Bravo, …). See `ATC.md` §10.
+
+License
+-------
+
+MIT — see [LICENSE](LICENSE). Copyright (c) 2026 Stefan Grufman ("Caveman").
