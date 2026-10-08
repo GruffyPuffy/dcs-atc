@@ -1,6 +1,8 @@
 """Brain: intent recognition, controller routing, per-pilot state machine."""
 
-from brain import Controller, Phase
+import dataclasses
+
+from brain import AtcBrain, Controller, Phase, Phraseology
 from ctr import AircraftTrack
 
 
@@ -11,6 +13,38 @@ def _track(airfield, lat, lon, alt_ft=1000.0, heading=0.0):
         lat=lat, lon=lon, alt_ft=alt_ft,
         distance_nm=airfield.ctr.distance_nm(lat, lon),
         relative=airfield.ctr.relative_position(lat, lon), heading=heading)
+
+
+def _brain_for(airfield, callsigns):
+    return AtcBrain(tower=airfield.tower, runway=airfield.active_runway,
+                    phraseology=Phraseology.load(), callsigns=callsigns,
+                    ground=airfield.ground, control=airfield.control,
+                    gates=list(airfield.gates),
+                    gate_locator=airfield.nearest_gate, airfield=airfield)
+
+
+# ---------- Radio channels (per-airfield) ----------
+
+def test_channels_come_from_airfield(airfield, callsigns):
+    # the channel numbers are per-airfield config, not hardcoded
+    af = dataclasses.replace(airfield,
+                             channels={"ground": "1", "tower": "2",
+                                       "control": "3"})
+    b = _brain_for(af, callsigns)
+    b.handle("Ground, Colt 1, requesting taxi", controller=Controller.GROUND)
+    reply = b.handle("Colt 1, holding short runway 25",
+                     controller=Controller.GROUND)
+    assert "channel 2" in reply
+
+
+def test_channels_fall_back_to_phraseology(airfield, callsigns):
+    # an airfield without channels uses the phraseology.json defaults
+    af = dataclasses.replace(airfield, channels={})
+    b = _brain_for(af, callsigns)
+    b.handle("Ground, Colt 1, requesting taxi", controller=Controller.GROUND)
+    reply = b.handle("Colt 1, holding short runway 25",
+                     controller=Controller.GROUND)
+    assert "channel 7" in reply
 
 
 # ---------- Ground ----------
@@ -407,6 +441,67 @@ def test_landing_cleared_when_runway_clear(brain, airfield):
     reply = brain.handle("Tower, Colt 1, on final", track=on_final,
                          controller=Controller.TOWER, traffic=[])
     assert "cleared to land" in reply
+
+
+def test_holding_short_does_not_block_another_lineup(brain, airfield):
+    # a pilot holding short (just before the threshold) must NOT count as
+    # occupying the runway and block another aircraft's line-up.
+    import math
+    thr = airfield.runway_threshold("25")
+    hdg = airfield.runway_heading("25")
+    back = math.radians((hdg + 180) % 360)
+    # ~0.1 NM before the threshold = holding short position
+    lat = thr[0] + math.degrees(0.1 * 1852 * math.cos(back) / 6_371_000)
+    lon = thr[1] + math.degrees(0.1 * 1852 * math.sin(back)
+                                / (6_371_000 * math.cos(math.radians(thr[0]))))
+    holder = _Unit("Ford-2-1", lat, lon, airfield.elevation_ft + 10)
+    at_rwy = _track(airfield, thr[0], thr[1])
+    reply = brain.handle("Tower, Colt 1, ready for departure", track=at_rwy,
+                         controller=Controller.TOWER, traffic=[holder])
+    assert "line up and wait" in reply
+
+
+def test_aircraft_on_runway_still_blocks_lineup(brain, airfield):
+    # an aircraft actually on the runway (past the threshold) still blocks
+    import math
+    thr = airfield.runway_threshold("25")
+    hdg = airfield.runway_heading("25")
+    fwd = math.radians(hdg)
+    lat = thr[0] + math.degrees(0.3 * 1852 * math.cos(fwd) / 6_371_000)
+    lon = thr[1] + math.degrees(0.3 * 1852 * math.sin(fwd)
+                                / (6_371_000 * math.cos(math.radians(thr[0]))))
+    on_rwy = _Unit("AI-1", lat, lon, airfield.elevation_ft + 10)
+    at_rwy = _track(airfield, thr[0], thr[1])
+    reply = brain.handle("Tower, Colt 1, ready for departure", track=at_rwy,
+                         controller=Controller.TOWER, traffic=[on_rwy])
+    assert "hold short" in reply.lower()
+
+
+def test_challenge_offers_a_way_out(brain, airfield):
+    # a challenged report must not leave the pilot stuck: the reply reminds
+    # them of the escape hatches.
+    ramp = _track(airfield, *airfield.parking_areas["Ramp West"])
+    reply = brain.handle("Tower, Colt 1, ready for departure",
+                         track=ramp, controller=Controller.TOWER)
+    assert "negative" in reply.lower()
+    assert "reset" in reply.lower() and "cancel" in reply.lower()
+
+
+def test_control_inbound_with_angels_is_not_departure(brain):
+    # "inbound ... at Angels 12" must be read as an arrival, not a departure
+    # check-in (which would wrongly answer "climb to Angels 15").
+    reply = brain.handle("Kutaisi Control, Colt 1, inbound 35 miles north at Angels 12",
+                         controller=Controller.CONTROL)
+    assert "join via" in reply
+    assert "climb" not in reply.lower()
+    assert brain.pilots["Colt 1"].phase == Phase.INBOUND
+
+
+def test_control_checking_in_is_departure(brain):
+    reply = brain.handle("Control, Colt 1, checking in",
+                         controller=Controller.CONTROL)
+    assert "radar contact" in reply
+    assert brain.pilots["Colt 1"].phase == Phase.AIRBORNE
 
 
 # ---------- Wind / runway ----------

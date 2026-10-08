@@ -142,6 +142,10 @@ class Airfield:
     parking_areas: dict[str, tuple[float, float]] = field(default_factory=dict)
     # Named runway holding positions (P1..P4 on the MA chart), lat/lon.
     holding_points: dict[str, tuple[float, float]] = field(default_factory=dict)
+    # Radio preset channel numbers, per agency (Master Arms SOP). These are
+    # per-airfield (a preset is a property of the airfield's radio plan), so
+    # they live here rather than in the global phraseology variables.
+    channels: dict[str, str] = field(default_factory=dict)
 
     def taxi_route(self, lat: float | None, lon: float | None,
                    runway: str | None = None) -> str | None:
@@ -410,7 +414,8 @@ class Airfield:
                         exclude: str | None = None, length_nm: float = 1.6,
                         half_width_nm: float = 0.02,
                         max_alt_ft_agl: float = 500.0,
-                        margin_nm: float = 0.25) -> bool:
+                        margin_nm: float = 0.25,
+                        on_runway: bool = True) -> bool:
         """True if any unit is on the runway (within a corridor around it).
 
         The corridor runs the length of the runway and extends `margin_nm`
@@ -421,6 +426,12 @@ class Airfield:
         60 m runway), not a generous margin: a wider corridor would swallow the
         parallel taxiway holding positions (P1/P2 are only ~50 m from the
         centreline) and wrongly block landing for a pilot holding short.
+
+        `on_runway=True` (default) additionally requires the unit to be between
+        the two thresholds — i.e. actually on the runway, not in the overrun
+        margin. This is what sequencing uses, so a pilot **holding short** (just
+        before the threshold) does not count as occupying the runway and block
+        another aircraft's line-up or landing.
 
         `units` is any iterable of objects with `.lat`, `.lon`, `.alt_ft` and
         optionally `.callsign`/`.player`. `exclude` skips one aircraft (e.g. the
@@ -448,6 +459,8 @@ class Airfield:
             ex, ny = _project(unit.lat, unit.lon, thr[0], thr[1])
             along = ex * ax + ny * ay
             across = ex * ay - ny * ax
+            if on_runway and not (0.0 <= along <= length * M_PER_NM):
+                continue  # in the overrun margin, not on the runway proper
             if (-margin_nm * M_PER_NM <= along
                     <= (length + margin_nm) * M_PER_NM
                     and abs(across) <= half_width_nm * M_PER_NM):
@@ -551,4 +564,5 @@ def _build_airfield(name: str, spec: dict, defaults: dict) -> Airfield:
         parking_routes=parking_routes,
         parking_areas=parking_areas,
         holding_points=holding_points,
+        channels={k: str(v) for k, v in spec.get("channels", {}).items()},
     )

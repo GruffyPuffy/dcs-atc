@@ -66,6 +66,11 @@
         "Holding B": [42.17705, 42.47302],
         "Holding A/N": [42.17923, 42.46583],
         "Holding S/W": [42.17232, 42.46738]
+      },
+      "channels": {
+        "ground": "6",
+        "tower": "7",
+        "control": "8"
       }
     }
   }

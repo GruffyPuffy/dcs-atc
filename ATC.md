@@ -206,7 +206,10 @@ report).
 
 The challenge uses the pilot's **actual** position (distance + compass, or "on
 the ground" when very close), so the trainee learns to report correctly. The
-wording is the `position_challenge` template in `phraseology.json`.
+wording is the `position_challenge` template in `phraseology.json`. Because a
+challenge does **not** advance the pilot's state, it always ends with the escape
+reminder (*"Say reset to start over, or cancel to undo a clearance."*) so a
+pilot whose report is rejected can never get stuck.
 
 **Holding positions (P1–P4).** The MA aerodrome chart names four runway holding
 positions, and the bot knows where they are (`airspace.json` → `holding_points`):
@@ -349,6 +352,12 @@ Detection:
    corridor is deliberately narrow: a wider one would swallow the parallel
    taxiway holding positions (P1/P2 are only ~50 m from the centreline) and
    wrongly block landing for a pilot holding short.
+   For **sequencing** (line-up / landing), the unit must also be *between the
+   two thresholds* (`on_runway=True`), so a pilot **holding short** — just
+   before the threshold, inside the overrun margin — does not count as
+   occupying the runway and block another aircraft. The go-around check keeps
+   the wider margin (an aircraft rolling out past the far threshold still
+   counts).
 2. **Final approach** (`Airfield.is_on_final`): within 12 NM of the threshold,
    with both the bearing-to-threshold and the aircraft heading aligned with the
    runway within 40°.
@@ -416,7 +425,8 @@ Without live traffic the bot trusts the pilot (offline behaviour unchanged).
       "parking_areas": { "Ramp West": [lat, lon], "Ramp North": [lat, lon],
                          "Ramp East": [lat, lon], "Ramp South": [lat, lon] },
       "holding_points": { "Holding C": [lat, lon], "Holding B": [lat, lon],
-                          "Holding A/N": [lat, lon], "Holding S/W": [lat, lon] }
+                          "Holding A/N": [lat, lon], "Holding S/W": [lat, lon] },
+      "channels": { "ground": "6", "tower": "7", "control": "8" }
     }
   }
 }
@@ -565,10 +575,13 @@ never broadcast their arrival; pilots call them). Disable it with
   omitted (*"join via Entry East"*). The entry point is chosen from the
   aircraft's live position (`gate_locator`), falling back to a default. The
   pilot's readback triggers the descent: *"descend to 1500 feet"*.
+  An **inbound** call wins over the departure keywords, so *"inbound 35 miles
+  north at Angels 12"* is routed as an arrival (not answered with "climb to
+  Angels 15").
 - "passing the entry point" (already inbound) → handoff to Tower:
   *"contact Tower on channel 7"*.
-- "airborne" / "climbing" / "at 1500 ft" (departure check-in) → *"radar
-  contact, climb to Angels 15"*.
+- "airborne" / "climbing" / "at 1500 ft" / "checking in" (departure check-in) →
+  *"radar contact, climb to Angels 15"*.
 - "on final" / "runway in sight" / "overhead" → handoff to Tower:
   *"contact Tower on channel 7"*.
 
@@ -582,8 +595,11 @@ The bot issues the standard Master Arms handoffs as the flight progresses:
 - Tower → Ground (after landing): *"contact Ground on channel 6"*
   (`contact_ground`).
 
-Entry/exit point names and the channel numbers live in `phraseology.json`
-(`tower_channel`, `channel`) and `airspace.json` (`gates`).
+Entry/exit point names live in `airspace.json` (`gates`). The **radio preset
+channel numbers** are per-airfield in `airspace.json` (`channels`:
+`{ground, tower, control}`), because a preset is a property of the airfield's
+radio plan; `phraseology.json` (`tower_channel`, `ground_channel`, `channel`)
+holds the fallback used when an airfield does not define them.
 
 ### Worker threads
 

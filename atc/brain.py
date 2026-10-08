@@ -158,11 +158,21 @@ class AtcBrain:
 
     def _say(self, key: str, callsign: str, agency: str | None = None,
              **fields: object) -> str:
+        # Radio preset channels are per-airfield (airspace.json); fall back to
+        # the global phraseology variables when the airfield does not define
+        # them, so a bare brain (tests, no airfield) still renders. Only pass
+        # the channels the airfield actually defines, so a missing one does not
+        # override the phraseology default with None.
+        channels = getattr(self.airfield, "channels", None) or {}
+        overrides = {f"{role}_channel": channels[role]
+                     for role in ("ground", "tower") if role in channels}
+        if "control" in channels:
+            overrides["channel"] = channels["control"]
         return self.phraseology.render(
             key, callsign=callsign, tower=self.tower_short,
             agency=agency or self.tower_short,
             runway=self.runway, wind=self.wind, ground=self.ground_short,
-            control=self.control_short, qnh=self.qnh, **fields)
+            control=self.control_short, qnh=self.qnh, **overrides, **fields)
 
     def _agency(self, controller: Controller) -> str:
         """Short name of the agency handling a controller role."""
@@ -174,13 +184,19 @@ class AtcBrain:
     def _challenge(self, callsign: str, agency: str,
                    track: AircraftTrack) -> str:
         """A realistic 'I don't show you there' challenge for a bad position
-        report. Uses the live position so the pilot learns to report correctly."""
+        report. Uses the live position so the pilot learns to report correctly.
+
+        The challenge does NOT advance the pilot's state, so it must always
+        carry a way out — otherwise a pilot whose report is (rightly or wrongly)
+        rejected would be stuck. We append the escape reminder.
+        """
         # Very close to the field reads better as "on the ground" than
         # "0 miles north".
         position = ("on the ground" if track.distance_nm < 1.0
                     else track.relative)
-        return self._say("position_challenge", callsign, agency=agency,
-                         position=position)
+        return (self._say("position_challenge", callsign, agency=agency,
+                          position=position)
+                + " " + self._say("help_escape", callsign))
 
     def _holding_point(self, track: AircraftTrack | None) -> str:
         """Name of the holding position nearest the aircraft, or ''."""
@@ -520,14 +536,11 @@ class AtcBrain:
                 r"\b(passing|entering|at the entry|established|abeam)\b", low):
             pilot.phase = Phase.LANDING
             return self._say("contact_tower_from_control", callsign)
-        # Departure check-in ("airborne, 5 miles east climbing" / "at 1500 ft"):
-        # radar contact and a climb clearance. Arrival check-in ("inbound 35
-        # miles north"): radar contact + routing to join via an entry point.
-        if re.search(r"\b(airborne|climbing|departing|departed|level|"
-                     r"angels|on the way|at \d+)\b", low):
-            pilot.phase = Phase.AIRBORNE
-            return self._say("control_climb", callsign)
-        if re.search(r"\binbound\b|\bchecking in\b|\bwith you\b|\bentry\b", low):
+        # Arrival check-in ("inbound ...") takes priority over the departure
+        # keywords: an inbound call often names an altitude ("inbound 35 miles
+        # north at Angels 12"), which must NOT be read as a departure check-in
+        # (that would answer a joining aircraft with "climb to Angels 15").
+        if re.search(r"\binbound\b|\bentry\b", low):
             pilot.phase = Phase.INBOUND
             pilot.cleared_inbound = True
             gate = self._pick_entry_gate(track, low)
@@ -541,6 +554,12 @@ class AtcBrain:
                 return self._say("control_join_nohdg", callsign, gate=gate)
             return self._say("control_join", callsign, gate=gate,
                              heading=f"{heading:03.0f}")
+        # Departure check-in ("airborne, 5 miles east climbing" / "at 1500 ft"):
+        # radar contact and a climb clearance.
+        if re.search(r"\b(airborne|climbing|departing|departed|level|"
+                     r"angels|on the way|at \d+|checking in|with you)\b", low):
+            pilot.phase = Phase.AIRBORNE
+            return self._say("control_climb", callsign)
         # Near the field, Control hands the flight to Tower (e.g. "on final",
         # "runway in sight", "overhead break", "passing the entry point").
         if re.search(r"\b(on final|final|runway in sight|visual|overhead|"
