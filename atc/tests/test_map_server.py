@@ -95,24 +95,40 @@ def test_http_endpoints_serve_api_and_page(brain, airfield):
 
 
 def test_start_map_server_returns_running_server(brain, airfield):
-    server = start_map_server(airfield, brain, FakeState([]), 0,
-                              host="127.0.0.1", log=lambda _line: None)
+    server, service = start_map_server(airfield, brain, FakeState([]), 0,
+                                       host="127.0.0.1", log=lambda _line: None)
     try:
         assert server.server_address[1] > 0
+        assert service is not None
     finally:
         server.shutdown()
 
 
 def test_start_map_server_survives_port_in_use(brain, airfield):
     # a busy port must not take the bot down: returns None and logs a warning
-    first = start_map_server(airfield, brain, FakeState([]), 0,
-                             host="127.0.0.1", log=lambda _line: None)
+    first, _ = start_map_server(airfield, brain, FakeState([]), 0,
+                                host="127.0.0.1", log=lambda _line: None)
     port = first.server_address[1]
     messages = []
     try:
-        second = start_map_server(airfield, brain, FakeState([]), port,
-                                  host="127.0.0.1", log=messages.append)
+        second, _service = start_map_server(airfield, brain, FakeState([]), port,
+                                            host="127.0.0.1", log=messages.append)
         assert second is None
         assert any("disabled" in m for m in messages)
     finally:
         first.shutdown()
+
+
+def test_chatter_log_records_and_returns(brain, airfield):
+    service = MapService(airfield, brain, FakeState([]))
+    service.log_chatter("rx", 250.0, "Caveman", "Ground, Colt 1, requesting taxi",
+                        "ground")
+    service.log_chatter("tx", 250.0, "ground", "Colt 1, Ground, cleared taxi...",
+                        "ground")
+    service.log_chatter("tx", 270.5, "atis", "Kutaisi information Oscar...", "atis")
+    log = service.chatter()
+    assert len(log) == 3
+    assert log[0]["kind"] == "rx" and log[0]["who"] == "Caveman"
+    assert log[2]["controller"] == "atis"
+    # chatter is included in the snapshot the page polls
+    assert len(service.snapshot()["chatter"]) == 3

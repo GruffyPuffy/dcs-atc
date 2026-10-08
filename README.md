@@ -160,7 +160,8 @@ Then open `http://<host>:8090/`. It can also run standalone (no bot) with
 `uv run map_server.py --airfield Kutaisi --port 8090`. No extra Python
 dependencies — the server is stdlib `http.server`; Leaflet loads from a CDN.
 If the port is already in use the bot logs a warning and keeps running without
-the map.
+the map. The page also has a collapsible **Chatter** drawer (recent radio
+traffic, filterable by agency) for live debugging.
 
 License
 -------

@@ -32,16 +32,25 @@ def test_ground_taxi(brain):
 
 
 def test_ground_taxi_route_by_position(brain, airfield):
-    # west apron -> Sierra Echo, east apron -> Alpha November (per airfield)
-    west = _track(airfield, 42.182, 42.470)
-    reply = brain.handle("Ground, Colt 1, requesting taxi", track=west,
+    # Ramp South -> Sierra Echo for 25; Ramp North -> November Delta
+    south = _track(airfield, *airfield.parking_areas["Ramp South"])
+    reply = brain.handle("Ground, Colt 1, requesting taxi", track=south,
                          controller=Controller.GROUND)
     assert "Sierra Echo" in reply
     brain.pilots.clear()
-    east = _track(airfield, 42.183, 42.490)
-    reply = brain.handle("Ground, Colt 1, requesting taxi", track=east,
+    north = _track(airfield, *airfield.parking_areas["Ramp North"])
+    reply = brain.handle("Ground, Colt 1, requesting taxi", track=north,
                          controller=Controller.GROUND)
-    assert "Alpha November" in reply
+    assert "November Delta" in reply
+
+
+def test_ground_taxi_route_follows_active_runway(brain, airfield):
+    # same ramp, different active runway -> different route
+    south = _track(airfield, *airfield.parking_areas["Ramp South"])
+    brain.set_runway("07")
+    reply = brain.handle("Ground, Colt 1, requesting taxi", track=south,
+                         controller=Controller.GROUND)
+    assert "Whiskey" in reply
 
 
 def test_ground_hold_short_hands_off_to_tower(brain):
@@ -303,6 +312,17 @@ def test_no_callsign_returns_none(brain):
 def test_roger_on_readback(brain):
     reply = brain.handle("Tower, Colt 1, wilco", controller=Controller.TOWER)
     assert "roger" in reply.lower()
+
+
+def test_radio_check(brain):
+    reply = brain.handle("Tower, Colt 1, radio check", controller=Controller.TOWER)
+    assert "loud and clear" in reply.lower()
+
+
+def test_radio_check_on_any_agency(brain):
+    for controller in (Controller.GROUND, Controller.TOWER, Controller.CONTROL):
+        reply = brain.handle("Colt 1, radio check", controller=controller)
+        assert "loud and clear" in reply.lower()
 
 
 # ---------- Per-pilot isolation ----------

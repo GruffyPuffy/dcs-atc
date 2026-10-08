@@ -36,8 +36,24 @@
         "North": [42.26540, 42.50143]
       },
       "taxi_routes": {
-        "Sierra Echo": [42.182, 42.470],
-        "Alpha November": [42.183, 42.490]
+        "07": {
+          "Ramp South": "Whiskey",
+          "Ramp North": "November Alpha",
+          "Ramp West": "Alpha",
+          "Ramp East": "Sierra"
+        },
+        "25": {
+          "Ramp South": "Sierra Echo",
+          "Ramp North": "November Delta",
+          "Ramp West": "November Delta",
+          "Ramp East": "Echo"
+        }
+      },
+      "parking_routes": {
+        "Ramp South": "Whiskey",
+        "Ramp North": "Alpha November",
+        "Ramp West": "Alpha",
+        "Ramp East": "Echo"
       },
       "parking_areas": {
         "Ramp West": [42.18316, 42.47238],

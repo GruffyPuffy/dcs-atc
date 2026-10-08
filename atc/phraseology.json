@@ -51,6 +51,8 @@
     "go_around": "{callsign}, {tower}, go around, runway {runway} is occupied.",
     "ctr_warning": "{callsign}, {tower}, you are entering controlled airspace without clearance. Squawk {squawk} and state intentions.",
     "roger": "{callsign}, {agency}, roger.",
+    "radio_check": "{callsign}, {agency}, loud and clear.",
+    "atc_online": "{agency} ATC online.",
     "say_again": "{callsign}, {agency}, say again.",
     "state_reset": "{callsign}, {agency}, state reset. Contact {ground} on channel {ground_channel} when ready.",
     "cancel_ack": "{callsign}, {agency}, clearance cancelled.",

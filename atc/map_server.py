@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import json
 import threading
+import time
+from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Callable
@@ -33,6 +35,9 @@ OVERLAYS = WEB / "overlays"
 # AI aircraft are sent within this radius of the airfield (bounds the payload);
 # the map page then filters to the current viewport, so zoom/pan declutters.
 AI_RADIUS_NM = 150.0
+
+# How many chatter-log entries to keep for the map's log drawer.
+CHATTER_LIMIT = 200
 
 
 def _overlay_payload(airfield: Airfield) -> dict | None:
@@ -68,7 +73,8 @@ def _airspace_payload(airfield: Airfield) -> dict:
         },
         "gates": {name: list(pos) for name, pos in airfield.gates.items()},
         "runways": {name: list(pos) for name, pos in airfield.runways.items()},
-        "taxi_routes": {name: list(pos) for name, pos in airfield.taxi_routes.items()},
+        "taxi_routes": airfield.taxi_routes,
+        "parking_routes": airfield.parking_routes,
         "parking_areas": {name: list(pos) for name, pos in airfield.parking_areas.items()},
         "holding_points": {name: list(pos) for name, pos in airfield.holding_points.items()},
         # The areas the bot actually checks, derived from the same parameters
@@ -79,7 +85,24 @@ def _airspace_payload(airfield: Airfield) -> dict:
             "runway": airfield.runway_corridor_geometry(),
         },
         "overlay": _overlay_payload(airfield),
+        # Agencies for the chatter-log filter checkboxes (shown even before
+        # they have transmitted, so the filter list is stable).
+        "agencies": _agencies(airfield),
     }
+
+
+def _agencies(airfield: Airfield) -> list[str]:
+    """Radio agencies for the chatter filter: ground/tower/control/atis."""
+    out = []
+    if airfield.ground_frequency_mhz:
+        out.append("ground")
+    if airfield.frequency_mhz:
+        out.append("tower")
+    if airfield.control_frequency_mhz:
+        out.append("control")
+    if airfield.atis_frequency_mhz:
+        out.append("atis")
+    return out
 
 
 class MapService:
@@ -91,6 +114,27 @@ class MapService:
         self.brain = brain
         self.state = state
         self.lock = lock or threading.RLock()
+        # Chatter log: recent radio traffic (rx + tx) for the map's log drawer.
+        self._chatter: deque[dict] = deque(maxlen=CHATTER_LIMIT)
+        self._chatter_lock = threading.Lock()
+
+    def log_chatter(self, kind: str, freq_mhz: float, who: str,
+                    text: str, controller: str = "") -> None:
+        """Record one radio event (kind: 'rx' pilot, 'tx' ATC, 'sys')."""
+        entry = {
+            "t": time.strftime("%H:%M:%S"),
+            "kind": kind,
+            "freq": round(freq_mhz, 3),
+            "who": who,
+            "text": text,
+            "controller": controller,
+        }
+        with self._chatter_lock:
+            self._chatter.append(entry)
+
+    def chatter(self) -> list[dict]:
+        with self._chatter_lock:
+            return list(self._chatter)
 
     def snapshot(self) -> dict:
         """One map frame: airspace geometry + live aircraft with their state."""
@@ -143,6 +187,7 @@ class MapService:
             "airfield": _airspace_payload(self.airfield),
             "aircraft": aircraft,
             "ai_air": ai_air,
+            "chatter": self.chatter(),
             "error": error,
         }
 
@@ -153,14 +198,25 @@ def make_handler(service: MapService):
             pass
 
         def _send(self, status: int, body: bytes, content_type: str) -> None:
-            self.send_response(status)
-            self.send_header("Content-Type", content_type)
-            self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            self.wfile.write(body)
+            try:
+                self.send_response(status)
+                self.send_header("Content-Type", content_type)
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError):
+                # The browser closed the tab / refreshed mid-response. Normal
+                # for a polling client; nothing to do but drop the connection.
+                self.close_connection = True
 
         def do_GET(self) -> None:
+            try:
+                self._route()
+            except (BrokenPipeError, ConnectionResetError):
+                self.close_connection = True  # client hung up; not an error
+
+        def _route(self) -> None:
             path = urlsplit(self.path).path
             if path == "/api/atc":
                 body = json.dumps(service.snapshot(), separators=(",", ":")).encode()
@@ -189,23 +245,25 @@ def start_map_server(airfield: Airfield, brain: AtcBrain,
                      state: StateClient | None, port: int,
                      host: str = "0.0.0.0",
                      lock: threading.RLock | None = None,
-                     log: Callable[[str], None] = print) -> ThreadingHTTPServer | None:
-    """Start the map server on a daemon thread; returns the server.
+                     log: Callable[[str], None] = print,
+                     ) -> tuple[ThreadingHTTPServer | None, MapService]:
+    """Start the map server on a daemon thread.
 
-    Returns None (and logs a warning) if the port is already in use, so a
-    busy map port never takes the ATC bot down with it.
+    Returns (server, service). `server` is None (and a warning is logged) if the
+    port is already in use, so a busy map port never takes the ATC bot down.
+    The `service` is returned so the bot can push chatter-log entries to it.
     """
     service = MapService(airfield, brain, state, lock)
     try:
         server = ThreadingHTTPServer((host, port), make_handler(service))
     except OSError as error:
         log(f"[!] Map view disabled: cannot bind {host}:{port} ({error})")
-        return None
+        return None, service
     thread = threading.Thread(target=server.serve_forever, daemon=True,
                               name="atc-map")
     thread.start()
     log(f"[*] Map view on http://{host}:{port}/  (airfield {airfield.name})")
-    return server
+    return server, service
 
 
 def main() -> None:
@@ -232,7 +290,9 @@ def main() -> None:
                      gates=list(airfield.gates), gate_locator=airfield.nearest_gate,
                      airfield=airfield)
     state = None if args.no_state else StateClient(args.state_host, args.state_port)
-    server = start_map_server(airfield, brain, state, args.port, args.host)
+    server, _service = start_map_server(airfield, brain, state, args.port, args.host)
+    if server is None:
+        raise SystemExit("map server could not start")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

@@ -106,6 +106,8 @@ def main() -> None:
                         help="serve the live map view on this port (0 disables)")
     parser.add_argument("--map-host", default="0.0.0.0",
                         help="bind address for the map view")
+    parser.add_argument("--no-announce", action="store_true",
+                        help="skip the one-time 'ATC online' announcement")
     parser.add_argument("--debug", action="store_true",
                         help="log routing/state detail for every transmission")
     args = parser.parse_args()
@@ -233,7 +235,8 @@ def main() -> None:
     tts_lock = threading.Lock()
 
     def speak(text: str, freq: int = freq_hz, voice=None,
-              controller: Controller | None = None) -> None:
+              controller: Controller | None = None,
+              agency: str | None = None) -> None:
         """TTS the reply in the given voice and transmit it on the frequency."""
         spoken = text
         for word, phonetic in PRONUNCIATION.items():
@@ -254,6 +257,15 @@ def main() -> None:
                 wav.writeframes(pcm48k)
         tag = f"[{controller.value}] " if controller else ""
         log(f"{tag}ATC (tx): \"{text}\"")
+        chatter("tx", freq, agency or (controller.value if controller else "atc"),
+                text, agency or controller)
+
+    def freq_for(controller: Controller) -> float:
+        """Frequency (Hz) for a controller role, for the chatter log."""
+        for hz, ctrl in controller_by_freq.items():
+            if ctrl == controller:
+                return hz
+        return freq_hz
 
     def transcribe(pcm: bytes, who: str, duration: float,
                    controller: Controller) -> str:
@@ -276,9 +288,11 @@ def main() -> None:
         if not text:
             log(f"[{controller.value}] {who}: <unclear>  "
                 f"({duration:.1f} s, peak {peak:.0f} dBFS{wav_note})")
+            chatter("rx", freq_for(controller), who, "<unclear>", controller)
             return ""
         log(f"[{controller.value}] {who}: \"{text}\"  (stt {latency:.0f} ms, "
             f"{duration:.1f} s, peak {peak:.0f} dBFS{wav_note})")
+        chatter("rx", freq_for(controller), who, text, controller)
         return text
 
     def track_for(who: str):
@@ -315,10 +329,23 @@ def main() -> None:
                for hz, controller in controller_by_freq.items()}
 
     # Optional live map view (Leaflet) showing aircraft + their flight phase.
+    map_service = None
     if args.map_port:
         from map_server import start_map_server
-        start_map_server(airfield, brain, state, args.map_port,
-                         host=args.map_host, lock=lock, log=log)
+        _server, map_service = start_map_server(
+            airfield, brain, state, args.map_port,
+            host=args.map_host, lock=lock, log=log)
+
+    def chatter(kind: str, freq_hz: float, who: str, text: str,
+                controller: Controller | str | None = None) -> None:
+        """Push one radio event to the map's chatter log (if the map is on)."""
+        if map_service is None:
+            return
+        if isinstance(controller, Controller):
+            agency = controller.value
+        else:
+            agency = controller or ""
+        map_service.log_chatter(kind, freq_hz / 1e6, who, text, agency)
 
     def on_end(freq: float, who: str, pcm: bytes, duration: float) -> None:
         """SRS rx callback: enqueue to the right controller worker (never blocks)."""
@@ -390,7 +417,7 @@ def main() -> None:
                     log(f"ATIS {report.information}: runway {report.active_runway}, "
                         f"QNH {report.qnh_inhg:.2f}")
                     last_letter = report.information
-                speak(report.broadcast(), atis_hz, atis_voice)
+                speak(report.broadcast(), atis_hz, atis_voice, agency="atis")
             time.sleep(args.atis_interval)
 
     def weather_loop() -> None:
@@ -430,6 +457,19 @@ def main() -> None:
     if atis_hz:
         log(f"ATIS broadcasting on {atis_mhz:.3f} MHz AM every "
             f"{args.atis_interval:.0f}s  voice {args.atis_voice}")
+
+    # One-time "ATC online" announcement on each controller frequency, so a
+    # pilot tuning in knows the position is manned. (A trainer convention, not
+    # real phraseology — real controllers never broadcast their arrival.)
+    if not args.no_announce:
+        def announce() -> None:
+            time.sleep(2.0)  # let SRS settle before transmitting
+            for hz, controller in sorted(controller_by_freq.items()):
+                text = brain.phraseology.render(
+                    "atc_online", agency=brain._agency(controller))
+                speak(text, hz, voice_for[controller], controller)
+        threading.Thread(target=announce, daemon=True).start()
+
     try:
         while True:
             time.sleep(1)

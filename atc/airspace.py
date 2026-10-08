@@ -132,22 +132,44 @@ class Airfield:
     control_frequency_mhz: float = 0.0
     runways: dict[str, tuple[float, float]] = field(default_factory=dict)
     gates: dict[str, tuple[float, float]] = field(default_factory=dict)
-    taxi_routes: dict[str, tuple[float, float]] = field(default_factory=dict)
+    # Taxi routes to the runway, per runway and per starting ramp:
+    #   {runway: {ramp_name: "Sierra Echo"}}. The ramp is chosen by the
+    #   aircraft's live position (nearest parking area).
+    taxi_routes: dict[str, dict[str, str]] = field(default_factory=dict)
+    # Taxi route from the runway back to a ramp (post-landing):
+    #   {ramp_name: "Whiskey"}.
+    parking_routes: dict[str, str] = field(default_factory=dict)
     parking_areas: dict[str, tuple[float, float]] = field(default_factory=dict)
     # Named runway holding positions (P1..P4 on the MA chart), lat/lon.
     holding_points: dict[str, tuple[float, float]] = field(default_factory=dict)
 
-    def nearest_taxi_route(self, lat: float, lon: float) -> str | None:
-        """Name of the taxi route whose reference point is nearest, or None.
+    def taxi_route(self, lat: float | None, lon: float | None,
+                   runway: str | None = None) -> str | None:
+        """Taxi route to the runway from the aircraft's position.
 
-        DCS does not expose taxiway names, so routes are configured per airfield
-        in `airspace.json` (`taxi_routes`: name -> [lat, lon] of a representative
-        point, e.g. a parking area). The nearest one to the aircraft is used.
+        Routes are configured per runway and per starting ramp
+        (`taxi_routes`: {runway: {ramp: route}}). The ramp is the parking area
+        nearest the aircraft; without a position the first ramp is used.
         """
-        if not self.taxi_routes:
+        rwy = runway or self.active_runway
+        routes = self.taxi_routes.get(rwy)
+        if not routes:
             return None
-        return min(self.taxi_routes, key=lambda r: _haversine_nm(
-            lat, lon, self.taxi_routes[r][0], self.taxi_routes[r][1]))
+        if lat is not None and lon is not None and self.parking_areas:
+            ramp = self.nearest_parking_area(lat, lon)
+            if ramp in routes:
+                return routes[ramp]
+        return next(iter(routes.values()))
+
+    def parking_route(self, lat: float | None, lon: float | None) -> str | None:
+        """Taxi route from the runway to the nearest ramp (post-landing)."""
+        if not self.parking_routes:
+            return None
+        if lat is not None and lon is not None and self.parking_areas:
+            ramp = self.nearest_parking_area(lat, lon)
+            if ramp in self.parking_routes:
+                return self.parking_routes[ramp]
+        return next(iter(self.parking_routes.values()))
 
     def nearest_parking_area(self, lat: float, lon: float) -> str | None:
         """Name of the parking area (ramp) nearest a position, or None."""
@@ -480,8 +502,8 @@ def _build_airfield(name: str, spec: dict, defaults: dict) -> Airfield:
     gates = {g: (float(v[0]), float(v[1])) for g, v in spec.get("gates", {}).items()}
     runways = {r: (float(v["threshold"][0]), float(v["threshold"][1]))
                for r, v in spec.get("runways", {}).items()}
-    taxi_routes = {r: (float(v[0]), float(v[1]))
-                   for r, v in spec.get("taxi_routes", {}).items()}
+    taxi_routes = {r: dict(v) for r, v in spec.get("taxi_routes", {}).items()}
+    parking_routes = dict(spec.get("parking_routes", {}))
     parking_areas = {p: (float(v[0]), float(v[1]))
                      for p, v in spec.get("parking_areas", {}).items()}
     holding_points = {h: (float(v[0]), float(v[1]))
@@ -512,6 +534,7 @@ def _build_airfield(name: str, spec: dict, defaults: dict) -> Airfield:
         runways=runways,
         gates=gates,
         taxi_routes=taxi_routes,
+        parking_routes=parking_routes,
         parking_areas=parking_areas,
         holding_points=holding_points,
     )

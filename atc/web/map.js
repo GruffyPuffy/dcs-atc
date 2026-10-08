@@ -25,6 +25,7 @@ function initMap(center) {
   document.getElementById('chart-toggle').addEventListener('change', (e) => {
     if (e.target.checked) chartLayer.addTo(map); else map.removeLayer(chartLayer);
   });
+  initChatter();
 }
 
 function drawOverlay(af) {
@@ -57,16 +58,15 @@ function drawAirspace(af) {
       .bindTooltip(`Runway ${name} threshold`).addTo(staticLayer);
   }
 
-  for (const [name, pos] of Object.entries(af.taxi_routes || {})) {
-    L.circleMarker(pos, { radius: 3, color: '#8b949e', weight: 1,
-      fillColor: '#8b949e', fillOpacity: 0.8 })
-      .bindTooltip(`Taxi ${name}`).addTo(staticLayer);
-  }
-
+  // Taxi routes are per-runway/per-ramp names (no geometry), so show them as
+  // a tooltip on each ramp rather than a marker.
   for (const [name, pos] of Object.entries(af.parking_areas || {})) {
-    L.circleMarker(pos, { radius: 3, color: '#6e7681', weight: 1,
+    const r25 = (af.taxi_routes?.['25'] || {})[name];
+    const r07 = (af.taxi_routes?.['07'] || {})[name];
+    const tip = `${name}<br>to 25: ${r25 || '—'}<br>to 07: ${r07 || '—'}`;
+    L.circleMarker(pos, { radius: 4, color: '#6e7681', weight: 1,
       fillColor: '#6e7681', fillOpacity: 0.8 })
-      .bindTooltip(name).addTo(staticLayer);
+      .bindTooltip(tip).addTo(staticLayer);
   }
 
   // Runway holding positions (P1..P4 on the MA chart).
@@ -187,6 +187,67 @@ function drawTable(list) {
   ).join('');
 }
 
+// ---------- Chatter log ----------
+
+const chatterHidden = new Set();  // agency names to hide
+let chatterAgenciesSeen = new Set();
+
+function buildChatterFilters(agencies) {
+  const box = document.getElementById('chatter-filters');
+  box.innerHTML = agencies.map(a =>
+    `<label><input type="checkbox" data-agency="${a}"`
+    + `${chatterHidden.has(a) ? '' : ' checked'}> ${a}</label>`
+  ).join('');
+  box.querySelectorAll('input').forEach(cb => {
+    cb.addEventListener('change', () => {
+      if (cb.checked) chatterHidden.delete(cb.dataset.agency);
+      else chatterHidden.add(cb.dataset.agency);
+      renderChatter(lastChatter);
+    });
+  });
+}
+
+let lastChatter = [];
+
+function renderChatter(list) {
+  const log = document.getElementById('chatter-log');
+  const rows = list.filter(e => !chatterHidden.has(e.controller || 'atc'));
+  log.innerHTML = rows.map(e => {
+    const cls = `chat-row ${e.kind} ${e.controller || ''}`;
+    const who = e.kind === 'tx' ? `ATC ${e.controller || ''}`.trim() : e.who;
+    return `<div class="${cls}"><span class="t">${e.t}</span>`
+      + `<span class="f">${e.freq.toFixed(3)}</span>`
+      + `<span class="who">${who}</span>`
+      + `<span class="txt">${e.text}</span></div>`;
+  }).join('');
+  log.scrollTop = log.scrollHeight;
+}
+
+function drawChatter(list, configured) {
+  lastChatter = list;
+  // Show every configured agency (ground/tower/control/atis) plus any that
+  // appear in the log, so the filter list is stable from the start.
+  const seen = new Set([...(configured || []), ...list.map(e => e.controller || 'atc')]);
+  const agencies = [...seen].sort();
+  if (agencies.join(',') !== [...chatterAgenciesSeen].sort().join(',')) {
+    chatterAgenciesSeen = new Set(agencies);
+    buildChatterFilters(agencies);
+  }
+  renderChatter(list);
+}
+
+function initChatter() {
+  document.getElementById('chatter-toggle').addEventListener('click', () => {
+    const el = document.getElementById('chatter');
+    el.classList.toggle('collapsed');
+    const open = !el.classList.contains('collapsed');
+    document.getElementById('chatter-toggle').textContent =
+      (open ? '▼' : '▲') + ' Chatter';
+    document.getElementById('chatter-toggle')
+      .setAttribute('aria-expanded', String(open));
+  });
+}
+
 async function tick() {
   const status = document.getElementById('status');
   try {
@@ -200,6 +261,7 @@ async function tick() {
     drawAiAir(data.ai_air || []);
     drawAircraft(data.aircraft);
     drawTable(data.aircraft);
+    drawChatter(data.chatter || [], data.airfield.agencies || []);
     const err = document.getElementById('error');
     if (data.error) { err.hidden = false; err.textContent = `DCS: ${data.error}`; }
     else { err.hidden = true; }

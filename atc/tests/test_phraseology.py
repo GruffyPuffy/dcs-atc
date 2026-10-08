@@ -21,6 +21,7 @@ REQUIRED_TEMPLATES = {
     "control_climb", "control_descend",
     "contact_tower_from_control",
     "go_around", "ctr_warning", "roger", "say_again",
+    "radio_check", "atc_online",
     "state_reset", "cancel_ack",
     "help_idle", "help_clearance", "help_taxi", "help_holding", "help_lineup",
     "help_departure", "help_airborne", "help_inbound", "help_landing",

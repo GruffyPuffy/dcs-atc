@@ -89,6 +89,7 @@ the tower replies **"say again"**.
 | "Tower, Colt 1, runway vacated" | **vacated** | "Colt 1, Tower, contact Ground on channel 6." |
 | "Ground, Colt 1, rolling off runway 25, requesting taxi to parking" | **taxi to parking** | "Colt 1, Ground, cleared taxi to Ramp North via Alpha November." |
 | "Colt 1, checking in" / "with you" | **check-in** | "Colt 1, Tower, roger." |
+| "Colt 1, radio check" | **radio check** | "Colt 1, Tower, loud and clear." |
 | "Colt 1, help" | **help** | a short, state-aware hint (see §3a) |
 
 Intent matching is order-sensitive: the first matching rule wins. Some rules
@@ -409,7 +410,9 @@ Without live traffic the bot trusts the pilot (offline behaviour unchanged).
       "ctr": { "ceiling_ft_agl": 1500, "polygon": [[lat, lon], ...] },
       "runways": { "25": { "threshold": [lat, lon] } },
       "gates": { "East": [lat, lon], ... },
-      "taxi_routes": { "Sierra Echo": [lat, lon], "Alpha November": [lat, lon] },
+      "taxi_routes": { "25": { "Ramp South": "Sierra Echo", "Ramp North": "November Delta" },
+                       "07": { "Ramp South": "Whiskey", "Ramp North": "November Alpha" } },
+      "parking_routes": { "Ramp South": "Whiskey", "Ramp North": "Alpha November" },
       "parking_areas": { "Ramp West": [lat, lon], "Ramp North": [lat, lon],
                          "Ramp East": [lat, lon], "Ramp South": [lat, lon] },
       "holding_points": { "Holding C": [lat, lon], "Holding B": [lat, lon],
@@ -423,12 +426,21 @@ Kutaisi CTR geometry is derived from the Master Arms community wiki
 (https://wiki.masterarms.se/index.php/Airport_Procedures).
 
 **Taxi routes:** DCS exposes parking positions but **no taxiway names**, so
-routes are configured per airfield (`taxi_routes`: name → a representative
-[lat, lon], e.g. a parking area). The bot picks the route **nearest the
-aircraft's live position**, so a jet on the west apron gets "Sierra Echo" and
-one on the east apron gets "Alpha November". Without a live position it falls
-back to the first route. (The `parking` bridge op can dump an airbase's parking
-spots to help pick representative points.)
+routes are configured per airfield as `taxi_routes`: `{runway: {ramp: route}}`.
+The bot picks the route for the **active runway** and the **ramp nearest the
+aircraft**, so the clearance follows both the wind and where you are parked:
+
+| From | → 25 | → 07 |
+| --- | --- | --- |
+| Ramp South | Sierra Echo | Whiskey |
+| Ramp North | November Delta | November Alpha |
+| Ramp West | November Delta | Alpha |
+| Ramp East | Echo | Sierra |
+
+Post-landing, `parking_routes` gives the route from the runway to the nearest
+ramp (e.g. Ramp South → Whiskey). Route names come from the Master Arms
+aerodrome chart (taxiways Alpha/Bravo/Charlie/Delta/Echo/November/Sierra/
+Whiskey). The map shows each ramp's routes in its tooltip.
 
 `atc/phraseology.json` holds the **reply wording** as templates with
 `{placeholders}` (`{callsign}`, `{tower}`, `{runway}`, `{wind}`, `{position}`,
@@ -529,6 +541,20 @@ Frequencies and controller names come from `airspace.json`; CLI flags
 Pilots may address the field as **"Kutaisi Traffic"** (a common VFR call when
 there is no live controller); the bot still recognises the callsign and answers
 as Tower.
+
+### Radio check
+
+A pilot can test their setup with **"<callsign> radio check"** (also "how do
+you read", "readability", "comm check"); the bot replies *"loud and clear"*.
+This is real phraseology and works on any controller frequency.
+
+### ATC online announcement
+
+On startup the bot makes a **one-time** announcement on each controller
+frequency — *"Tower ATC online."* — so a pilot tuning in knows the position is
+manned. This is a **trainer convention**, not real phraseology (real controllers
+never broadcast their arrival; pilots call them). Disable it with
+`--no-announce`.
 
 ### Control
 
@@ -686,6 +712,17 @@ Data comes from the same sources the bot uses — positions from the state bridg
 geometry from `airspace.json` — so the map always agrees with what the
 controllers are saying. The JSON endpoint is `/api/atc`; the page polls it every
 2 seconds.
+
+### Chatter log
+
+The map has a collapsible **Chatter** drawer at the bottom showing recent radio
+traffic: every pilot transmission (what Whisper heard), every ATC reply, and the
+ATIS broadcast — each with time, frequency, agency and text. It is useful for
+live debugging ("did the bot hear me? what did it reply?").
+
+Each agency has a **checkbox filter** (Ground / Tower / Control / ATIS), so you
+can hide the ATIS spam and watch just the controller you care about. The log
+keeps the last 200 events.
 
 > No extra Python dependencies: the server is stdlib `http.server`
 > (`atc/map_server.py`), and the page is plain HTML/JS in `atc/web/`. If the

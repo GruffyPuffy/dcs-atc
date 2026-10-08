@@ -291,6 +291,9 @@ class AtcBrain:
             return self._say("readback_correct", callsign, agency=agency)
 
         # shared intents, valid on any frequency
+        if re.search(r"\bradio check\b|\bhow (do you )?(read|copy)\b|"
+                     r"\breadability\b|\bcomm check\b", low):
+            return self._say("radio_check", callsign, agency=agency)
         if re.search(r"\bchecking (in|out)\b|\bwith you\b", low):
             return self._say("roger", callsign, agency=agency)
         if re.search(r"\b(reading back|roger|wilco|copy)\b", low):
@@ -366,20 +369,24 @@ class AtcBrain:
             if parking is None and track is not None and self.airfield is not None:
                 parking = self.airfield.nearest_parking_area(track.lat, track.lon)
             route = None
-            if track is not None and self.airfield is not None:
-                route = self.airfield.nearest_taxi_route(track.lat, track.lon)
+            if self.airfield is not None:
+                lat = track.lat if track is not None else None
+                lon = track.lon if track is not None else None
+                route = self.airfield.parking_route(lat, lon)
             return self._say("taxi_parking", callsign,
                              parking=parking or "the ramp",
-                             taxi_route=route or "Sierra Echo")
+                             taxi_route=route or "Whiskey")
         if re.search(r"\b(request(?:ing)?|asking for|like)\b.*\btaxi(?:ing)?\b"
                      r"|\btaxi(?:ing)?\b.*\b(startup|start up|start|runway)\b",
                      low):
             pilot.phase = Phase.TAXI
-            # Pick the taxi route nearest the aircraft (DCS has no taxiway
-            # names, so routes are configured per airfield).
+            # Taxi route to the ACTIVE runway from the aircraft's ramp (routes
+            # are configured per runway + ramp; DCS has no taxiway names).
             route = None
-            if track is not None and self.airfield is not None:
-                route = self.airfield.nearest_taxi_route(track.lat, track.lon)
+            if self.airfield is not None:
+                lat = track.lat if track is not None else None
+                lon = track.lon if track is not None else None
+                route = self.airfield.taxi_route(lat, lon, self.runway)
             return self._say("taxi", callsign, taxi_route=route or "Sierra Echo")
         if re.search(r"\bhold(?:ing)? short\b", low) and pilot.phase == Phase.TAXI:
             # Cross-check the report against the live position: a pilot who
