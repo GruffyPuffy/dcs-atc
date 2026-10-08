@@ -43,6 +43,23 @@ def test_nearest_gate(airfield):
     assert airfield.nearest_gate(east[0], east[1]) == "East"
 
 
+def test_default_exit_gate_matches_runway(airfield):
+    # the exit gate follows the departure direction (runway heading)
+    assert airfield.default_exit_gate("25") == "West"   # heading 260 -> West
+    assert airfield.default_exit_gate("07") == "East"   # heading 080 -> East
+
+
+def test_exit_turn_direction(airfield):
+    # 25 (heading 260) to Exit West (bearing 250) is within 20 deg -> straight
+    assert airfield.exit_turn("Exit West", "25") == ""
+    # 07 (heading 080) to Exit East (bearing 079) is straight ahead
+    assert airfield.exit_turn("Exit East", "07") == ""
+    # 25 to Exit North (bearing 011) is a right turn
+    assert airfield.exit_turn("Exit North", "25") == "right"
+    # 25 to Exit South (bearing 152) is a left turn
+    assert airfield.exit_turn("Exit South", "25") == "left"
+
+
 def test_distance_to_threshold(airfield):
     thr = airfield.runway_threshold("25")
     assert airfield.distance_to_threshold_nm(thr[0], thr[1], "25") < 0.1

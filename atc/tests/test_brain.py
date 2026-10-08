@@ -58,6 +58,21 @@ def test_ground_clearance_assigns_exit_gate(brain):
     assert brain.pilots["Colt 1"].exit_gate
 
 
+def test_ground_clearance_exit_matches_runway(brain, airfield):
+    # active runway 25 -> Exit West (the gate matching the departure heading)
+    reply = brain.handle("Ground, Colt 1, ready to copy clearance",
+                         controller=Controller.GROUND)
+    assert "Exit West" in reply
+    assert "1500 ft or below" in reply
+
+
+def test_ground_clearance_exit_follows_runway_change(brain, airfield):
+    brain.set_runway("07")
+    reply = brain.handle("Ground, Colt 1, ready to copy clearance",
+                         controller=Controller.GROUND)
+    assert "Exit East" in reply
+
+
 def test_ground_taxi(brain):
     reply = brain.handle("Ground, Colt 1, requesting taxi",
                          controller=Controller.GROUND)
@@ -827,6 +842,30 @@ def test_lined_up_and_waiting_clears_takeoff(brain):
                          controller=Controller.TOWER)
     assert "cleared for takeoff" in reply
     assert brain.pilots["Colt 1"].phase == Phase.DEPARTURE
+
+
+def test_ready_again_while_lined_up_clears_takeoff(brain):
+    # a pilot who reports "ready for departure" again (instead of reading back
+    # "line up and wait") must still get the takeoff clearance, not be stuck.
+    brain.handle("Tower, Colt 1, ready for departure", controller=Controller.TOWER)
+    assert brain.pilots["Colt 1"].phase == Phase.LINEUP
+    reply = brain.handle("Tower, Colt 1, ready for departure",
+                         controller=Controller.TOWER)
+    assert "cleared for takeoff" in reply
+    assert brain.pilots["Colt 1"].phase == Phase.DEPARTURE
+
+
+def test_bare_ready_while_lined_up_clears_takeoff(brain):
+    brain.handle("Tower, Colt 1, ready for departure", controller=Controller.TOWER)
+    reply = brain.handle("Tower, Colt 1, ready", controller=Controller.TOWER)
+    assert "cleared for takeoff" in reply
+    assert brain.pilots["Colt 1"].phase == Phase.DEPARTURE
+
+
+def test_lineup_help_mentions_readback(brain):
+    brain.handle("Tower, Colt 1, ready for departure", controller=Controller.TOWER)
+    reply = brain.handle("Colt 1, help", controller=Controller.TOWER)
+    assert "read back" in reply.lower() or "readback" in reply.lower()
 
 
 def test_taking_off_hands_off_to_control(brain):

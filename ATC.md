@@ -73,8 +73,8 @@ the tower replies **"say again"**.
 | "Ground, Colt 1" | **check-in** | "Colt 1, Ground." |
 | "Ground, Colt 1, two-ship Hornets on Ramp South" | **check-in + position** | "Colt 1, Ground, runway 25 in use, QNH 2992." |
 | "…with information Charlie" | **check-in + ATIS** | "Colt 1, Ground." (runway/QNH already read from ATIS) |
-| "Ground, Colt 1, ready to copy clearance" | **clearance** | "Colt 1, Ground, after departure turn right Exit East, 1500 ft or below." |
-| "After departure turn right Exit East, 1500 ft or below, Colt 1" | **readback** | "Colt 1, Ground, readback correct." |
+| "Ground, Colt 1, ready to copy clearance" | **clearance** | "Colt 1, Ground, after departure Exit West, 1500 ft or below." (exit + turn follow the active runway) |
+| "After departure Exit West, 1500 ft or below, Colt 1" | **readback** | "Colt 1, Ground, readback correct." |
 | "Ground, Colt 1, requesting taxi" | **taxi** | "Colt 1, Ground, cleared taxi Sierra Echo and hold short runway 25." |
 | "Cleared taxi Sierra Echo and hold short runway 25, Colt 1" | **readback** | "Colt 1, Ground, readback correct." |
 | "Colt 1, holding short runway 25" | **hold short** (after taxi) | "Colt 1, Ground, contact Tower on channel 7." |
@@ -126,7 +126,7 @@ follows.) The marker is the `help_prefix` variable in `phraseology.json`
 | Taxi | "taxi to runway 25 via Sierra Echo, then report holding short of runway 25." |
 | Holding short | "you are holding short. Contact Tower on channel 7 and report ready for departure." |
 | Line up | "line up and wait runway 25, then report ready for departure." |
-| Departure | "you are cleared for takeoff runway 25. After departure turn right Exit East, 1500 ft or below, then contact Control on channel 8." |
+| Departure | "you are cleared for takeoff runway 25. After departure Exit West, 1500 ft or below, then contact Control on channel 8." |
 | Airborne | "contact Control on channel 8 and report your position and intentions." |
 | Inbound | "report entering the control zone, then report runway in sight." |
 | Landing | "runway 25 is active. Report on final for landing clearance." |
@@ -528,8 +528,13 @@ Frequencies and controller names come from `airspace.json`; CLI flags
 - "…on Ramp South" (no ATIS info) → *"Colt 1, Ground, runway 25 in use,
   QNH 2992."* (with "information Charlie" → just *"Colt 1, Ground."*)
 - "ready to copy clearance" → departure clearance with an **exit point**:
-  *"after departure turn right Exit East, 1500 ft or below"*; the readback is
-  confirmed with *"readback correct"*.
+  *"after departure Exit West, 1500 ft or below"*; the readback is
+  confirmed with *"readback correct"*. The exit point is the gate that best
+  matches the **departure direction** for the active runway (you fly the runway
+  heading after takeoff), and the turn is computed from the runway heading to
+  that gate — so 25 gives *Exit West* and 07 gives *Exit East* at Kutaisi. A
+  gate roughly straight ahead (within 20°) drops the turn: *"after departure
+  Exit East"*.
 - "requesting taxi" → taxi clearance: *"cleared taxi Sierra Echo and hold short
   runway 25"*; the readback is confirmed with *"readback correct"*.
 - "holding short runway 25" → handoff: *"contact Tower on channel 7"*.
@@ -642,8 +647,8 @@ and the bot's reply. Frequencies (AM): **ATIS 270.500**, **Ground 250.000**,
 |---|------|-----------|-------------|
 | 1 | ATIS | *(listen only)* | "Kutaisi information Oscar. 25 in use. wind calm. QNH 29.92. CAVOK. Temperature 20. Advise on initial contact you have information Oscar." |
 | 2 | Ground | "Ground, Colt 1, two-ship Hornets on Ramp South with information Oscar." | "Colt 1, Ground." |
-| 3 | Ground | "Ground, Colt 1, ready to copy clearance." | "Colt 1, Ground, after departure turn right Exit East, 1500 ft or below." |
-| 4 | Ground | "After departure turn right Exit East, 1500 ft or below, Colt 1." | "Colt 1, Ground, readback correct." |
+| 3 | Ground | "Ground, Colt 1, ready to copy clearance." | "Colt 1, Ground, after departure Exit West, 1500 ft or below." |
+| 4 | Ground | "After departure Exit West, 1500 ft or below, Colt 1." | "Colt 1, Ground, readback correct." |
 | 5 | Ground | "Ground, Colt 1, requesting taxi." | "Colt 1, Ground, cleared taxi Sierra Echo and hold short runway 25." |
 | 6 | Ground | "Cleared taxi Sierra Echo and hold short runway 25, Colt 1." | "Colt 1, Ground, readback correct." |
 | 7 | Ground | "Colt 1, holding short runway 25." | "Colt 1, Ground, contact Tower on channel 7." |

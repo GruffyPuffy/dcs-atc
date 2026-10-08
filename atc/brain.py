@@ -309,7 +309,8 @@ class AtcBrain:
         # Only expected in phases where a readback is actually due.
         readback = re.search(
             r"\b(readback|read back|copy|roger|wilco|cleared|hold short|line up|"
-            r"lined up|turn|heading|descend|climb|angels|exit|via|in use|qnh)\b",
+            r"lined up|waiting|turn|heading|descend|climb|angels|exit|via|"
+            r"in use|qnh)\b",
             low)
         if readback and pilot.phase == Phase.LINEUP:
             # Readback of "line up and wait" -> the takeoff clearance.
@@ -382,7 +383,11 @@ class AtcBrain:
             pilot.phase = Phase.CLEARANCE
             gate = self._pick_exit_gate()
             pilot.exit_gate = gate
-            return self._say("departure_exit", callsign, gate=gate, turn="right")
+            turn = "right"
+            if self.airfield is not None:
+                turn = self.airfield.exit_turn(gate, self.runway)
+            key = "departure_exit" if turn else "departure_exit_straight"
+            return self._say(key, callsign, gate=gate, turn=turn)
         # Readback of the taxi clearance ("cleared taxi Sierra Echo and hold
         # short runway 25") -> "readback correct". Must come before the taxi
         # request and the hold-short report (which also say "hold short").
@@ -454,6 +459,18 @@ class AtcBrain:
         # Master Arms: Tower answers with "line up and wait"; the takeoff
         # clearance follows the pilot's readback (see handle()).
         if re.search(r"\bready for departure\b|\bready for takeoff\b", low):
+            # Already lined up and waiting: this "ready" call is the natural
+            # trigger for the takeoff clearance (the pilot has done the line-up
+            # and is telling us they are ready to go). Without this, a pilot who
+            # reports ready again instead of reading back "line up and wait"
+            # would be stuck in Lineup forever.
+            if pilot.phase == Phase.LINEUP:
+                # Already lined up: this "ready" call is the natural trigger for
+                # the takeoff clearance. Still sequence against traffic.
+                if self._runway_busy(traffic, exclude=speaker):
+                    return self._say("hold_short_traffic", callsign)
+                pilot.phase = Phase.DEPARTURE
+                return self._say("lineup_readback", callsign, turnout="right")
             # Cross-check: a pilot who says "ready for departure" but is not at
             # the runway gets challenged, and is NOT cleared to line up.
             if track is not None and self.airfield is not None \
@@ -466,7 +483,13 @@ class AtcBrain:
             pilot.phase = Phase.LINEUP
             return self._say("line_up", callsign)
         if re.search(r"\bready\b", low) and pilot.phase in (
-                Phase.TAXI, Phase.HOLDING, Phase.CLEARANCE):
+                Phase.TAXI, Phase.HOLDING, Phase.CLEARANCE, Phase.LINEUP):
+            if pilot.phase == Phase.LINEUP:
+                # already lined up: a bare "ready" also clears takeoff
+                if self._runway_busy(traffic, exclude=speaker):
+                    return self._say("hold_short_traffic", callsign)
+                pilot.phase = Phase.DEPARTURE
+                return self._say("lineup_readback", callsign, turnout="right")
             pilot.phase = Phase.LINEUP
             return self._say("line_up", callsign)
         # Departure handoff: once airborne, Tower hands the flight to Control.
@@ -579,7 +602,16 @@ class AtcBrain:
         return self._say("inbound_via_gate", callsign, gate=gate)
 
     def _pick_exit_gate(self) -> str:
-        """Departure exit point (first configured gate, or a default)."""
+        """Departure exit point.
+
+        The gate that best matches the departure direction for the active runway
+        (you fly the runway heading after takeoff), falling back to the first
+        configured gate. A pilot-named exit is a future addition.
+        """
+        if self.airfield is not None:
+            gate = self.airfield.default_exit_gate(self.runway)
+            if gate:
+                return f"Exit {gate}"
         gate = self.gates[0] if self.gates else "North"
         return f"Exit {gate}"
 

@@ -189,6 +189,44 @@ class Airfield:
         return min(self.holding_points, key=lambda h: _haversine_nm(
             lat, lon, self.holding_points[h][0], self.holding_points[h][1]))
 
+    def default_exit_gate(self, runway: str | None = None) -> str | None:
+        """Exit gate that best matches the departure direction for a runway.
+
+        After takeoff you fly the runway heading, so the natural exit is the
+        gate whose bearing from the airfield is closest to the runway heading.
+        Returns the gate name (e.g. "East"), or None if no gates are configured.
+        """
+        if not self.gates:
+            return None
+        rwy_hdg = self.runway_heading(runway)
+        if rwy_hdg is None:
+            return next(iter(self.gates))
+        lat0, lon0 = self.ctr.center_lat, self.ctr.center_lon
+
+        def offset(name: str) -> float:
+            g = self.gates[name]
+            bearing = _bearing(lat0, lon0, g[0], g[1])
+            return abs((bearing - rwy_hdg + 180) % 360 - 180)
+
+        return min(self.gates, key=offset)
+
+    def exit_turn(self, gate: str, runway: str | None = None) -> str:
+        """Turn from the runway heading to an exit gate: "left"/"right"/"".
+
+        Empty string means the gate is roughly straight ahead (within 20°), so
+        the clearance reads "after departure Exit West" rather than a turn.
+        """
+        rwy_hdg = self.runway_heading(runway)
+        target = self.gates.get(gate.split()[-1]) if gate else None
+        if rwy_hdg is None or target is None:
+            return "right"
+        lat0, lon0 = self.ctr.center_lat, self.ctr.center_lon
+        bearing = _bearing(lat0, lon0, target[0], target[1])
+        delta = (bearing - rwy_hdg + 540) % 360 - 180
+        if abs(delta) < 20:
+            return ""
+        return "right" if delta > 0 else "left"
+
     def holding_zone_geometry(self, runway: str | None = None,
                               thr_nm: float = 0.6,
                               point_nm: float = 0.2) -> list[dict]:
