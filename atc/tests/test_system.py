@@ -19,6 +19,43 @@ def _scenario(airfield, brain):
     return Scenario(airfield, brain)
 
 
+# ---------- Light path (ATC.md §12a / kneeboard page 4) ----------
+# The documented short version: straight to Tower (no Ground), report "on final"
+# (no formal break handoff). This guards the doc/card against drifting.
+
+def test_light_path_departure(airfield, brain):
+    sc = _scenario(airfield, brain).at_threshold("25")
+    r = sc.say("Tower, Colt 1, ready for departure", Controller.TOWER)
+    assert "line up and wait" in r.lower()
+    r = sc.say("Line up and wait 25, Colt 1", Controller.TOWER)
+    assert "cleared for takeoff" in r.lower()
+    r = sc.say("Tower, Colt 1, airborne", Controller.TOWER)
+    assert "contact Control" in r
+    r = sc.say("Control, Colt 1, at 1500 ft", Controller.CONTROL)
+    assert "climb to Angels" in r
+
+
+def test_light_path_return_and_landing(airfield, brain):
+    sc = _scenario(airfield, brain).at_gate("North")
+    r = sc.say("Kutaisi Control, Colt 1, inbound 35 miles north at Angels 12",
+               Controller.CONTROL)
+    assert "join via Entry East" in r           # best entry for runway 25
+    r = sc.say("150 to join via Entry East, Colt 1", Controller.CONTROL)
+    assert "descend to 1500 feet" in r.lower()
+    # Straight to Tower (no formal Control→Tower handoff required).
+    r = sc.say("Tower, Colt 1, Entry East", Controller.TOWER)
+    assert "report runway in sight" in r.lower()
+    r = sc.say("Colt 1, runway in sight", Controller.TOWER)
+    assert "overhead break" in r.lower()
+    assert sc.phase() == Phase.INBOUND
+    sc.on_final("25")
+    r = sc.say("Colt 1, on final", Controller.TOWER)
+    assert "cleared to land" in r.lower()
+    assert sc.phase() == Phase.LANDING
+    r = sc.say("Colt 1, runway vacated", Controller.TOWER)
+    assert "contact Ground" in r
+
+
 # ---------- Full departure: 2-ship, Ramp South -> takeoff ----------
 
 def test_full_departure_two_ship(airfield, brain):

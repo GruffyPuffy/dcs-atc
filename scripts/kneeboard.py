@@ -205,6 +205,47 @@ PAGES = [
             ]),
         ],
     },
+    {
+        "file": "04-light-path",
+        "title": "LIGHT PATH",
+        "subtitle": "Single-ship — minimal calls (skip Ground & the break)",
+        "note": "Shortest way through the trainer: go straight to Tower (no Ground "
+                "clearance/taxi) and report 'on final' (no overhead break). "
+                "Stuck? Say '<callsign> help' on any frequency.",
+        "sections": [
+            ("Takeoff — Tower (Ch 7)", [
+                ("P", "Tower, Adder1, ready for departure"),
+                ("TWR", "Adder1, line up and wait runway 25"),
+                ("P", "Line up and wait 25, Adder1"),
+                ("TWR", "Adder1, right turnout, cleared for takeoff runway 25"),
+                ("P", "Right turn out, cleared for takeoff, 25, Adder1"),
+                ("TWR", "Adder1, contact Control on channel 8"),
+                ("P", "Adder1, channel 8, push"),
+            ]),
+            ("Climb-out — Control (Ch 8)", [
+                ("P", "Control, Adder1, at 1500 ft"),
+                ("CTL", "Adder1, radar contact, climb to Angels 15"),
+            ]),
+            ("Return — Control (Ch 8)", [
+                ("P", "Kutaisi Control, Adder1, inbound 35 miles north at Angels 12"),
+                ("CTL", "Adder1, radar contact, turn right heading 150 to join via Entry East"),
+                ("P", "150 to join via Entry East, Adder1"),
+                ("CTL", "Adder1, descend to 1500 feet"),
+            ]),
+            ("Approach & landing — Tower (Ch 7)", [
+                ("P", "Tower, Adder1, Entry East"),
+                ("TWR", "Adder1, report runway in sight"),
+                ("P", "Adder1, runway in sight"),
+                ("TWR", "Adder1, wind calm, cleared for left overhead break runway 25"),
+                ("P", "Cleared for left overhead break runway 25, Adder1"),
+                ("P", "Adder1, on final"),
+                ("TWR", "Adder1, runway 25, wind calm, cleared to land"),
+                ("P", "Runway 25, cleared to land, Adder1"),
+                ("TWR", "Adder1, contact Ground on channel 6"),
+                ("P", "Adder1, channel 6, push"),
+            ]),
+        ],
+    },
 ]
 
 

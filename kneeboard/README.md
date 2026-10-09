@@ -9,8 +9,13 @@ kneeboard during training.
 | `01-start-takeoff.jpg` | Ground (Ch 6) + Tower (Ch 7): check-in, ATIS, clearance, taxi, line-up, takeoff, handoff to Control |
 | `02-rtb-landing.jpg` | Control (Ch 8) + Tower (Ch 7) + Ground (Ch 6): inbound, join, descent, entry, break, landing, taxi to parking |
 | `03-airborne.jpg` | AWACS / package (not flown in the sim): check-in, push, attack, RTB handoff |
+| `04-light-path.jpg` | **Single-ship light path**: skip Ground (straight to Tower) and the overhead break (report "on final"); Tower → Control → land |
 
-Each line is a request/answer exchange from the wiki (the "Adder11" two-ship
+Page 4 is a **shortened trainer path**, not a wiki transcript: it uses the ATC
+bot's actual replies to show the fewest calls that get a single-ship airborne and
+back. Stuck at any point? Say *"<callsign> help"* on any frequency.
+
+Each other line is a request/answer exchange from the wiki (the "Adder11" two-ship
 example), colour-coded by who is talking (PILOT / GND / TWR / CTL / AWACS).
 
 **Radio convention shown on the cards** (tidied from the SOP for training):

@@ -854,6 +854,47 @@ If a report does not match your live position, the bot **challenges** it and doe
 
 ---
 
+## 12a. Light path (short version)
+
+The full walkthrough in §12 is the complete Master Arms sequence. If you want a
+**light** version — one aircraft, the fewest calls that still exercise the whole
+state machine — use the path below. It skips the Ground phase (no clearance or
+taxi; go straight to Tower) and the overhead break (report "on final" directly).
+Every reply here is the bot's actual output. Kneeboard card:
+`kneeboard/04-light-path.jpg`.
+
+### Takeoff (Tower → Control)
+
+| # | Freq | Pilot says | Bot replies |
+|---|------|-----------|-------------|
+| 1 | Tower | "Tower, Colt 1, ready for departure." | "Colt 1, Tower, line up and wait runway 25." |
+| 2 | Tower | "Line up and wait 25, Colt 1." | "Colt 1, Tower, readback correct, wind calm, runway 25, right turnout, cleared for takeoff." |
+| 3 | Tower | "Tower, Colt 1, airborne." | "Colt 1, Tower, contact Control on channel 8." |
+| 4 | Control | "Control, Colt 1, at 1500 ft." | "Colt 1, Control, radar contact, climb to Angels 15." |
+
+### Return & landing (Control → Tower)
+
+| # | Freq | Pilot says | Bot replies |
+|---|------|-----------|-------------|
+| 5 | Control | "Kutaisi Control, Colt 1, inbound 35 miles north at Angels 12." | "Colt 1, Control, radar contact, turn right heading 150 to join via Entry East." *(heading computed)* |
+| 6 | Control | "150 to join via Entry East, Colt 1." | "Colt 1, Control, descend to 1500 feet." |
+| 7 | Tower | "Tower, Colt 1, Entry East." | "Colt 1, Tower, report runway in sight." |
+| 8 | Tower | "Colt 1, runway in sight." | "Colt 1, Tower, wind calm, cleared for left overhead break runway 25." |
+| 9 | Tower | "Colt 1, on final." | "Colt 1, Tower, runway 25, wind calm, cleared to land." |
+| 10 | Tower | "Colt 1, runway vacated." | "Colt 1, Tower, contact Ground on channel 6." |
+
+That is ~10 calls for a full circuit, versus ~21 in §12. The Control→Tower switch
+at step 7 is pilot-initiated (as in the full walkthrough; the bot does not require
+a formal handoff there). You could shorten it further (report "on final" straight
+after runway in sight), but steps 7–9 are the natural light form. Lost at any
+point? Say **"<callsign> help"** on any frequency for a state-aware hint (§3a).
+
+> The bot does not *require* the Ground steps, the readbacks, or the overhead
+> break — they are the realistic/complete track. The light path above is fully
+> accepted by the state machine (verified against the real `AtcBrain`).
+
+---
+
 ## 13. Live map view
 
 The bot can serve a **live map** of the airfield it is managing, for an
