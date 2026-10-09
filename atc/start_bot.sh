@@ -11,6 +11,7 @@
 #   ./start_bot.sh --gain 3                 # boost quiet mic audio
 #   ./start_bot.sh --map-port 9000          # move the map to another port
 #   ./start_bot.sh --map-port 0             # disable the map
+#   ./start_bot.sh --debug                  # + save flight trails to /tmp/atc_tracks.json
 set -euo pipefail
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -26,9 +27,11 @@ fi
 cd "$atc_dir"
 mkdir -p "$atc_dir"
 
-# fresh session: clear last run's log and captured audio
+# fresh session: clear last run's log, captured audio and trail file
+# (the trail file is re-written during the run when --debug is passed)
 rm -f /tmp/atc_log.txt
 rm -rf /tmp/atc_audio
+rm -f /tmp/atc_tracks.json
 
 # Serve the live map by default, unless the caller already set --map-port.
 map_args=()

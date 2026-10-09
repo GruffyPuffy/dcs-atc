@@ -150,13 +150,54 @@ def test_track_history_caps_points():
     assert len(t.path("Colt 1")) == 3
 
 
-def test_track_history_prunes_absent():
+def test_track_history_retains_absent():
+    # Trails are NOT dropped when an aircraft leaves: a completed sortie must
+    # stay reviewable for debrief (the bug this guards against).
     t = TrackHistory()
     t.update("Colt 1", 42.18, 42.50, distance_nm=5.0)
     t.update("Ford 2", 42.19, 42.51, distance_nm=5.0)
-    t.prune({"Colt 1"})
-    assert t.path("Ford 2") == []
-    assert len(t.path("Colt 1")) == 1
+    t.set_active({"Colt 1"})
+    assert len(t.path("Ford 2")) == 1          # retained, not pruned
+    assert t.is_active("Colt 1")
+    assert not t.is_active("Ford 2")
+    assert sorted(t.callsigns()) == ["Colt 1", "Ford 2"]
+
+
+def test_track_history_save_load(tmp_path):
+    t = TrackHistory()
+    t.update("Colt 1", 42.18, 42.50, distance_nm=5.0, alt_ft=1000)
+    t.add_comm("Colt 1", 42.18, 42.50, "rx", "hello", "ground", "12:00:00")
+    path = tmp_path / "tracks.json"
+    t.save(path)
+    restored = TrackHistory()
+    restored.load(path)
+    assert restored.path("Colt 1") == [[42.18, 42.50, 1000]]
+    assert restored.comms("Colt 1")[0]["text"] == "hello"
+
+
+def test_snapshot_retains_departed_aircraft(brain, airfield):
+    # A pilot who logs off must still leave a (dimmed) trail for review.
+    state = FakeState([_ac()])
+    service = MapService(airfield, brain, state)
+    service.snapshot()
+    state._aircraft = []                      # pilot leaves the slot
+    snap = service.snapshot()
+    assert len(snap["aircraft"]) == 1         # retained, not pruned
+    gone = snap["aircraft"][0]
+    assert gone["active"] is False
+    assert len(gone["path"]) >= 1
+    assert [a for a in snap["aircraft"] if a["active"]] == []
+
+
+def test_map_service_persists_tracks(brain, airfield, tmp_path):
+    path = tmp_path / "tracks.json"
+    MapService(airfield, brain, FakeState([_ac()]),
+               tracks_file=path).snapshot()
+    assert path.exists()                      # autosaved on snapshot
+    # A fresh service (e.g. after a restart) restores the trail.
+    snap = MapService(airfield, brain, FakeState([]),
+                      tracks_file=path).snapshot()
+    assert any(a["path"] for a in snap["aircraft"])
 
 
 def test_snapshot_includes_path(brain, airfield):

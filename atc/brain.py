@@ -125,6 +125,15 @@ class AtcBrain:
         # automatic calls (CTR warning, go-around) can address the pilot by
         # callsign instead of the raw DCS unit name.
         self.speaker_callsigns: dict[str, str] = {}
+        # Single-pilot training aid: when true, a transmission we do not
+        # understand is prompted with "say again" (addressed to the one pilot)
+        # instead of being ignored. Set from the live pilot count (see
+        # `set_pilot_count`); a silent miss is confusing on a solo trainer.
+        self.solo_mode = False
+
+    def set_pilot_count(self, count: int) -> None:
+        """Enable solo training mode when there is a single player online."""
+        self.solo_mode = count <= 1
 
     def remember_speaker(self, who: str, callsign: str) -> None:
         """Map an SRS speaker name to the callsign they used."""
@@ -268,6 +277,14 @@ class AtcBrain:
             if name and re.search(r"\b(help|assist|what do i do|what now|"
                                   r"remind me)\b", text.lower()):
                 return self._help(name, self._pilot(name))
+            # Solo training: a transmission we cannot tie to a callsign gets a
+            # spoken "say again" prompt, so the pilot knows they were heard but
+            # not understood (most often a forgotten callsign). On a multi-pilot
+            # server we stay silent instead, to avoid replying to traffic meant
+            # for someone else.
+            if self.solo_mode:
+                return self._say("say_again_no_callsign", "",
+                                 agency=self._agency(controller))
             return None
         low = text.lower()
         pilot = self._pilot(callsign)
@@ -337,7 +354,7 @@ class AtcBrain:
         readback = re.search(
             r"\b(readback|read back|copy|roger|wilco|cleared|hold short|line up|"
             r"lined up|waiting|turn|heading|descend|climb|angels|exit|via|"
-            r"in use|qnh)\b",
+            r"in use|qnh|q\.?n\.?h\.?)\b",
             low)
         if readback and pilot.phase == Phase.LINEUP:
             # Readback of "line up and wait" -> the takeoff clearance.
@@ -351,6 +368,13 @@ class AtcBrain:
         if re.search(r"\bradio check\b|\bhow (do you )?(read|copy)\b|"
                      r"\breadability\b|\bcomm check\b", low):
             return self._say("radio_check", callsign, agency=agency)
+        # Frequency-change acknowledgement ("Colt 1, channel 8, push"): the pilot
+        # is switching, so we stay *silent* — a "roger" would only step on the
+        # new frequency's first call.
+        if re.search(r"\bchannel\s*\d\b|\bpush\b|\bswitching\b", low) \
+                and not re.search(r"\b(request|clearance|taxi|inbound|requesting)\b",
+                                  low):
+            return ""
         if re.search(r"\bchecking (in|out)\b|\bwith you\b", low):
             return self._say("roger", callsign, agency=agency)
         if re.search(r"\b(reading back|roger|wilco|copy)\b", low):
@@ -400,10 +424,22 @@ class AtcBrain:
 
     def _handle_ground(self, callsign: str, pilot: PilotState,
                        low: str, track: AircraftTrack | None) -> str | None:
+        # Readback of the runway-in-use/QNH info ("25 in use, QNH 2992") ->
+        # "readback correct, advise when ready for clearance". Without this the
+        # line has no trigger (none of {information, taxi, clearance}) and the
+        # pilot gets "say again", stalling the flow at the very first exchange.
+        if pilot.phase == Phase.IDLE and re.search(
+                r"\b(in use|qnh|q\.?n\.?h\.?)\b", low):
+            return self._say("ground_info_readback", callsign)
         # Readback of the departure clearance ("after departure turn right Exit
-        # North, 1500 ft or below") -> "readback correct".
-        if pilot.phase == Phase.CLEARANCE and re.search(
-                r"\b(after departure|turn|exit|1500|or below|below)\b", low):
+        # North, 1500 ft or below") -> "readback correct". The pilot may read
+        # back the gate name ("Northwest") without saying "Exit", so also accept
+        # a configured gate name (the STT often drops the "Exit" prefix).
+        if pilot.phase == Phase.CLEARANCE and (
+                re.search(r"\b(after departure|turn|exit|1500|or below|below)\b",
+                          low)
+                or any(re.search(rf"\b{re.escape(gate.lower())}\b", low)
+                       for gate in self.gates)):
             return self._say("readback_correct", callsign,
                              agency=self.ground_short)
         if re.search(r"\b(clearance|ready to copy|ifr)\b", low):
@@ -415,14 +451,8 @@ class AtcBrain:
                 turn = self.airfield.exit_turn(gate, self.runway)
             key = "departure_exit" if turn else "departure_exit_straight"
             return self._say(key, callsign, gate=gate, turn=turn)
-        # Readback of the taxi clearance ("cleared taxi Sierra Echo and hold
-        # short runway 25") -> "readback correct". Must come before the taxi
-        # request and the hold-short report (which also say "hold short").
-        if pilot.phase == Phase.TAXI and re.search(r"\b(cleared|via)\b", low) \
-                and not re.search(r"\bholding\b", low):
-            return self._say("readback_correct", callsign,
-                             agency=self.ground_short)
         # Post-landing: taxi to parking (to a named ramp, or the nearest one).
+        # Must come before the taxi readback, which also matches "taxi".
         if re.search(r"\b(taxi to parking|to parking|to the ramp|to ramp|"
                      r"taxi to the ramp)\b", low):
             pilot.phase = Phase.TAXI
@@ -437,6 +467,14 @@ class AtcBrain:
             return self._say("taxi_parking", callsign,
                              parking=parking or "the ramp",
                              taxi_route=route or "Whiskey")
+        # Readback of the taxi clearance ("cleared taxi Sierra Echo and hold
+        # short runway 25") -> "readback correct". Must come before the taxi
+        # request and the hold-short report (which also say "hold short").
+        if pilot.phase == Phase.TAXI and re.search(
+                r"\b(clear|cleared|copy|roger|via|taxi)\b", low) \
+                and not re.search(r"\bholding\b", low):
+            return self._say("readback_correct", callsign,
+                             agency=self.ground_short)
         if re.search(r"\b(request(?:ing)?|asking for|like)\b.*\btaxi(?:ing)?\b"
                      r"|\btaxi(?:ing)?\b.*\b(startup|start up|start|runway)\b",
                      low):
@@ -546,6 +584,13 @@ class AtcBrain:
         if re.search(r"\b(in the break|the break|overhead)\b", low):
             pilot.phase = Phase.LANDING
             return self._say("break_ack", callsign)
+        # Readback of the takeoff clearance once already cleared ("right turn
+        # out, cleared for takeoff, 33, Colt 1"). Must come before the "final"
+        # check, so a readback containing "turn" is not misread as a landing.
+        if pilot.phase == Phase.DEPARTURE and re.search(
+                r"\b(cleared|takeoff|take off|right turn|left turn|turnout)\b",
+                low):
+            return self._say("roger", callsign, agency=self.tower_short)
         # After landing, Tower hands the flight to Ground.
         if re.search(r"\b(vacated|clear of the runway|off the runway|"
                      r"runway vacated|clear of runway)\b", low):
@@ -812,13 +857,16 @@ class AtcBrain:
         """Warn a pilot who is on the runway without a takeoff/landing clearance.
 
         Fires once per incursion (re-arms when off the runway). A pilot in the
-        Departure or Landing phase is legitimately on the runway.
+        Departure or Landing phase is legitimately on the runway. So is a pilot
+        in **Lineup** — "line up and wait" *explicitly* puts them on the runway,
+        so warning them to "vacate immediately" would be wrong (and did, before
+        this was added).
         """
         pilot = self._pilot(callsign)
         if not on_runway:
             pilot.incursion_warned = False
             return None
-        if pilot.phase in (Phase.DEPARTURE, Phase.LANDING):
+        if pilot.phase in (Phase.LINEUP, Phase.DEPARTURE, Phase.LANDING):
             return None
         if pilot.incursion_warned:
             return None

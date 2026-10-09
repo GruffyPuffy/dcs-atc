@@ -91,5 +91,9 @@ class ControllerWorker:
                 + (f"  [phase={state.phase.value} entry={state.entry_gate!r} "
                    f"exit={state.exit_gate!r}]" if state else ""))
             self.shared.speak(reply, self.freq_hz, self.voice, self.controller)
+        elif reply == "":
+            # A deliberate silent acknowledgement (e.g. "channel 8, push"):
+            # the pilot acknowledged the handoff, so we do not transmit.
+            self.shared.log(f"[{tag}] {who}: <handoff ack, silent>")
         else:
             self.shared.log(f"[{tag}] {who}: <no matching intent>")

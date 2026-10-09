@@ -635,6 +635,14 @@ def test_runway_incursion_silent_when_cleared(airfield, brain):
     assert brain.check_incursion("Colt 1", on_runway=True) is None
 
 
+def test_runway_incursion_silent_while_lined_up(airfield, brain):
+    # "line up and wait" explicitly puts the pilot on the runway: no incursion.
+    sc = _scenario(airfield, brain).at_threshold("25")
+    sc.say("Tower, Colt 1, ready for departure", Controller.TOWER)
+    assert brain.pilots["Colt 1"].phase == Phase.LINEUP
+    assert brain.check_incursion("Colt 1", on_runway=True) is None
+
+
 def test_runway_incursion_fires_once(airfield, brain):
     sc = _scenario(airfield, brain).park("Ramp South")
     sc.say("Ground, Colt 1, requesting taxi", Controller.GROUND)

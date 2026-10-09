@@ -17,6 +17,7 @@ a CDN for the map. Run it from the bot with `--map-port`, or standalone:
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 from collections import deque
@@ -52,6 +53,9 @@ TRACK_RADIUS_NM = 60.0
 TRACK_MIN_MOVE_NM = 0.02
 # How many radio calls to keep per aircraft (comm markers on the path).
 COMM_MAX = 1000
+# How often (seconds of wall clock) to autosave the track history when a
+# `tracks_file` is configured. Cheap (a few KB of JSON at most).
+TRACKS_SAVE_INTERVAL = 10.0
 
 
 class TrackHistory:
@@ -62,6 +66,13 @@ class TrackHistory:
     *where* the reply came). Recording stops beyond `radius_nm` (off-station)
     and points closer than `min_move_nm` are skipped, so the trail is a clean
     path rather than a cloud of dots.
+
+    Trails are **retained** after an aircraft leaves the mission (or the pilot
+    quits the slot): this is a debrief tool, so a completed sortie must stay
+    reviewable — a pilot who logs off should still see their whole flight.
+    Retained tracks are marked `active=False` in the snapshot and drawn dimmed;
+    they are only ever removed by a `reset`, a server restart without a
+    `tracks_file`, or (optionally) loading a saved file. See `save`/`load`.
     """
 
     def __init__(self, radius_nm: float = TRACK_RADIUS_NM,
@@ -74,10 +85,12 @@ class TrackHistory:
         self.comm_max = comm_max
         self._tracks: dict[str, deque[tuple[float, float, float]]] = {}
         self._comms: dict[str, deque[dict]] = {}
+        self._active: set[str] = set()
 
     def update(self, callsign: str, lat: float, lon: float,
                distance_nm: float, alt_ft: float = 0.0) -> None:
         """Record a position for a callsign (skips off-station / tiny moves)."""
+        self._active.add(callsign)
         if distance_nm > self.radius_nm:
             return  # off-station: stop recording
         track = self._tracks.get(callsign)
@@ -110,18 +123,73 @@ class TrackHistory:
     def comms(self, callsign: str) -> list[dict]:
         return list(self._comms.get(callsign, ()))
 
+    def is_active(self, callsign: str) -> bool:
+        return callsign in self._active
+
+    def callsigns(self) -> list[str]:
+        """Every callsign with a recorded trail (active or retained)."""
+        return list(self._tracks)
+
     def forget(self, callsign: str) -> None:
         self._tracks.pop(callsign, None)
         self._comms.pop(callsign, None)
+        self._active.discard(callsign)
 
-    def prune(self, active: set[str]) -> None:
-        """Drop trails for aircraft that are no longer present."""
-        for callsign in list(self._tracks):
-            if callsign not in active:
-                del self._tracks[callsign]
-        for callsign in list(self._comms):
-            if callsign not in active:
-                del self._comms[callsign]
+    def set_active(self, active: set[str]) -> None:
+        """Mark which callsigns are currently in the mission.
+
+        Trails are **not** dropped for the ones no longer present — they are
+        retained for debrief. This only flips the `active` flag used to dim
+        completed trails on the map.
+        """
+        self._active = set(active)
+
+    def to_json(self) -> dict:
+        """Serialisable snapshot of every trail + comm marker."""
+        return {
+            "tracks": {cs: [list(p) for p in pts]
+                       for cs, pts in self._tracks.items()},
+            "comms": {cs: list(c) for cs, c in self._comms.items()},
+        }
+
+    def load_json(self, data: dict) -> None:
+        """Merge a `to_json()` snapshot (used to restore a saved debrief)."""
+        if not isinstance(data, dict):
+            return
+        for cs, pts in (data.get("tracks") or {}).items():
+            track = deque(maxlen=self.max_points)
+            for p in pts:
+                try:
+                    track.append((float(p[0]), float(p[1]),
+                                  float(p[2]) if len(p) > 2 else 0.0))
+                except (TypeError, ValueError, IndexError):
+                    continue
+            if track:
+                self._tracks[cs] = track
+        for cs, calls in (data.get("comms") or {}).items():
+            comms = deque(maxlen=self.comm_max)
+            for c in calls:
+                if isinstance(c, dict):
+                    comms.append(c)
+            if comms:
+                self._comms[cs] = comms
+
+    def save(self, path: Path) -> None:
+        """Write the tracks to `path` atomically (temp file + rename)."""
+        try:
+            tmp = path.with_name(path.name + ".tmp")
+            tmp.write_text(json.dumps(self.to_json()))
+            os.replace(tmp, path)
+        except OSError:
+            pass  # a debrief file is best-effort; never take the map down
+
+    def load(self, path: Path) -> None:
+        """Restore tracks from `path`, if it exists and parses."""
+        try:
+            if path.exists():
+                self.load_json(json.loads(path.read_text()))
+        except (OSError, ValueError):
+            pass
 
 
 def _nm_between(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -239,7 +307,8 @@ class MapService:
 
     def __init__(self, airfield: Airfield, brain: AtcBrain,
                  state: StateClient | None, lock: threading.RLock | None = None,
-                 basemap: str | None = None):
+                 basemap: str | None = None,
+                 tracks_file: Path | str | None = None):
         self.airfield = airfield
         self.brain = brain
         self.state = state
@@ -250,8 +319,30 @@ class MapService:
         self._chatter_lock = threading.Lock()
         # Flight-path trails (per callsign), for the map's path overlay.
         self.tracks = TrackHistory()
+        # Optional debrief file: restore saved trails on startup and autosave
+        # them periodically, so a sortie survives a bot/map restart.
+        self.tracks_file = Path(tracks_file) if tracks_file else None
+        self._last_saved = 0.0
+        if self.tracks_file is not None:
+            self.tracks.load(self.tracks_file)
         # Last seen phase per callsign, to record phase transitions on the path.
         self._last_phase: dict[str, str] = {}
+
+    def save_tracks(self) -> None:
+        """Write the current trails to `tracks_file` (no-op if unconfigured)."""
+        if self.tracks_file is not None:
+            with self.lock:
+                self.tracks.save(self.tracks_file)
+
+    def _maybe_save_tracks(self) -> None:
+        """Autosave the trails at most every `TRACKS_SAVE_INTERVAL` seconds."""
+        if self.tracks_file is None:
+            return
+        now = time.monotonic()
+        if now - self._last_saved < TRACKS_SAVE_INTERVAL:
+            return
+        self._last_saved = now
+        self.save_tracks()
 
     def log_chatter(self, kind: str, freq_mhz: float, who: str,
                     text: str, controller: str = "") -> None:
@@ -335,16 +426,41 @@ class MapService:
                         "controller": pilot.last_controller if pilot else "",
                         "entry_gate": pilot.entry_gate if pilot else "",
                         "exit_gate": pilot.exit_gate if pilot else "",
+                        "active": True,
                         "path": self.tracks.path(callsign),
                         "comms": self.tracks.comms(callsign),
                     })
-                # Drop trails for aircraft that have left the mission.
+                # Mark which aircraft are present, so the map can dim the rest.
+                # Trails are *retained* (not pruned) for debrief after a pilot
+                # leaves the mission or quits the slot.
                 active = {self.brain.callsign_for_speaker(ac.player)
                           for ac in players}
-                self.tracks.prune(active)
+                self.tracks.set_active(active)
                 for callsign in list(self._last_phase):
                     if callsign not in active:
                         del self._last_phase[callsign]
+                # Retained (inactive) completed sorties, so a logged-off pilot
+                # still sees their whole flight on the map.
+                for callsign in self.tracks.callsigns():
+                    if callsign in active:
+                        continue
+                    aircraft.append({
+                        "callsign": callsign,
+                        "player": "",
+                        "type": "",
+                        "lat": None,
+                        "lon": None,
+                        "alt_ft": None,
+                        "heading": None,
+                        "coalition": 0,
+                        "phase": "",
+                        "controller": "",
+                        "entry_gate": "",
+                        "exit_gate": "",
+                        "active": False,
+                        "path": self.tracks.path(callsign),
+                        "comms": self.tracks.comms(callsign),
+                    })
             # AI air traffic (planes/helicopters) near the field, for
             # situational awareness. The map page filters these to the current
             # viewport, so zoom/pan declutters without a server-side radius.
@@ -362,6 +478,7 @@ class MapService:
                     "heading": round(ac.heading),
                     "coalition": ac.coalition,
                 })
+        self._maybe_save_tracks()  # keep the debrief file reasonably fresh
         return {
             "airfield": _airspace_payload(self.airfield, self.basemap),
             "aircraft": aircraft,
@@ -426,14 +543,24 @@ def start_map_server(airfield: Airfield, brain: AtcBrain,
                      lock: threading.RLock | None = None,
                      log: Callable[[str], None] = print,
                      basemap: str | None = None,
+                     tracks_file: Path | str | None = None,
                      ) -> tuple[ThreadingHTTPServer | None, MapService]:
     """Start the map server on a daemon thread.
 
     Returns (server, service). `server` is None (and a warning is logged) if the
     port is already in use, so a busy map port never takes the ATC bot down.
     The `service` is returned so the bot can push chatter-log entries to it.
+
+    `tracks_file`, when set, restores saved trails on startup and autosaves them
+    during the run (plus once at process exit), so a completed sortie survives a
+    bot restart for after-action review.
     """
-    service = MapService(airfield, brain, state, lock, basemap=basemap)
+    service = MapService(airfield, brain, state, lock, basemap=basemap,
+                         tracks_file=tracks_file)
+    if tracks_file is not None:
+        import atexit
+        atexit.register(service.save_tracks)
+        log(f"[*] Flight-track debrief file: {Path(tracks_file)}")
     try:
         server = ThreadingHTTPServer((host, port), make_handler(service))
     except OSError as error:
@@ -462,7 +589,17 @@ def main() -> None:
     parser.add_argument("--base-map", default=None,
                         help="base map layer: 'dcs' (DCS tiles) or 'osm' "
                              "(default: airspace.json map.base)")
+    parser.add_argument("--tracks-file", default=None,
+                        help="save/restore flight trails here (debrief). "
+                             "Set automatically with --debug.")
+    parser.add_argument("--debug", action="store_true",
+                        help="save flight trails to /tmp/atc_tracks.json "
+                             "for after-action review")
     args = parser.parse_args()
+
+    tracks_file = args.tracks_file
+    if tracks_file is None and args.debug:
+        tracks_file = "/tmp/atc_tracks.json"
 
     airspace = Airspace.load(args.airspace) if args.airspace else Airspace.load()
     airfield = airspace.get(args.airfield)
@@ -474,13 +611,16 @@ def main() -> None:
                      airfield=airfield)
     state = None if args.no_state else StateClient(args.state_host, args.state_port)
     server, _service = start_map_server(airfield, brain, state, args.port, args.host,
-                                        basemap=args.base_map)
+                                        basemap=args.base_map,
+                                        tracks_file=tracks_file)
     if server is None:
         raise SystemExit("map server could not start")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
+    finally:
+        _service.save_tracks()
 
 
 if __name__ == "__main__":

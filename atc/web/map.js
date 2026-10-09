@@ -158,27 +158,33 @@ function drawAircraft(list) {
   const seen = new Set();
   for (const ac of list) {
     seen.add(ac.callsign);
-    const pos = [ac.lat, ac.lon];
-    const tip = `${ac.callsign} (${ac.type})<br>${ac.phase} · ${ac.controller || '—'}<br>`
-      + `${ac.alt_ft} ft · ${ac.heading}°`;
-    if (markers.has(ac.callsign)) {
+    if (ac.active === false) {
+      // Retained (logged-off) sortie: no live marker, just the trail so the
+      // whole flight stays reviewable after the pilot leaves the slot.
       const m = markers.get(ac.callsign);
-      m.setLatLng(pos).setIcon(aircraftIcon(ac)).setTooltipContent(tip);
+      if (m) { aircraftLayer.removeLayer(m); markers.delete(ac.callsign); }
     } else {
-      const m = L.marker(pos, { icon: aircraftIcon(ac) })
-        .bindTooltip(tip).addTo(aircraftLayer);
-      markers.set(ac.callsign, m);
+      const pos = [ac.lat, ac.lon];
+      const tip = `${ac.callsign} (${ac.type})<br>${ac.phase} · ${ac.controller || '—'}<br>`
+        + `${ac.alt_ft} ft · ${ac.heading}°`;
+      if (markers.has(ac.callsign)) {
+        const m = markers.get(ac.callsign);
+        m.setLatLng(pos).setIcon(aircraftIcon(ac)).setTooltipContent(tip);
+      } else {
+        const m = L.marker(pos, { icon: aircraftIcon(ac) })
+          .bindTooltip(tip).addTo(aircraftLayer);
+        markers.set(ac.callsign, m);
+      }
     }
     drawPath(ac);
     drawComms(ac);
   }
+  // Drop only the *markers* for aircraft no longer reported. Paths and comm
+  // markers are kept client-side (the server retains them too), so a trail
+  // never disappears mid-review during a transient server hiccup.
   for (const [callsign, m] of markers) {
     if (!seen.has(callsign)) {
       aircraftLayer.removeLayer(m); markers.delete(callsign);
-      const p = paths.get(callsign);
-      if (p) { pathLayer.removeLayer(p); paths.delete(callsign); }
-      const c = commMarkers.get(callsign);
-      if (c) { commLayer.removeLayer(c); commMarkers.delete(callsign); }
     }
   }
 }
@@ -186,12 +192,18 @@ function drawAircraft(list) {
 function drawPath(ac) {
   const pts = ac.path || [];
   if (pts.length < 2) return;
+  const active = ac.active !== false;
   const color = PHASE_COLOR[ac.controller] || '#8b949e';
+  // Completed (logged-off) sorties are dimmed + dashed, so they read as
+  // history rather than live traffic.
+  const style = active
+    ? { color, weight: 2, opacity: 0.6, dashArray: null }
+    : { color, weight: 1.5, opacity: 0.3, dashArray: '3 3' };
   if (paths.has(ac.callsign)) {
-    paths.get(ac.callsign).setLatLngs(pts).setStyle({ color });
+    paths.get(ac.callsign).setLatLngs(pts).setStyle(style);
   } else {
     paths.set(ac.callsign, L.polyline(pts, {
-      color, weight: 2, opacity: 0.6, interactive: false,
+      ...style, interactive: false,
     }).addTo(pathLayer));
   }
 }
@@ -201,6 +213,7 @@ function drawPath(ac) {
 // that?").
 function drawComms(ac) {
   const comms = ac.comms || [];
+  const active = ac.active !== false;
   let group = commMarkers.get(ac.callsign);
   if (!group) { group = L.layerGroup().addTo(commLayer); commMarkers.set(ac.callsign, group); }
   group.clearLayers();
@@ -214,7 +227,7 @@ function drawComms(ac) {
       : c.text;
     L.circleMarker([c.lat, c.lon], {
       radius: c.kind === 'state' ? 2.5 : 3, color, weight: 1,
-      fillColor: color, fillOpacity: 0.9,
+      fillColor: color, fillOpacity: active ? 0.9 : 0.35,
     }).bindTooltip(
       `<b>${c.t} ${label}</b>${c.controller ? ' · ' + c.controller : ''}<br>${body}`,
       { direction: 'top' }
@@ -254,7 +267,9 @@ function drawAiAir(list) {
 
 function drawTable(list) {
   const body = document.querySelector('#traffic tbody');
-  body.innerHTML = list.map(ac =>
+  // Live aircraft only: retained (logged-off) trails have no current phase.
+  const rows = list.filter(ac => ac.active !== false);
+  body.innerHTML = rows.map(ac =>
     `<tr><td>${ac.callsign}</td><td>${ac.phase}</td>`
     + `<td>${ac.alt_ft}</td><td>${String(ac.heading).padStart(3, '0')}</td></tr>`
   ).join('');

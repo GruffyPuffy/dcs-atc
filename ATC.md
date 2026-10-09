@@ -56,9 +56,23 @@ STT mangles callsigns, so matching is tolerant:
 Examples: `cold tree` → `Colt 3`, `kolt 2` → `Colt 2`, `fort 2` → `Ford 2`,
 `hog 1` → `Hawg 1`, `vyper 1` → `Viper 1`, `springfeeld 2` → `Springfield 2`.
 
-If no callsign is recognised, the bot stays silent (it assumes the transmission
-was not for it). If a callsign is recognised but the request is not understood,
-the tower replies **"say again"**.
+If a callsign is recognised but the request is not understood, the tower replies
+**"say again"**.
+
+If **no** callsign is recognised, the behaviour depends on how many pilots are
+online:
+
+- **Single-pilot (training) server** — the bot replies **"say again with your
+  callsign"**, so a forgotten callsign (or a garbled transmission) is not met
+  with silence. The most common trainee slip — dropping the callsign — is
+  answered explicitly instead of being ignored. Solo mode is detected
+  automatically from the live player count (see §7).
+- **Multiple pilots** — the bot stays silent (it assumes the transmission was
+  for someone else), so it never steps on another flight's calls.
+
+A pilot acknowledging a **frequency change** ("Colt 1, channel 8, push") gets
+**no reply at all** — the transmission was a handoff, and answering would only
+step on the next controller's first call.
 
 > If the state bridge is unavailable, the bot falls back to a built-in list of
 > common flight names. Tune the confusion rules in `atc/phonetics.py`
@@ -817,11 +831,13 @@ shows:
   controller colour) showing where it has been. The trail is recorded by
   `map_server.TrackHistory` on each poll: it keeps up to `TRACK_MAX_POINTS`
   (3600 ≈ 2 hours at the 2 s cadence — this is a **debug** tool, so nothing is
-  time-expired; the trail stays until the aircraft leaves or the server
-  restarts), **stops recording beyond `TRACK_RADIUS_NM`** (60 NM — off-station),
-  and skips points closer than `TRACK_MIN_MOVE_NM` (0.02 NM) so a parked
-  aircraft does not fill the trail with dots. Trails are dropped when the
-  aircraft leaves.
+  time-expired), **stops recording beyond `TRACK_RADIUS_NM`** (60 NM —
+  off-station), and skips points closer than `TRACK_MIN_MOVE_NM` (0.02 NM) so a
+  parked aircraft does not fill the trail with dots. Trails are **retained**
+  when the aircraft leaves the mission or the pilot quits the slot (they are
+  drawn dimmed and dashed, as history), so a completed sortie stays reviewable
+  after log-off — they are only cleared by `reset`, a server restart, or a new
+  session (see *Debrief / after-action review* below).
 - **Comm markers**: small dots on the path where the pilot called (blue), where
   the ATC reply came (green), and where the **brain changed phase** (amber,
   labelled with the new phase). Hover a dot to see the time, agency and the call
@@ -849,6 +865,23 @@ live debugging ("did the bot hear me? what did it reply?").
 Each agency has a **checkbox filter** (Ground / Tower / Control / ATIS), so you
 can hide the ATIS spam and watch just the controller you care about. The log
 keeps the last 200 events.
+
+### Debrief / after-action review
+
+Because trails are retained (not pruned) when a pilot leaves, you can review a
+whole flight — including one that ended with you logging off. To make that
+survive a **bot restart**, enable the debrief file with `--debug`:
+
+    uv run atc_bot.py --airfield Gudauta --map-port 8090 --debug
+
+This autosaves every trail + comm marker to **`/tmp/atc_tracks.json`** (override
+with `--tracks-file <path>`) every ~10 s and once on exit. On startup the map
+**restores** that file, so the previous sortie is still drawn (dimmed) next time
+you open the map — reopening `http://<host>:8090/` shows the finished flight for
+review. `start_bot.sh` deletes `/tmp/atc_tracks.json` at the start of each run,
+so each session begins clean; use `--tracks-file` (or run `map_server.py`
+directly) if you want to keep accumulating history across restarts. The
+standalone `map_server.py` accepts `--debug` and `--tracks-file` too.
 
 > No extra Python dependencies: the server is stdlib `http.server`
 > (`atc/map_server.py`), and the page is plain HTML/JS in `atc/web/`. If the

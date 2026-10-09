@@ -13,7 +13,7 @@ PHRASEOLOGY = Path(__file__).resolve().parent.parent / "phraseology.json"
 REQUIRED_TEMPLATES = {
     "taxi", "hold_short", "takeoff", "line_up", "lineup_readback",
     "hold_short_traffic", "continue_approach",
-    "ground_ack", "ground_info", "readback_correct",
+    "ground_ack", "ground_info", "ground_info_readback", "readback_correct",
     "inbound_outside", "inbound_inside", "inbound_via_gate",
     "report_runway_in_sight", "cleared_land", "cleared_overhead", "break_ack",
     "departure_exit", "contact_tower", "contact_tower_holding", "contact_control", "control_join",
@@ -21,6 +21,7 @@ REQUIRED_TEMPLATES = {
     "control_climb", "control_descend",
     "contact_tower_from_control",
     "go_around", "ctr_warning", "roger", "say_again",
+    "say_again_no_callsign",
     "radio_check", "atc_online",
     "state_reset", "cancel_ack",
     "help_idle", "help_clearance", "help_taxi", "help_holding", "help_lineup",

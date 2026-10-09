@@ -106,6 +106,9 @@ def main() -> None:
                         help="serve the live map view on this port (0 disables)")
     parser.add_argument("--map-host", default="0.0.0.0",
                         help="bind address for the map view")
+    parser.add_argument("--tracks-file", default=None,
+                        help="save/restore flight trails here for debrief. "
+                             "Defaults to /tmp/atc_tracks.json with --debug.")
     parser.add_argument("--no-announce", action="store_true",
                         help="skip the one-time 'ATC online' announcement")
     parser.add_argument("--debug", action="store_true",
@@ -329,12 +332,17 @@ def main() -> None:
                for hz, controller in controller_by_freq.items()}
 
     # Optional live map view (Leaflet) showing aircraft + their flight phase.
+    # With --debug, fly the trails to /tmp/atc_tracks.json (or --tracks-file) so
+    # a sortie can be replayed for after-action review after the bot stops.
     map_service = None
     if args.map_port:
         from map_server import start_map_server
+        tracks_file = args.tracks_file
+        if tracks_file is None and args.debug:
+            tracks_file = "/tmp/atc_tracks.json"
         _server, map_service = start_map_server(
             airfield, brain, state, args.map_port,
-            host=args.map_host, lock=lock, log=log)
+            host=args.map_host, lock=lock, log=log, tracks_file=tracks_file)
 
     def chatter(kind: str, freq_hz: float, who: str, text: str,
                 controller: Controller | str | None = None) -> None:
@@ -364,6 +372,10 @@ def main() -> None:
             try:
                 players = state.aircraft()
                 all_units = state.all_units()
+                with lock:
+                    # Solo training mode: with one (or zero) players online, an
+                    # unrecognized call is prompted instead of ignored.
+                    brain.set_pilot_count(len(players))
                 for ac in players:
                     # Address the pilot by their flight callsign (learned from
                     # their transmissions), not the raw DCS unit name.

@@ -191,6 +191,26 @@ def test_ground_acknowledges_with_information(brain):
     assert reply == "Colt 1, Ground."
 
 
+def test_ground_runway_qnh_readback(brain):
+    # The kneeboard line "25 in use, QNH 2992, Adder11" must be answered with
+    # "readback correct, advise when ready for clearance" — not "say again".
+    brain.handle("Ground, Colt 1, two-ship Hornets on Ramp South",
+                 controller=Controller.GROUND)
+    reply = brain.handle("25 in use, QNH 2992, Colt 1",
+                         controller=Controller.GROUND)
+    assert "readback correct" in reply
+    assert "ready for clearance" in reply
+
+
+def test_ground_clearance_readback_without_exit_word(brain):
+    # STT may drop the "Exit" prefix; the gate name alone must still read back.
+    brain.handle("Ground, Colt 1, ready to copy clearance",
+                 controller=Controller.GROUND)
+    reply = brain.handle("After departure turn right West 1500 ft or below, Colt 1",
+                         controller=Controller.GROUND)
+    assert "readback correct" in reply
+
+
 def test_ground_clearance_readback_correct(brain):
     brain.handle("Ground, Colt 1, ready to copy clearance",
                  controller=Controller.GROUND)
@@ -204,6 +224,25 @@ def test_ground_taxi_readback_correct(brain):
     reply = brain.handle("Cleared taxi Sierra Echo and hold short runway 25, Colt 1",
                          controller=Controller.GROUND)
     assert "readback correct" in reply
+
+
+def test_taxi_readback_tolerates_stt_clear(brain):
+    # Common STT slip: "clear taxi" / "clear taxi, solo, hold short runway 25".
+    brain.handle("Ground, Colt 1, requesting taxi", controller=Controller.GROUND)
+    reply = brain.handle("Clear taxi, and hold short runway 25, Colt 1",
+                         controller=Controller.GROUND)
+    assert "readback correct" in reply
+
+
+def test_takeoff_readback_after_clearance_gets_roger(brain):
+    # Once cleared for takeoff, reading the clearance back must NOT "say again".
+    brain.handle("Ground, Colt 1, requesting taxi", controller=Controller.GROUND)
+    brain.handle("Tower, Colt 1, ready for departure", controller=Controller.TOWER)
+    brain.handle("Line up and wait 25, Colt 1", controller=Controller.TOWER)
+    reply = brain.handle("Right turn out, cleared for takeoff, 25, Colt 1",
+                         controller=Controller.TOWER)
+    assert "say again" not in reply.lower()
+    assert brain.pilots["Colt 1"].phase == Phase.DEPARTURE
 
 
 def test_tower_lineup_readback_clears_takeoff(brain):
@@ -385,6 +424,27 @@ def test_no_callsign_returns_none(brain):
 def test_roger_on_readback(brain):
     reply = brain.handle("Tower, Colt 1, wilco", controller=Controller.TOWER)
     assert "roger" in reply.lower()
+
+
+def test_frequency_change_push_is_silent(brain):
+    # The kneeboard handoff ack "Colt 1, channel 8, push" switches frequency:
+    # the bot stays silent (no reply that would step on the next call).
+    reply = brain.handle("Colt 1, channel 8, push", controller=Controller.TOWER)
+    assert reply == ""
+
+
+def test_solo_mode_prompts_on_unknown_call(brain):
+    # Single-pilot trainer: an unrecognized call (e.g. a forgotten callsign)
+    # gets a spoken prompt instead of silence.
+    brain.set_pilot_count(1)
+    reply = brain.handle("requesting taxi", controller=Controller.GROUND)
+    assert reply and "say again" in reply.lower()
+
+
+def test_multiplayer_stays_silent_on_unknown_call(brain):
+    # With other traffic online, we do not answer calls we cannot tie to a pilot.
+    brain.set_pilot_count(3)
+    assert brain.handle("requesting taxi", controller=Controller.GROUND) is None
 
 
 def test_radio_check(brain):
