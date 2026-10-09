@@ -374,7 +374,7 @@ def main() -> None:
                         warning = brain.on_ctr_event(callsign, event, tr)
                     if warning:
                         log(f"CTR {event.value}: {callsign} ({ac.player})")
-                        speak(warning)
+                        speak(warning, controller=Controller.TOWER)
                     on_final = airfield.is_on_final(ac.lat, ac.lon, ac.heading)
                     if on_final:
                         occupied = airfield.runway_occupied(
@@ -383,7 +383,7 @@ def main() -> None:
                             call = brain.check_final(callsign, on_final, occupied)
                         if call:
                             log(f"RUNWAY OCCUPIED: {callsign} ({ac.player})")
-                            speak(call)
+                            speak(call, controller=Controller.TOWER)
                     else:
                         with lock:
                             brain.check_final(callsign, False, False)
@@ -393,7 +393,7 @@ def main() -> None:
                         alt_call = brain.check_altitude(callsign, tr)
                     if alt_call:
                         log(f"ALTITUDE BUST: {callsign} ({ac.player})")
-                        speak(alt_call)
+                        speak(alt_call, controller=Controller.TOWER)
                     # Runway incursion: on the runway without a clearance.
                     on_rwy = airfield.runway_occupied(
                         [ac], exclude=None, on_runway=True)
@@ -401,7 +401,7 @@ def main() -> None:
                         inc_call = brain.check_incursion(callsign, on_rwy)
                     if inc_call:
                         log(f"RUNWAY INCURSION: {callsign} ({ac.player})")
-                        speak(inc_call)
+                        speak(inc_call, controller=Controller.TOWER)
             except (OSError, RuntimeError):
                 pass  # bridge down or mission not running; retry next tick
 

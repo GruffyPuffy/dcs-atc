@@ -772,6 +772,25 @@ The page is **Leaflet + OpenStreetMap** (loaded from a CDN) and shows:
   grey (blue) / red (red) triangles, so you can see the traffic the bot
   sequences against. The page draws only those in the **current viewport**, so
   zooming and panning declutter naturally.
+- **Flight paths**: each aircraft leaves a coloured **trail** (matching its
+  controller colour) showing where it has been. The trail is recorded by
+  `map_server.TrackHistory` on each poll: it keeps up to `TRACK_MAX_POINTS`
+  (3600 ≈ 2 hours at the 2 s cadence — this is a **debug** tool, so nothing is
+  time-expired; the trail stays until the aircraft leaves or the server
+  restarts), **stops recording beyond `TRACK_RADIUS_NM`** (60 NM — off-station),
+  and skips points closer than `TRACK_MIN_MOVE_NM` (0.02 NM) so a parked
+  aircraft does not fill the trail with dots. Trails are dropped when the
+  aircraft leaves.
+- **Comm markers**: small dots on the path where the pilot called (blue), where
+  the ATC reply came (green), and where the **brain changed phase** (amber,
+  labelled with the new phase). Hover a dot to see the time, agency and the call
+  text (or the phase) — so you can see *where* you were when you said something,
+  *where* the answer came, and *when* the state machine advanced. ATC replies are
+  pinned to the pilot's last known position (the reply opens with the callsign,
+  which identifies the flight). Each path point also carries the **altitude**.
+  **Every** comm is captured — pilot calls, controller replies, and the
+  **automatic** calls (CTR warning, go-around, altitude bust, runway incursion)
+  all flow through the same chatter path, so the timeline is complete.
 
 Data comes from the same sources the bot uses — positions from the state bridge
 (`state_client`), phases from the shared `AtcBrain` (`PilotState.phase`), and

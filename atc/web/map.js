@@ -7,9 +7,11 @@ const PHASE_COLOR = {
   control: '#58a6ff',  // Control agency
 };
 
-let map, ctrLayer, staticLayer, aircraftLayer, aiLayer, chartLayer;
+let map, ctrLayer, staticLayer, aircraftLayer, aiLayer, chartLayer, pathLayer, commLayer;
 const markers = new Map();  // callsign -> L.marker
 const aiMarkers = new Map();
+const paths = new Map();    // callsign -> L.polyline
+const commMarkers = new Map();  // callsign -> L.layerGroup
 
 function initMap(center) {
   map = L.map('map', { preferCanvas: true }).setView(center, 11);
@@ -20,6 +22,8 @@ function initMap(center) {
   chartLayer = L.layerGroup().addTo(map);
   ctrLayer = L.layerGroup().addTo(map);
   staticLayer = L.layerGroup().addTo(map);
+  pathLayer = L.layerGroup().addTo(map);
+  commLayer = L.layerGroup().addTo(map);
   aiLayer = L.layerGroup().addTo(map);
   aircraftLayer = L.layerGroup().addTo(map);
   document.getElementById('chart-toggle').addEventListener('change', (e) => {
@@ -143,9 +147,56 @@ function drawAircraft(list) {
         .bindTooltip(tip).addTo(aircraftLayer);
       markers.set(ac.callsign, m);
     }
+    drawPath(ac);
+    drawComms(ac);
   }
   for (const [callsign, m] of markers) {
-    if (!seen.has(callsign)) { aircraftLayer.removeLayer(m); markers.delete(callsign); }
+    if (!seen.has(callsign)) {
+      aircraftLayer.removeLayer(m); markers.delete(callsign);
+      const p = paths.get(callsign);
+      if (p) { pathLayer.removeLayer(p); paths.delete(callsign); }
+      const c = commMarkers.get(callsign);
+      if (c) { commLayer.removeLayer(c); commMarkers.delete(callsign); }
+    }
+  }
+}
+
+function drawPath(ac) {
+  const pts = ac.path || [];
+  if (pts.length < 2) return;
+  const color = PHASE_COLOR[ac.controller] || '#8b949e';
+  if (paths.has(ac.callsign)) {
+    paths.get(ac.callsign).setLatLngs(pts).setStyle({ color });
+  } else {
+    paths.set(ac.callsign, L.polyline(pts, {
+      color, weight: 2, opacity: 0.6, interactive: false,
+    }).addTo(pathLayer));
+  }
+}
+
+// Small dots on the path where the pilot called / the reply came / the brain
+// changed phase. Click to see the text (a debug aid: "where was I when I said
+// that?").
+function drawComms(ac) {
+  const comms = ac.comms || [];
+  let group = commMarkers.get(ac.callsign);
+  if (!group) { group = L.layerGroup().addTo(commLayer); commMarkers.set(ac.callsign, group); }
+  group.clearLayers();
+  for (const c of comms) {
+    let color, label;
+    if (c.kind === 'tx') { color = '#3fb950'; label = 'ATC'; }
+    else if (c.kind === 'state') { color = '#d29922'; label = 'STATE'; }
+    else { color = '#58a6ff'; label = 'PILOT'; }
+    const body = c.kind === 'state'
+      ? `phase → <b>${c.text}</b>`
+      : c.text;
+    L.circleMarker([c.lat, c.lon], {
+      radius: c.kind === 'state' ? 2.5 : 3, color, weight: 1,
+      fillColor: color, fillOpacity: 0.9,
+    }).bindTooltip(
+      `<b>${c.t} ${label}</b>${c.controller ? ' · ' + c.controller : ''}<br>${body}`,
+      { direction: 'top' }
+    ).addTo(group);
   }
 }
 

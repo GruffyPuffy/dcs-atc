@@ -5,7 +5,7 @@ import threading
 import urllib.request
 
 from brain import Controller
-from map_server import MapService, make_handler, start_map_server
+from map_server import MapService, TrackHistory, make_handler, start_map_server
 from state_client import Aircraft
 from http.server import ThreadingHTTPServer
 
@@ -95,10 +95,142 @@ def test_chatter_callsign_empty_before_learned(brain, airfield):
     assert service.chatter()[-1]["callsign"] == ""
 
 
-def test_chatter_atc_lines_have_no_callsign(brain, airfield):
+def test_chatter_atc_lines_resolve_callsign(brain, airfield):
+    # an ATC reply opens with the callsign, so the log can tag it to the flight
     service = MapService(airfield, brain, FakeState([]))
     service.log_chatter("tx", 250.0, "ATC", "Colt 1, Ground.", "ground")
-    assert service.chatter()[-1]["callsign"] == ""
+    assert service.chatter()[-1]["callsign"] == "Colt 1"
+
+
+# ---------- Flight-path trails ----------
+
+def test_track_history_records_path():
+    t = TrackHistory()
+    t.update("Colt 1", 42.18, 42.50, distance_nm=5.0, alt_ft=1000)
+    t.update("Colt 1", 42.19, 42.51, distance_nm=5.0, alt_ft=1200)
+    assert t.path("Colt 1") == [[42.18, 42.50, 1000], [42.19, 42.51, 1200]]
+
+
+def test_track_history_stops_beyond_radius():
+    t = TrackHistory(radius_nm=40.0)
+    t.update("Colt 1", 42.18, 42.50, distance_nm=5.0)
+    t.update("Colt 1", 43.00, 43.00, distance_nm=80.0)  # off-station
+    assert len(t.path("Colt 1")) == 1
+
+
+def test_track_history_skips_tiny_moves():
+    t = TrackHistory(min_move_nm=0.02)
+    t.update("Colt 1", 42.1800, 42.5000, distance_nm=5.0)
+    t.update("Colt 1", 42.1800, 42.5000, distance_nm=5.0)  # identical
+    assert len(t.path("Colt 1")) == 1
+
+
+def test_track_history_caps_points():
+    t = TrackHistory(max_points=3)
+    for i in range(10):
+        t.update("Colt 1", 42.18 + i * 0.01, 42.50, distance_nm=5.0)
+    assert len(t.path("Colt 1")) == 3
+
+
+def test_track_history_prunes_absent():
+    t = TrackHistory()
+    t.update("Colt 1", 42.18, 42.50, distance_nm=5.0)
+    t.update("Ford 2", 42.19, 42.51, distance_nm=5.0)
+    t.prune({"Colt 1"})
+    assert t.path("Ford 2") == []
+    assert len(t.path("Colt 1")) == 1
+
+
+def test_snapshot_includes_path(brain, airfield):
+    # two snapshots at different positions -> the aircraft carries a trail
+    state = FakeState([_ac(lat=42.18, lon=42.50)])
+    service = MapService(airfield, brain, state)
+    service.snapshot()
+    state._aircraft = [_ac(lat=42.20, lon=42.52)]
+    snap = service.snapshot()
+    path = snap["aircraft"][0]["path"]
+    assert len(path) == 2
+    assert path[0][:2] == [42.18, 42.50]
+    assert path[0][2] == 1200  # altitude carried on the point
+
+
+def test_phase_transition_recorded_on_path(brain, airfield):
+    # a phase change shows up as a 'state' event on the timeline
+    brain.handle("Ground, Colt 1, requesting taxi", controller=Controller.GROUND)
+    brain.remember_speaker("Caveman", "Colt 1")
+    service = MapService(airfield, brain, FakeState([_ac()]))
+    service.snapshot()
+    states = [c for c in service.tracks.comms("Colt 1") if c["kind"] == "state"]
+    assert any(c["text"] == "Taxi" for c in states)
+
+
+def test_phase_transition_only_on_change(brain, airfield):
+    brain.handle("Ground, Colt 1, requesting taxi", controller=Controller.GROUND)
+    brain.remember_speaker("Caveman", "Colt 1")
+    service = MapService(airfield, brain, FakeState([_ac()]))
+    service.snapshot()
+    service.snapshot()  # same phase -> no new state event
+    states = [c for c in service.tracks.comms("Colt 1") if c["kind"] == "state"]
+    assert len(states) == 1
+
+
+# ---------- Comm markers on the path ----------
+
+def test_comm_marker_attached_to_path(brain, airfield):
+    brain.remember_speaker("Caveman", "Colt 1")
+    service = MapService(airfield, brain, FakeState([_ac()]))
+    service.snapshot()  # records the position
+    service.log_chatter("rx", 250.0, "Caveman", "Ground, Colt 1, requesting taxi",
+                        "ground")
+    comms = service.tracks.comms("Colt 1")
+    assert len(comms) == 1
+    assert comms[0]["kind"] == "rx"
+    assert comms[0]["text"] == "Ground, Colt 1, requesting taxi"
+    assert comms[0]["lat"] == 42.18  # pinned to the last known position
+
+
+def test_atc_reply_pinned_to_pilot_position(brain, airfield):
+    brain.remember_speaker("Caveman", "Colt 1")
+    service = MapService(airfield, brain, FakeState([_ac()]))
+    service.snapshot()
+    service.log_chatter("rx", 250.0, "Caveman", "Ground, Colt 1", "ground")
+    service.log_chatter("tx", 250.0, "ATC", "Colt 1, Ground.", "ground")
+    comms = service.tracks.comms("Colt 1")
+    assert [c["kind"] for c in comms] == ["rx", "tx"]
+
+
+def test_comm_marker_skipped_without_position(brain, airfield):
+    # a call before any position is known has nowhere to pin -> no marker
+    brain.remember_speaker("Caveman", "Colt 1")
+    service = MapService(airfield, brain, FakeState([]))
+    service.log_chatter("rx", 250.0, "Caveman", "Ground, Colt 1", "ground")
+    assert service.tracks.comms("Colt 1") == []
+
+
+def test_snapshot_includes_comms(brain, airfield):
+    brain.remember_speaker("Caveman", "Colt 1")
+    service = MapService(airfield, brain, FakeState([_ac()]))
+    service.snapshot()
+    service.log_chatter("rx", 250.0, "Caveman", "Ground, Colt 1", "ground")
+    snap = service.snapshot()
+    assert len(snap["aircraft"][0]["comms"]) == 1
+
+
+def test_all_comms_pinned_to_path(brain, airfield):
+    # every kind of comm — pilot call, ATC reply, automatic call — is pinned to
+    # the aircraft's path, so the timeline shows ALL comms.
+    brain.remember_speaker("Caveman", "Colt 1")
+    service = MapService(airfield, brain, FakeState([_ac()]))
+    service.snapshot()
+    service.log_chatter("rx", 263.0, "Caveman", "Tower, Colt 1, on final", "tower")
+    service.log_chatter("tx", 263.0, "ATC", "Colt 1, Tower, cleared to land.", "tower")
+    # an automatic call (go-around) — also a tx opening with the callsign
+    service.log_chatter("tx", 263.0, "ATC",
+                        "Colt 1, Tower, go around, runway 25 is occupied.", "tower")
+    comms = service.tracks.comms("Colt 1")
+    assert [c["kind"] for c in comms] == ["rx", "tx", "tx"]
+    assert "go around" in comms[-1]["text"]
+    assert all(c["lat"] == 42.18 for c in comms)  # all pinned to the position
 
 
 def test_http_endpoints_serve_api_and_page(brain, airfield):

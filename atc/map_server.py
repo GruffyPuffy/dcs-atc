@@ -39,6 +39,101 @@ AI_RADIUS_NM = 150.0
 # How many chatter-log entries to keep for the map's log drawer.
 CHATTER_LIMIT = 200
 
+# Flight-path trails. A full flight (inbound call -> parked) can run 15-30 min,
+# and this is a *debug* tool, so keep a very long history: at the ~2 s poll,
+# 3600 points is ~2 hours. Nothing is time-expired — the trail stays until the
+# aircraft leaves the mission (or the server restarts).
+TRACK_MAX_POINTS = 3600
+# Stop recording a trail once the aircraft is this far from the field (it is
+# off-station; the trail would only clutter the map and waste memory).
+TRACK_RADIUS_NM = 60.0
+# Don't add a point unless the aircraft has moved at least this far, so a parked
+# or orbiting aircraft does not fill the trail with near-identical points.
+TRACK_MIN_MOVE_NM = 0.02
+# How many radio calls to keep per aircraft (comm markers on the path).
+COMM_MAX = 1000
+
+
+class TrackHistory:
+    """Per-callsign flight-path trails + comm markers for the map.
+
+    Keeps a bounded deque of recent positions per aircraft, plus the radio calls
+    made at those positions (so the map can show *where* a pilot called and
+    *where* the reply came). Recording stops beyond `radius_nm` (off-station)
+    and points closer than `min_move_nm` are skipped, so the trail is a clean
+    path rather than a cloud of dots.
+    """
+
+    def __init__(self, radius_nm: float = TRACK_RADIUS_NM,
+                 max_points: int = TRACK_MAX_POINTS,
+                 min_move_nm: float = TRACK_MIN_MOVE_NM,
+                 comm_max: int = COMM_MAX):
+        self.radius_nm = radius_nm
+        self.max_points = max_points
+        self.min_move_nm = min_move_nm
+        self.comm_max = comm_max
+        self._tracks: dict[str, deque[tuple[float, float, float]]] = {}
+        self._comms: dict[str, deque[dict]] = {}
+
+    def update(self, callsign: str, lat: float, lon: float,
+               distance_nm: float, alt_ft: float = 0.0) -> None:
+        """Record a position for a callsign (skips off-station / tiny moves)."""
+        if distance_nm > self.radius_nm:
+            return  # off-station: stop recording
+        track = self._tracks.get(callsign)
+        if track is None:
+            track = deque(maxlen=self.max_points)
+            self._tracks[callsign] = track
+        if track:
+            plat, plon, _ = track[-1]
+            if _nm_between(plat, plon, lat, lon) < self.min_move_nm:
+                return  # barely moved
+        track.append((lat, lon, alt_ft))
+
+    def add_comm(self, callsign: str, lat: float, lon: float, kind: str,
+                 text: str, controller: str = "", t: str = "") -> None:
+        """Attach a radio call (or state event) to a position on the path."""
+        comms = self._comms.get(callsign)
+        if comms is None:
+            comms = deque(maxlen=self.comm_max)
+            self._comms[callsign] = comms
+        comms.append({"lat": lat, "lon": lon, "kind": kind, "text": text,
+                      "controller": controller, "t": t})
+
+    def last_position(self, callsign: str) -> tuple[float, float] | None:
+        track = self._tracks.get(callsign)
+        return (track[-1][0], track[-1][1]) if track else None
+
+    def path(self, callsign: str) -> list[list[float]]:
+        return [[lat, lon, alt] for lat, lon, alt in self._tracks.get(callsign, ())]
+
+    def comms(self, callsign: str) -> list[dict]:
+        return list(self._comms.get(callsign, ()))
+
+    def forget(self, callsign: str) -> None:
+        self._tracks.pop(callsign, None)
+        self._comms.pop(callsign, None)
+
+    def prune(self, active: set[str]) -> None:
+        """Drop trails for aircraft that are no longer present."""
+        for callsign in list(self._tracks):
+            if callsign not in active:
+                del self._tracks[callsign]
+        for callsign in list(self._comms):
+            if callsign not in active:
+                del self._comms[callsign]
+
+
+def _nm_between(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle distance in NM (small helper; avoids importing airspace)."""
+    import math
+    r = 6_371_000.0
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp = math.radians(lat2 - lat1)
+    dl = math.radians(lon2 - lon1)
+    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * r * math.asin(math.sqrt(a)) / 1852.0
+
 
 def _overlay_payload(airfield: Airfield) -> dict | None:
     """Georeferenced chart overlay for an airfield, if one has been generated.
@@ -117,6 +212,10 @@ class MapService:
         # Chatter log: recent radio traffic (rx + tx) for the map's log drawer.
         self._chatter: deque[dict] = deque(maxlen=CHATTER_LIMIT)
         self._chatter_lock = threading.Lock()
+        # Flight-path trails (per callsign), for the map's path overlay.
+        self.tracks = TrackHistory()
+        # Last seen phase per callsign, to record phase transitions on the path.
+        self._last_phase: dict[str, str] = {}
 
     def log_chatter(self, kind: str, freq_mhz: float, who: str,
                     text: str, controller: str = "") -> None:
@@ -130,8 +229,14 @@ class MapService:
                 callsign = self.brain.callsign_for_speaker(who)
             if callsign == who:
                 callsign = ""  # not learned yet; don't duplicate the name
+        elif kind == "tx":
+            # An ATC reply always opens with the callsign; use it to pin the
+            # reply to the pilot's position on the path.
+            with self.lock:
+                callsign = self.brain.callsigns.extract(text) or ""
+        stamp = time.strftime("%H:%M:%S")
         entry = {
-            "t": time.strftime("%H:%M:%S"),
+            "t": stamp,
             "kind": kind,
             "freq": round(freq_mhz, 3),
             "who": who,
@@ -141,6 +246,14 @@ class MapService:
         }
         with self._chatter_lock:
             self._chatter.append(entry)
+        # Attach the call to the aircraft's path, so the map can show *where*
+        # the pilot called and *where* the reply came. ATC replies (tx) are
+        # pinned to the pilot's last known position.
+        if callsign:
+            pos = self.tracks.last_position(callsign)
+            if pos is not None:
+                self.tracks.add_comm(callsign, pos[0], pos[1], kind, text,
+                                     controller, stamp)
 
     def chatter(self) -> list[dict]:
         with self._chatter_lock:
@@ -162,6 +275,17 @@ class MapService:
                 for ac in players:
                     callsign = self.brain.callsign_for_speaker(ac.player)
                     pilot = self.brain.pilots.get(callsign)
+                    distance = self.airfield.ctr.distance_nm(ac.lat, ac.lon)
+                    self.tracks.update(callsign, ac.lat, ac.lon, distance,
+                                       ac.alt_ft)
+                    phase = pilot.phase.value if pilot else "Unknown"
+                    # Record a phase transition as a timeline event, so the path
+                    # shows *when* the brain changed state (not just the calls).
+                    if pilot is not None and self._last_phase.get(callsign) != phase:
+                        self._last_phase[callsign] = phase
+                        self.tracks.add_comm(
+                            callsign, ac.lat, ac.lon, "state", phase,
+                            pilot.last_controller, time.strftime("%H:%M:%S"))
                     aircraft.append({
                         "callsign": callsign,
                         "player": ac.player,
@@ -171,11 +295,20 @@ class MapService:
                         "alt_ft": round(ac.alt_ft),
                         "heading": round(ac.heading),
                         "coalition": ac.coalition,
-                        "phase": pilot.phase.value if pilot else "Unknown",
+                        "phase": phase,
                         "controller": pilot.last_controller if pilot else "",
                         "entry_gate": pilot.entry_gate if pilot else "",
                         "exit_gate": pilot.exit_gate if pilot else "",
+                        "path": self.tracks.path(callsign),
+                        "comms": self.tracks.comms(callsign),
                     })
+                # Drop trails for aircraft that have left the mission.
+                active = {self.brain.callsign_for_speaker(ac.player)
+                          for ac in players}
+                self.tracks.prune(active)
+                for callsign in list(self._last_phase):
+                    if callsign not in active:
+                        del self._last_phase[callsign]
             # AI air traffic (planes/helicopters) near the field, for
             # situational awareness. The map page filters these to the current
             # viewport, so zoom/pan declutters without a server-side radius.
