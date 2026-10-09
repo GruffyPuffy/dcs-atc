@@ -27,7 +27,15 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
 .dot.control { background: var(--control); }
 /* Aircraft markers: a divIcon with no default Leaflet box/border. */
 .ac { background: none; border: none; }
-.ac .ac-arrow { font-size: 18px; line-height: 1; }
+.ac .ac-arrow {
+  font-size: 18px; line-height: 1;
+  /* Black outline so the phase-coloured triangle stays visible on any
+     background (grey charts, light tiles, ...). paint-order keeps the
+     coloured fill on top of the stroke instead of letting it eat the edge. */
+  -webkit-text-stroke: 1px #000;
+  paint-order: stroke fill;
+  text-shadow: 0 0 2px #000;
+}
 .ac .ac-label { font-size: 11px; white-space: nowrap; text-shadow: 0 0 3px #000; }
 #map { position: absolute; inset: 44px 260px 0 0; }
 #panel { position: absolute; top: 44px; right: 0; bottom: 0; width: 260px;

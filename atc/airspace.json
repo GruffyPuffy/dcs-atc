@@ -5,6 +5,24 @@
     "ctr_ceiling_ft_agl": 1500,
     "ctr_radius_nm": 5.0
   },
+  "map": {
+    "base": "dcs",
+    "_comment": "Base map layer for the live map. 'dcs' = DCS Caucasus tiles (dcsmaps.com, matches DCS geometry); 'osm' = OpenStreetMap. Override with --base-map. See ATC.md §13.",
+    "layers": {
+      "osm": {
+        "url": "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+        "attribution": "&copy; OpenStreetMap contributors",
+        "maxZoom": 19
+      },
+      "dcs": {
+        "url": "http://dcsmaps.com/caucasus/{z}/{x}/{y}.png",
+        "attribution": "&copy; <a href=\"http://dcsmaps.com\">dcsmaps.com</a>",
+        "maxZoom": 16,
+        "maxNativeZoom": 12,
+        "tms": true
+      }
+    }
+  },
   "airfields": {
     "Kutaisi": {
       "tower": "Kutaisi Tower",
@@ -16,24 +34,59 @@
       "control_frequency_mhz": 257.0,
       "elevation_ft": 148,
       "active_runway": "25",
+      "default_runway": "07",
       "ctr": {
         "ceiling_ft_agl": 1500,
         "polygon": [
-          [42.141514, 42.617812],
-          [42.108252, 42.364397],
-          [42.213898, 42.341952],
-          [42.245675, 42.593265]
+          [
+            42.141514,
+            42.617812
+          ],
+          [
+            42.108252,
+            42.364397
+          ],
+          [
+            42.213898,
+            42.341952
+          ],
+          [
+            42.245675,
+            42.593265
+          ]
         ]
       },
       "runways": {
-        "25": { "threshold": [42.17947, 42.49603] },
-        "07": { "threshold": [42.17577, 42.46636] }
+        "25": {
+          "threshold": [
+            42.17947,
+            42.49603
+          ]
+        },
+        "07": {
+          "threshold": [
+            42.17577,
+            42.46636
+          ]
+        }
       },
       "gates": {
-        "East": [42.20288, 42.65242],
-        "West": [42.13007, 42.30030],
-        "South": [42.10462, 42.53040],
-        "North": [42.26540, 42.50143]
+        "East": [
+          42.20288,
+          42.65242
+        ],
+        "West": [
+          42.13007,
+          42.3003
+        ],
+        "South": [
+          42.10462,
+          42.5304
+        ],
+        "North": [
+          42.2654,
+          42.50143
+        ]
       },
       "taxi_routes": {
         "07": {
@@ -56,22 +109,142 @@
         "Ramp East": "Echo"
       },
       "parking_areas": {
-        "Ramp West": [42.18316, 42.47238],
-        "Ramp North": [42.18293, 42.48265],
-        "Ramp East": [42.17691, 42.49890],
-        "Ramp South": [42.17120, 42.47316]
+        "Ramp West": [
+          42.18316,
+          42.47238
+        ],
+        "Ramp North": [
+          42.18293,
+          42.48265
+        ],
+        "Ramp East": [
+          42.17691,
+          42.4989
+        ],
+        "Ramp South": [
+          42.1712,
+          42.47316
+        ]
       },
       "holding_points": {
-        "Holding C": [42.17912, 42.48922],
-        "Holding B": [42.17705, 42.47302],
-        "Holding A/N": [42.17923, 42.46583],
-        "Holding S/W": [42.17232, 42.46738]
+        "Holding C": [
+          42.17912,
+          42.48922
+        ],
+        "Holding B": [
+          42.17705,
+          42.47302
+        ],
+        "Holding A/N": [
+          42.17923,
+          42.46583
+        ],
+        "Holding S/W": [
+          42.17232,
+          42.46738
+        ]
       },
       "channels": {
         "ground": "6",
         "tower": "7",
         "control": "8"
       }
+    },
+    "Gudauta": {
+      "tower": "Gudauta Tower",
+      "frequency_mhz": 259.0,
+      "atis_frequency_mhz": 270.5,
+      "ground": "Gudauta Ground",
+      "ground_frequency_mhz": 250.0,
+      "control": "Gudauta Control",
+      "control_frequency_mhz": 257.0,
+      "elevation_ft": 69,
+      "active_runway": "15",
+      "default_runway": "33",
+      "ctr": {
+        "ceiling_ft_agl": 1500,
+        "radius_nm": 5.0,
+        "reference": [
+          43.11427,
+          40.56978
+        ]
+      },
+      "runways": {
+        "15": {
+          "threshold": [
+            43.12447,
+            40.56362
+          ]
+        },
+        "33": {
+          "threshold": [
+            43.10403,
+            40.57592
+          ]
+        }
+      },
+      "gates": {
+        "Southeast": [
+          43.03803,
+          40.61567
+        ],
+        "Northwest": [
+          43.19051,
+          40.52389
+        ],
+        "Northeast": [
+          43.14777,
+          40.67422
+        ],
+        "Southwest": [
+          43.08077,
+          40.46534
+        ]
+      },
+      "taxi_routes": {
+        "15": {
+          "Ramp West": "Alpha Bravo",
+          "Ramp South": "Zulu Whiskey"
+        },
+        "33": {
+          "Ramp West": "Alpha Whiskey",
+          "Ramp South": "Zulu Echo"
+        }
+      },
+      "parking_routes": {
+        "Ramp West": "Alpha",
+        "Ramp South": "Zulu"
+      },
+      "parking_areas": {
+        "Ramp West": [
+          43.11631,
+          40.56084
+        ],
+        "Ramp South": [
+          43.1048,
+          40.56896
+        ]
+      },
+      "holding_points": {
+        "Holding D": [
+          43.11968,
+          40.56718
+        ],
+        "Holding E": [
+          43.10417,
+          40.57515
+        ],
+        "Holding A/X": [
+          43.11713,
+          40.56405
+        ]
+      },
+      "channels": {
+        "ground": "6",
+        "tower": "7",
+        "control": "8"
+      },
+      "_attribution": "Gudauta (UG23) aerodrome chart, Hoggit DCS World Wiki (TERPS chart). Tower 259.000 MHz = DCS terrain UHF (Mods/terrains/Caucasus/Radio.lua, airfield21_0); MA uses the DCS UHF for tower (cf. Kutaisi 263.000). Ground 250.000 / Control 257.000 / ATIS 270.500 = Master Arms common UHF channels (Ch 6/8/21). Taxi routes are best-effort from the chart taxiway letters; verify."
     }
   }
 }

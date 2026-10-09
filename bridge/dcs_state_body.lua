@@ -136,7 +136,28 @@ elseif op == 'parking' then
     return envelope(true, out)
 elseif op == 'callsigns' then
     return envelope(true, callsigns())
-elseif op == 'weather' then
+elseif op == 'runways' then
+    -- Runway ends for an airbase (by name): each has a name (e.g. "25"), the
+    -- threshold position and the runway heading. Used to seed airspace.json.
+    local out = { runways = {} }
+    for _, b in ipairs(coalition.getAirbases(2)) do
+        if b:getName() == req.airbase then
+            local ok, rwys = pcall(function() return b:getRunways() end)
+            if ok and rwys then
+                for _, r in ipairs(rwys) do
+                    local lat, lon, alt = coord.LOtoLL(r.position)
+                    out.runways[#out.runways + 1] = {
+                        name = tostring(r.Name or r.name or ''),
+                        lat = lat, lon = lon, alt = alt,
+                        course = r.course,
+                        length = r.length,
+                        width = r.width,
+                    }
+                end
+            end
+        end
+    end
+    return envelope(true, out)elseif op == 'weather' then
     local w = env.mission.weather or {}
     local wind = w.wind or {}
     local ground = wind.atGround or {}

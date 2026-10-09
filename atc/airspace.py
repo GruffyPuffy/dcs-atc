@@ -133,6 +133,11 @@ class Airfield:
     elevation_ft: float
     active_runway: str
     ctr: ControlZone
+    # Runway used when the wind is calm (can't pick by headwind). Usually the
+    # same as `active_runway`; set explicitly to match what DCS/the mission uses
+    # so AI and player traffic agree (DCS picks a terrain/mission default, not
+    # the wind — see choose_active_runway).
+    default_runway: str = ""
     atis_frequency_mhz: float = 0.0
     ground: str = ""
     ground_frequency_mhz: float = 0.0
@@ -154,6 +159,9 @@ class Airfield:
     # per-airfield (a preset is a property of the airfield's radio plan), so
     # they live here rather than in the global phraseology variables.
     channels: dict[str, str] = field(default_factory=dict)
+    # Base-map config for the live map: {base: "dcs"|"osm", layers: {...}}.
+    # Global (not per-airfield) but carried on the airfield for convenience.
+    map_config: dict = field(default_factory=dict)
 
     def taxi_route(self, lat: float | None, lon: float | None,
                    runway: str | None = None) -> str | None:
@@ -524,9 +532,10 @@ class Airspace:
     def load(cls, path: Path | str = DEFAULT_CONFIG) -> "Airspace":
         data = json.loads(Path(path).read_text(encoding="utf-8"))
         defaults = data.get("defaults", {})
+        map_config = data.get("map", {})
         airfields: dict[str, Airfield] = {}
         for name, spec in data.get("airfields", {}).items():
-            airfields[name] = _build_airfield(name, spec, defaults)
+            airfields[name] = _build_airfield(name, spec, defaults, map_config)
         return cls(airfields)
 
     def get(self, name: str) -> Airfield | None:
@@ -540,7 +549,8 @@ class Airspace:
                    key=lambda a: a.ctr.distance_nm(lat, lon))
 
 
-def _build_airfield(name: str, spec: dict, defaults: dict) -> Airfield:
+def _build_airfield(name: str, spec: dict, defaults: dict,
+                    map_config: dict | None = None) -> Airfield:
     ctr_spec = spec.get("ctr", {})
     elevation = float(spec.get("elevation_ft", 0.0))
     ceiling_agl = float(ctr_spec.get("ceiling_ft_agl",
@@ -556,7 +566,8 @@ def _build_airfield(name: str, spec: dict, defaults: dict) -> Airfield:
         polygon_latlon = [(float(p[0]), float(p[1])) for p in polygon_pts]
     else:
         # circular CTR around the airfield reference point
-        ref = spec.get("reference", spec.get("runways", {}).get("25", {}).get("threshold"))
+        ref = (ctr_spec.get("reference") or spec.get("reference")
+               or spec.get("runways", {}).get("25", {}).get("threshold"))
         if not ref:
             raise ValueError(f"airfield {name!r} needs a ctr.polygon or a reference point")
         center_lat, center_lon = float(ref[0]), float(ref[1])
@@ -598,6 +609,7 @@ def _build_airfield(name: str, spec: dict, defaults: dict) -> Airfield:
         frequency_mhz=float(spec.get("frequency_mhz", 0.0)),
         elevation_ft=elevation,
         active_runway=str(spec.get("active_runway", "")),
+        default_runway=str(spec.get("default_runway", spec.get("active_runway", ""))),
         ctr=ctr,
         atis_frequency_mhz=float(spec.get("atis_frequency_mhz", 0.0)),
         ground=spec.get("ground", f"{name} Ground"),
@@ -611,4 +623,5 @@ def _build_airfield(name: str, spec: dict, defaults: dict) -> Airfield:
         parking_areas=parking_areas,
         holding_points=holding_points,
         channels={k: str(v) for k, v in spec.get("channels", {}).items()},
+        map_config=map_config or {},
     )

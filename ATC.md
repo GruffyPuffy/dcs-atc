@@ -476,6 +476,32 @@ Without live traffic the bot trusts the pilot (offline behaviour unchanged).
 Kutaisi CTR geometry is derived from the Master Arms community wiki
 (https://wiki.masterarms.se/index.php/Airport_Procedures).
 
+**Multiple airfields.** `airspace.json` holds any number of airfields; the bot
+selects one with `--airfield <name>`. A CTR can be a **polygon** (Kutaisi) or a
+**circle** (`ctr.reference` + `ctr.radius_nm`, e.g. Gudauta) — the circle is
+handy when you have no chart outline. The dialog SOP is generic, so a new
+airfield needs only config, not code.
+
+**Adding an airfield.** `scripts/airfield.py <Airbase>` queries the live bridge
+and prints an `airspace.json` stub: runway thresholds (derived from the DCS
+runway centre + length), parking areas (clustered from DCS parking spots), a
+circular CTR, default gates, and the **tower frequency** (from the terrain
+`Radio.lua` UHF value — the Master Arms convention, cf. Kutaisi 263.000). DCS
+exposes **no taxiway names or holding positions**, so those are marked `TODO`
+and must be filled from the aerodrome chart. Use `--merge` to write it into
+`airspace.json`.
+
+The default gates for a circular CTR are placed **on the CTR boundary** (at
+`ctr.radius_nm`): two aligned with the **runway axis** (the departure exit and
+the reciprocal entry) and two **abeam** (base/crosswind entry), each named by
+its **compass** bearing from the field (`Southeast`, `Northwest`, …). So with no
+chart you still get sensible `Exit Southeast` / `Entry Southeast` clearances.
+Edit them to match the chart's printed entry points when you have one.
+
+> Note: DCS reports the runway **centre** (the ARP), not the threshold. The
+> generator derives thresholds from the runway number + length; verify against
+> the chart (Gudauta's thresholds come from the Hoggit TERPS aerodrome chart).
+
 **Taxi routes:** DCS exposes parking positions but **no taxiway names**, so
 routes are configured per airfield as `taxi_routes`: `{runway: {ramp: route}}`.
 The bot picks the route for the **active runway** and the **ramp nearest the
@@ -529,8 +555,12 @@ the airfield config:
   `mission_time_s` (seconds since midnight), so 14:00 mission time → `Oscar`.
   Falls back to the host clock only if the bridge does not report it.
 - **Active runway** — chosen from the wind: the runway whose heading is most
-  into wind (highest headwind component). Calm wind falls back to the configured
-  active runway.
+  into wind (highest headwind component). **Calm wind falls back to
+  `default_runway`**, *not* `active_runway`: DCS's AI does not pick the runway by
+  wind, it uses a terrain/mission default, so our calm-wind choice must match it
+  or player and AI traffic would use opposite ends (e.g. Gudauta is 33 when calm,
+  Kutaisi often 07). Both `active_runway` (last-resort fallback) and
+  `default_runway` live in `airspace.json`.
 - **QNH** — DCS stores it in mmHg; converted to inches of mercury (760 → 29.92).
 - **Weather** — CAVOK when visibility ≥ 10 km and cloud base ≥ 1500 m, else
   visibility and cloud base are read out.
@@ -759,8 +789,19 @@ overview of the traffic and each pilot's state. Start it with `--map-port`:
 Then open `http://<host>:8080/`. It can also run standalone (no bot, no SRS)
 with `uv run map_server.py --airfield Kutaisi --port 8080`.
 
-The page is **Leaflet + OpenStreetMap** (loaded from a CDN) and shows:
+The page is **Leaflet** with a configurable **base map** (loaded from a CDN) and
+shows:
 
+- **Base map**: chosen by `airspace.json` `map.base` (`--base-map` overrides).
+  - **`dcs`** (default) — the **DCS Caucasus terrain tiles**
+    (`http://dcsmaps.com/caucasus/{z}/{x}/{y}.png`, a community tile server of
+    the in-game map). These are in **DCS's own coordinates**, so the base map
+    lines up with `airspace.json` and with the aircraft. Native detail is only
+    to zoom 12; beyond that the tiles are upscaled (blurry but zoomable).
+  - **`osm`** — OpenStreetMap. Only a *visualization*: it is the real-world
+    base, which need not match DCS geometry (see §9/§13 and `GEOREF.md`).
+  The tile layers live in `airspace.json` `map.layers`, so a new source is just
+  config.
 - **Airspace** from `airspace.json`: the CTR polygon (surface–ceiling), the
   entry/exit gates, runway thresholds, taxi routes and parking areas.
 - **Aircraft**: every player aircraft, positioned live from the state bridge,
@@ -816,18 +857,30 @@ keeps the last 200 events.
 
 ### Chart overlay (georeferenced kneeboard)
 
-The map can overlay the **Master Arms aerodrome chart** (from their Kutaisi
-kneeboard) at the correct scale and position, toggled with the **Chart**
-checkbox. The chart is georeferenced from control points whose lat/lon are
-printed on the chart itself (P1–P4, the holding positions) and whose pixel
-positions are read off the image; an affine transform maps lat/lon → pixel.
-Because the chart is rotated ~5° from north, it is **warped to a north-up
-grid** first (Leaflet's `imageOverlay` is axis-aligned).
+**All ATC geometry lives in `airspace.json`, in DCS's coordinate system.** The
+base map (OpenStreetMap) is only a *visualization* — the ATC logic never needs
+it, and OSM/real-world positions need not match DCS. A plane in DCS lines up
+with the `airspace.json` zones (CTR, holding, occupancy corridor), and the chart
+overlay is aligned to **`airspace.json`** too, so image and zones agree.
 
-`atc/georef.py` does this and writes `atc/web/overlays/<airfield>.png` +
-`.json` (lat/lon bounds). Regenerate with:
+The map can overlay the aerodrome chart, toggled with the **Chart** checkbox.
+The chart is **warped to a north-up grid** first (Leaflet's `imageOverlay` is
+axis-aligned; charts are rotated relative to north).
 
-    uv run --with pillow georef.py --source <chart.png> --out web/overlays/kutaisi
+Generate an overlay from two clicks with `scripts/georef_tool.py` (**recommended
+— see `GEOREF.md`**):
+
+    uv run --with pillow --with numpy python scripts/georef_tool.py <Airfield> \
+        --chart <chart.jpg> --crop x0 y0 x1 y1
+
+It aligns the image to the airfield's **configured runway** (`airspace.json`)
+with a similarity (uniform scale + rotation, no shear) from the two clicked
+runway ends, and writes `atc/web/overlays/<airfield>.png` + `.json`. The older
+`atc/georef.py` (control points + affine) still exists (used for Kutaisi).
 
 The overlay is optional: if no `<airfield>.png`/`.json` exists, the map just
 skips it. The same georeferencing was used to place the parking areas (see §9).
+
+The full step-by-step runbook (finding control points, detecting the red
+markers, fitting/validating the transform, warping, and the control points on
+file for Kutaisi and Gudauta) is in **`GEOREF.md`**.

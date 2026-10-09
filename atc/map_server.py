@@ -154,7 +154,7 @@ def _overlay_payload(airfield: Airfield) -> dict | None:
     }
 
 
-def _airspace_payload(airfield: Airfield) -> dict:
+def _airspace_payload(airfield: Airfield, basemap: str | None = None) -> dict:
     """Static geometry for the map (CTR, gates, runways, taxi, parking)."""
     return {
         "name": airfield.name,
@@ -180,10 +180,44 @@ def _airspace_payload(airfield: Airfield) -> dict:
             "runway": airfield.runway_corridor_geometry(),
         },
         "overlay": _overlay_payload(airfield),
+        # Base map layer (OSM or DCS tiles) chosen by config/CLI.
+        "basemap": _basemap_payload(airfield, basemap),
         # Agencies for the chatter-log filter checkboxes (shown even before
         # they have transmitted, so the filter list is stable).
         "agencies": _agencies(airfield),
     }
+
+
+def _basemap_payload(airfield: Airfield, choice: str | None) -> dict:
+    """The base-map tile layer for the map.
+
+    Reads `airspace.json` `map.layers` (with a fallback), picks `choice`
+    (CLI --base-map) or `map.base` (config) or 'osm'. Returns the Leaflet
+    tileLayer options the page needs: url, attribution, maxZoom,
+    maxNativeZoom, tms.
+    """
+    cfg = airfield.map_config or {}
+    layers = cfg.get("layers") or {}
+    name = choice or cfg.get("base") or "osm"
+    spec = layers.get(name) or _FALLBACK_LAYERS.get(name) or _FALLBACK_LAYERS["osm"]
+    return {
+        "name": name,
+        "url": spec["url"],
+        "attribution": spec.get("attribution", ""),
+        "maxZoom": spec.get("maxZoom", 19),
+        "maxNativeZoom": spec.get("maxNativeZoom", spec.get("maxZoom", 19)),
+        "tms": bool(spec.get("tms", False)),
+    }
+
+
+# Used when airspace.json has no `map` section.
+_FALLBACK_LAYERS = {
+    "osm": {"url": "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+            "attribution": "&copy; OpenStreetMap contributors", "maxZoom": 19},
+    "dcs": {"url": "http://dcsmaps.com/caucasus/{z}/{x}/{y}.png",
+            "attribution": "&copy; dcsmaps.com", "maxZoom": 16,
+            "maxNativeZoom": 12, "tms": True},
+}
 
 
 def _agencies(airfield: Airfield) -> list[str]:
@@ -204,11 +238,13 @@ class MapService:
     """Builds the JSON the map page polls, from live state + brain phases."""
 
     def __init__(self, airfield: Airfield, brain: AtcBrain,
-                 state: StateClient | None, lock: threading.RLock | None = None):
+                 state: StateClient | None, lock: threading.RLock | None = None,
+                 basemap: str | None = None):
         self.airfield = airfield
         self.brain = brain
         self.state = state
         self.lock = lock or threading.RLock()
+        self.basemap = basemap  # base-map layer name override (else config)
         # Chatter log: recent radio traffic (rx + tx) for the map's log drawer.
         self._chatter: deque[dict] = deque(maxlen=CHATTER_LIMIT)
         self._chatter_lock = threading.Lock()
@@ -327,7 +363,7 @@ class MapService:
                     "coalition": ac.coalition,
                 })
         return {
-            "airfield": _airspace_payload(self.airfield),
+            "airfield": _airspace_payload(self.airfield, self.basemap),
             "aircraft": aircraft,
             "ai_air": ai_air,
             "chatter": self.chatter(),
@@ -389,6 +425,7 @@ def start_map_server(airfield: Airfield, brain: AtcBrain,
                      host: str = "0.0.0.0",
                      lock: threading.RLock | None = None,
                      log: Callable[[str], None] = print,
+                     basemap: str | None = None,
                      ) -> tuple[ThreadingHTTPServer | None, MapService]:
     """Start the map server on a daemon thread.
 
@@ -396,7 +433,7 @@ def start_map_server(airfield: Airfield, brain: AtcBrain,
     port is already in use, so a busy map port never takes the ATC bot down.
     The `service` is returned so the bot can push chatter-log entries to it.
     """
-    service = MapService(airfield, brain, state, lock)
+    service = MapService(airfield, brain, state, lock, basemap=basemap)
     try:
         server = ThreadingHTTPServer((host, port), make_handler(service))
     except OSError as error:
@@ -422,6 +459,9 @@ def main() -> None:
     parser.add_argument("--state-host", default="127.0.0.1")
     parser.add_argument("--state-port", type=int, default=10309)
     parser.add_argument("--no-state", action="store_true")
+    parser.add_argument("--base-map", default=None,
+                        help="base map layer: 'dcs' (DCS tiles) or 'osm' "
+                             "(default: airspace.json map.base)")
     args = parser.parse_args()
 
     airspace = Airspace.load(args.airspace) if args.airspace else Airspace.load()
@@ -433,7 +473,8 @@ def main() -> None:
                      gates=list(airfield.gates), gate_locator=airfield.nearest_gate,
                      airfield=airfield)
     state = None if args.no_state else StateClient(args.state_host, args.state_port)
-    server, _service = start_map_server(airfield, brain, state, args.port, args.host)
+    server, _service = start_map_server(airfield, brain, state, args.port, args.host,
+                                        basemap=args.base_map)
     if server is None:
         raise SystemExit("map server could not start")
     try:

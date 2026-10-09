@@ -83,11 +83,14 @@ def choose_active_runway(airfield: Airfield, wind_dir: float,
                          wind_speed: float) -> str:
     """Pick the runway most into wind (highest headwind component).
 
-    Falls back to the configured active runway if wind is calm or no runways
-    are defined.
+    When the wind is calm (below ~1 kt) it can't decide, so it returns the
+    airfield's configured **`default_runway`** — which is set to match what
+    DCS/the mission actually uses. DCS's AI does *not* pick the runway by wind;
+    it uses a terrain/mission default, so our calm-wind choice must agree with
+    it or player and AI traffic would use opposite ends.
     """
     if wind_speed < 0.5 or not airfield.runways:
-        return airfield.active_runway
+        return airfield.default_runway or airfield.active_runway
     best, best_headwind = airfield.active_runway, float("-inf")
     for runway in airfield.runways:
         heading = airfield.runway_heading(runway)

@@ -39,7 +39,16 @@ def test_choose_active_runway_into_wind(airfield):
 
 
 def test_choose_active_runway_calm_falls_back(airfield):
-    assert choose_active_runway(airfield, 0, 0) == airfield.active_runway
+    # calm: can't pick by wind -> the configured default runway
+    assert choose_active_runway(airfield, 0, 0) == airfield.default_runway
+
+
+def test_choose_active_runway_calm_uses_default_not_active(airfield):
+    # A field may run a different default than its nominal active runway
+    # (Kutaisi is often 07 in the mission while active is 25).
+    airfield.default_runway = "07"
+    airfield.active_runway = "25"
+    assert choose_active_runway(airfield, 0, 0) == "07"
 
 
 def test_build_atis_cavok(airfield):

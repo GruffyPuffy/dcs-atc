@@ -2,6 +2,8 @@
 
 from dataclasses import dataclass
 
+import pytest
+
 from airspace import Airspace
 
 
@@ -203,3 +205,38 @@ def test_runway_corridor_geometry(airfield):
     corridor = airfield.runway_corridor_geometry()
     assert corridor is not None
     assert len(corridor["corners"]) == 4
+
+
+# ---------- Second airfield (circular CTR) ----------
+
+def test_gudauta_loads_with_circular_ctr():
+    from airspace import Airspace
+    af = Airspace.load().get("Gudauta")
+    assert af is not None
+    assert af.active_runway == "15"
+    assert af.frequency_mhz == 259.0  # DCS terrain UHF (Radio.lua)
+    # circular CTR: the reference point is inside, a far point is outside
+    assert af.ctr.contains(af.ctr.center_lat, af.ctr.center_lon, 1000)
+    assert not af.ctr.contains(af.ctr.center_lat + 0.5, af.ctr.center_lon, 1000)
+
+
+def test_gudauta_runway_geometry():
+    from airspace import Airspace
+    af = Airspace.load().get("Gudauta")
+    # 15/33 thresholds from the aerodrome chart
+    assert af.runway_heading("15") == pytest.approx(156, abs=3)
+    assert af.runway_length_nm("15") == pytest.approx(1.34, abs=0.05)
+    # the exit gate follows the runway heading (15 ~156 -> Southeast)
+    assert af.default_exit_gate("15") == "Southeast"
+    assert af.default_exit_gate("33") == "Northwest"
+    # gates sit on the CTR circle (default circular CTR, 5 NM), aligned with
+    # the runway axis + abeam, named by compass
+    assert set(af.gates) == {"Southeast", "Northwest", "Northeast", "Southwest"}
+    for g in af.gates.values():
+        assert af.ctr.distance_nm(g[0], g[1]) == pytest.approx(5.0, abs=0.2)
+
+
+def test_gudauta_holding_points():
+    from airspace import Airspace
+    af = Airspace.load().get("Gudauta")
+    assert set(af.holding_points) == {"Holding D", "Holding E", "Holding A/X"}

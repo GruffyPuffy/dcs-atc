@@ -8,6 +8,8 @@ const PHASE_COLOR = {
 };
 
 let map, ctrLayer, staticLayer, aircraftLayer, aiLayer, chartLayer, pathLayer, commLayer;
+let baseLayer;  // the base-map tile layer (OSM or DCS); swapped on config change
+let baseLayerName = '';
 const markers = new Map();  // callsign -> L.marker
 const aiMarkers = new Map();
 const paths = new Map();    // callsign -> L.polyline
@@ -15,10 +17,13 @@ const commMarkers = new Map();  // callsign -> L.layerGroup
 
 function initMap(center) {
   map = L.map('map', { preferCanvas: true }).setView(center, 11);
-  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 19,
-    attribution: '&copy; OpenStreetMap contributors',
+  window.map = map;  // handy for debugging in the browser console
+  // The base layer is set from the server payload (OSM or DCS tiles) on the
+  // first snapshot; start with OSM so the map renders immediately.
+  baseLayer = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19, attribution: '&copy; OpenStreetMap contributors',
   }).addTo(map);
+  baseLayerName = 'osm';
   chartLayer = L.layerGroup().addTo(map);
   ctrLayer = L.layerGroup().addTo(map);
   staticLayer = L.layerGroup().addTo(map);
@@ -37,6 +42,21 @@ function drawOverlay(af) {
   if (!af.overlay) return;
   L.imageOverlay(af.overlay.url, af.overlay.bounds, { opacity: 0.85 })
     .addTo(chartLayer);
+}
+
+// Swap the base-map tile layer (OSM <-> DCS tiles) when the server config says
+// so. Only rebuilds when the choice actually changes.
+function setBaseMap(bm) {
+  if (!bm || !bm.url || bm.name === baseLayerName) return;
+  if (baseLayer) map.removeLayer(baseLayer);
+  baseLayer = L.tileLayer(bm.url, {
+    maxZoom: bm.maxZoom || 19,
+    maxNativeZoom: bm.maxNativeZoom || bm.maxZoom || 19,
+    attribution: bm.attribution || '',
+    tms: !!bm.tms,
+    noWrap: true,
+  }).addTo(map);
+  baseLayerName = bm.name;
 }
 
 function drawAirspace(af) {
@@ -63,11 +83,13 @@ function drawAirspace(af) {
   }
 
   // Taxi routes are per-runway/per-ramp names (no geometry), so show them as
-  // a tooltip on each ramp rather than a marker.
+  // a tooltip on each ramp rather than a marker. Runway numbers come from the
+  // airfield (not hardcoded) so this works for any field (Kutaisi 25/07,
+  // Gudauta 15/33, ...).
+  const rwys = Object.keys(af.taxi_routes || {});
   for (const [name, pos] of Object.entries(af.parking_areas || {})) {
-    const r25 = (af.taxi_routes?.['25'] || {})[name];
-    const r07 = (af.taxi_routes?.['07'] || {})[name];
-    const tip = `${name}<br>to 25: ${r25 || '—'}<br>to 07: ${r07 || '—'}`;
+    const lines = rwys.map(r => `to ${r}: ${(af.taxi_routes[r] || {})[name] || '—'}`);
+    const tip = [name, ...lines].join('<br>');
     L.circleMarker(pos, { radius: 4, color: '#6e7681', weight: 1,
       fillColor: '#6e7681', fillOpacity: 0.8 })
       .bindTooltip(tip).addTo(staticLayer);
@@ -311,6 +333,7 @@ async function tick() {
     if (!map) initMap(data.airfield.center);
     document.getElementById('title').textContent =
       `ATC Map · ${data.airfield.name} · RWY ${data.airfield.active_runway}`;
+    setBaseMap(data.airfield.basemap);
     drawOverlay(data.airfield);
     drawAirspace(data.airfield);
     drawAiAir(data.ai_air || []);

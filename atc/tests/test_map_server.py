@@ -40,6 +40,24 @@ def test_snapshot_has_airspace_geometry(brain, airfield):
     assert snap["aircraft"] == []
 
 
+def test_basemap_defaults_to_dcs_config(brain, airfield):
+    # airspace.json sets map.base = "dcs"; the payload carries the tile options
+    snap = MapService(airfield, brain, FakeState([])).snapshot()
+    bm = snap["airfield"]["basemap"]
+    assert bm["name"] == "dcs"
+    assert "dcsmaps.com" in bm["url"]
+    assert bm["tms"] is True
+    assert bm["maxNativeZoom"] == 12
+
+
+def test_basemap_choice_override(brain, airfield):
+    snap = MapService(airfield, brain, FakeState([]), basemap="osm").snapshot()
+    bm = snap["airfield"]["basemap"]
+    assert bm["name"] == "osm"
+    assert "openstreetmap" in bm["url"]
+    assert bm["tms"] is False
+
+
 def test_overlay_payload_when_generated(brain, airfield):
     # the georeferenced chart overlay ships with the repo
     snap = MapService(airfield, brain, FakeState([])).snapshot()

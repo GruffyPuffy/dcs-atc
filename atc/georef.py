@@ -23,19 +23,30 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-# Kutaisi aerodrome chart (MA kneeboard page 1) control points.
-# lat/lon are printed on the chart (P1..P4, holding positions); pixels were read
-# off the image. See ATC.md §13.
-KUTAISI_CONTROL_POINTS = [
-    # (lat, lon, px, py)
-    (42 + 10.747 / 60, 42 + 29.353 / 60, 516.8, 371.1),  # P1 Holding C
-    (42 + 10.623 / 60, 42 + 28.381 / 60, 236.6, 445.3),  # P2 Holding B
-    (42 + 10.754 / 60, 42 + 27.950 / 60, 107.6, 414.4),  # P3 TWY A/N
-    (42 + 10.339 / 60, 42 + 28.043 / 60, 147.0, 562.5),  # P4 TWY S/W
-]
+# Per-chart georeferencing data. Each entry has:
+#   control_points: [(lat, lon, px, py), ...] — lat/lon printed on the chart,
+#                   pixel read off the image (see GEOREF.md).
+#   crop:           (x0, y0, x1, y1) — the map panel only (excludes the title,
+#                   coordinate box and tables).
+# See GEOREF.md for the full runbook.
+CHARTS = {
+    # Master Arms Kutaisi kneeboard, page 1 (aerodrome chart).
+    "kutaisi": {
+        "control_points": [
+            (42 + 10.747 / 60, 42 + 29.353 / 60, 516.8, 371.1),  # P1 Holding C
+            (42 + 10.623 / 60, 42 + 28.381 / 60, 236.6, 445.3),  # P2 Holding B
+            (42 + 10.754 / 60, 42 + 27.950 / 60, 107.6, 414.4),  # P3 TWY A/N
+            (42 + 10.339 / 60, 42 + 28.043 / 60, 147.0, 562.5),  # P4 TWY S/W
+        ],
+        "crop": (30, 55, 740, 745),
+    },
+    # Gudauta is georeferenced with the click tool (scripts/georef_tool.py),
+    # aligned to airspace.json — see GEOREF.md. Don't add it here.
+}
 
-# The map panel inside the page (excludes the title, coordinate box and tables).
-KUTAISI_CROP = (30, 55, 740, 745)
+# Backwards-compatible aliases (older callers/tests import these).
+KUTAISI_CONTROL_POINTS = CHARTS["kutaisi"]["control_points"]
+KUTAISI_CROP = CHARTS["kutaisi"]["crop"]
 
 
 def fit_affine(control_points) -> tuple[np.ndarray, np.ndarray]:
@@ -96,12 +107,16 @@ def main() -> None:
     parser.add_argument("--source", required=True, help="source chart PNG")
     parser.add_argument("--out", required=True,
                         help="output path without extension (writes .png + .json)")
+    parser.add_argument("--chart", choices=sorted(CHARTS),
+                        help="named chart whose control points/crop to use "
+                             "(default: kutaisi)")
     parser.add_argument("--metres-per-pixel", type=float, default=1.5)
     args = parser.parse_args()
 
+    chart = CHARTS[args.chart or "kutaisi"]
     source = Image.open(args.source)
-    warped, bounds = warp_north_up(source, KUTAISI_CONTROL_POINTS,
-                                   KUTAISI_CROP, args.metres_per_pixel)
+    warped, bounds = warp_north_up(source, chart["control_points"],
+                                   chart["crop"], args.metres_per_pixel)
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     warped.save(out.with_suffix(".png"))

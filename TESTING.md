@@ -12,7 +12,7 @@ check the log together.
 
 ## 0. Before you fly
 
-- [ ] Offline suite is green: `cd atc && uv run pytest` → **234 passed**
+- [ ] Offline suite is green: `cd atc && uv run pytest` → **237 passed**
 - [ ] Start the bot: `./start_bot.sh --debug`
 - [ ] You see the controller table + `[*] Ready.`
 - [ ] Second terminal: `tail -f /tmp/atc_log.txt`
