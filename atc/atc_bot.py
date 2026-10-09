@@ -33,6 +33,7 @@ from callsigns import CallsignRegistry
 from ctr import CtrEvent, CtrTracker
 from phonetics import stt_hint
 from srs_client import SrsClient
+from speech import spell_atc_numbers
 from state_client import StateClient, norm_identity, resolve_player_unit
 from workers import ControllerWorker, SharedState
 
@@ -248,6 +249,10 @@ def main() -> None:
         spoken = text
         for word, phonetic in PRONUNCIATION.items():
             spoken = spoken.replace(word, phonetic)
+        # Read ATC numbers digit-by-digit (headings, wind, runway, QNH) and drop
+        # the callsign dash ("Colt 1-1" -> "Colt one one"). Synthesis-only: the
+        # log/chatter below still show the real text.
+        spoken = spell_atc_numbers(spoken)
         voice = voice or voice_for[Controller.TOWER]
         with tts_lock:
             syn_config = SynthesisConfig(length_scale=args.speech_rate)
