@@ -65,6 +65,8 @@ class PilotState:
     cleared_landing: bool = False
     go_around_issued: bool = False
     descend_issued: bool = False  # Control has issued the descent to 1500 ft
+    altitude_warned: bool = False  # warned about busting the CTR ceiling
+    incursion_warned: bool = False  # warned about being on the runway uncleared
     exit_gate: str = ""  # assigned departure exit point
     entry_gate: str = ""  # assigned arrival entry point
     formation: int = 0  # flight size (2+ = multi-ship), learned from calls
@@ -484,6 +486,10 @@ class AtcBrain:
         # Master Arms: Tower answers with "line up and wait"; the takeoff
         # clearance follows the pilot's readback (see handle()).
         if re.search(r"\bready for departure\b|\bready for takeoff\b", low):
+            # Already cleared for takeoff: re-issue the clearance (idempotent)
+            # rather than dropping the pilot back to Lineup.
+            if pilot.phase == Phase.DEPARTURE:
+                return self._say("lineup_readback", callsign, turnout="right")
             # Already lined up and waiting: this "ready" call is the natural
             # trigger for the takeoff clearance (the pilot has done the line-up
             # and is telling us they are ready to go). Without this, a pilot who
@@ -776,3 +782,45 @@ class AtcBrain:
             pilot.go_around_issued = True
             return self._say("go_around", callsign)
         return None
+
+    def check_altitude(self, callsign: str, track: AircraftTrack) -> str | None:
+        """Warn a pilot who has climbed above the CTR ceiling while still in a
+        Tower phase (i.e. has not been handed to Control).
+
+        Fires once per excursion (re-arms when back below the ceiling). Pilots
+        already talking to Control (Airborne/Inbound/Landing) are exempt — they
+        are cleared above the CTR.
+        """
+        pilot = self._pilot(callsign)
+        if self.airfield is None:
+            return None
+        ctr = self.airfield.ctr
+        above = (track.alt_ft > ctr.ceiling_ft_msl
+                 and ctr.contains_horizontal(track.lat, track.lon))
+        if not above:
+            pilot.altitude_warned = False
+            return None
+        # Only warn pilots still under Tower/Ground control (not handed off).
+        if pilot.phase in (Phase.AIRBORNE, Phase.INBOUND, Phase.LANDING):
+            return None
+        if pilot.altitude_warned:
+            return None
+        pilot.altitude_warned = True
+        return self._say("altitude_bust", callsign)
+
+    def check_incursion(self, callsign: str, on_runway: bool) -> str | None:
+        """Warn a pilot who is on the runway without a takeoff/landing clearance.
+
+        Fires once per incursion (re-arms when off the runway). A pilot in the
+        Departure or Landing phase is legitimately on the runway.
+        """
+        pilot = self._pilot(callsign)
+        if not on_runway:
+            pilot.incursion_warned = False
+            return None
+        if pilot.phase in (Phase.DEPARTURE, Phase.LANDING):
+            return None
+        if pilot.incursion_warned:
+            return None
+        pilot.incursion_warned = True
+        return self._say("runway_incursion", callsign)

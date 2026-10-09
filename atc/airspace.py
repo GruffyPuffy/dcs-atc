@@ -93,6 +93,14 @@ class ControlZone:
         """True if the position is inside the CTR horizontally and vertically."""
         if alt_ft_msl > self.ceiling_ft_msl:
             return False
+        return self.contains_horizontal(lat, lon)
+
+    def contains_horizontal(self, lat: float, lon: float) -> bool:
+        """True if the position is inside the CTR outline, ignoring altitude.
+
+        Used for the altitude-bust check: an aircraft inside the CTR footprint
+        but above the ceiling has left the CTR vertically.
+        """
         x, y = _project(lat, lon, self.center_lat, self.center_lon)
         return self.polygon.contains(Point(x, y))
 

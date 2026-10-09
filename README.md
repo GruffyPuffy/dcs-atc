@@ -17,7 +17,7 @@ Layout
   `srs_autoconnect.lua` (SRS announce)
 - `ATC.md` — ATC behaviour reference (callsigns, phraseology, controllers, CTR)
 - `TESTING.md` — first live test scenario + how to read the log
-- `atc/tests/` — offline pytest suite (no DCS/SRS needed): `cd atc && uv run pytest`
+- `atc/tests/` — offline pytest suite (no DCS/SRS needed): `cd atc && uv run pytest`. Includes **system tests** (`test_system.py` + `scenario.py`) that fly full MA dialogs through the brain with faked radar/traffic (runway occupied, position cross-checks, single/2-ship/4-ship).
 
 Install
 -------

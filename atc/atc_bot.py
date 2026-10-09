@@ -387,6 +387,21 @@ def main() -> None:
                     else:
                         with lock:
                             brain.check_final(callsign, False, False)
+                    # Altitude bust: above the CTR ceiling while still under
+                    # Tower/Ground control (not handed to Control).
+                    with lock:
+                        alt_call = brain.check_altitude(callsign, tr)
+                    if alt_call:
+                        log(f"ALTITUDE BUST: {callsign} ({ac.player})")
+                        speak(alt_call)
+                    # Runway incursion: on the runway without a clearance.
+                    on_rwy = airfield.runway_occupied(
+                        [ac], exclude=None, on_runway=True)
+                    with lock:
+                        inc_call = brain.check_incursion(callsign, on_rwy)
+                    if inc_call:
+                        log(f"RUNWAY INCURSION: {callsign} ({ac.player})")
+                        speak(inc_call)
             except (OSError, RuntimeError):
                 pass  # bridge down or mission not running; retry next tick
 

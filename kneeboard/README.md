@@ -26,6 +26,21 @@ example), colour-coded by who is talking (PILOT / GND / TWR / CTL / AWACS).
   flight** on the new frequency (*"Adder1" / "2"*), then make the first call
   with the agency prefix (*"Tower, Adder11, Entry East"*).
 
+## Deliberate deviations from the wiki
+
+The cards are the wiki dialogs with a few **intentional** corrections, so the
+trainee learns the correct form rather than the wiki's slips:
+
+| Wiki | Card | Why |
+| --- | --- | --- |
+| QNH readback: *"25 in use, QNH 2992."* (no callsign) | *"25 in use, QNH 2992, Adder11."* | every line must identify the sender |
+| *"4-ship Adder11"* on the break/landing | *"2-ship Adder11"* | the example is a two-ship throughout |
+| *"rolling off runway 25"* | *"runway 25 vacated"* | standard phraseology |
+| *"Tower on 7, Adder11"* (single-aircraft form) | *"Adder1, channel 7, push"* | the example is a 2-ship, so use the flight form |
+| *"Control, Adder11, two-ship Hornets, inbound…"* | *"Adder11, two-ship Hornets, inbound…"* | Control was already contacted; no re-address |
+
+Everything else is verbatim from the wiki.
+
 ## Regenerate
 
     cd scripts

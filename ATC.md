@@ -398,6 +398,26 @@ configured runway even when the wind had shifted.
 > Status: **implemented** (`brain.check_final`, `airspace.runway_occupied`,
 > `airspace.is_on_final`).
 
+### Automatic monitoring (2-second poll)
+
+A background thread (`atc_bot.monitor_ctr`) polls live positions every 2 seconds
+and issues **unprompted** calls — the things a controller would notice without
+being asked. Each fires **once per event** and re-arms when the condition clears.
+
+| Check | Condition | Call |
+| --- | --- | --- |
+| **CTR entry** | Enters the CTR without having called inbound | "…entering controlled airspace without clearance. Squawk 4201 and state intentions." |
+| **Go-around** | On final and the runway is occupied | "…go around, runway 25 is occupied." |
+| **Altitude bust** | Above the CTR ceiling while still under Tower/Ground control (not handed to Control) | "…you are leaving the control zone, contact Control on channel 8." |
+| **Runway incursion** | On the runway without a takeoff/landing clearance | "…you are on the runway without clearance, vacate immediately." |
+
+The altitude-bust check uses a **horizontal-only** containment test
+(`ControlZone.contains_horizontal`) so an aircraft inside the CTR footprint but
+above the ceiling is caught; pilots already talking to Control
+(`Airborne`/`Inbound`/`Landing`) are exempt, since they are cleared above the
+CTR. The incursion check exempts pilots in the `Departure`/`Landing` phases,
+who are legitimately on the runway.
+
 ### Traffic sequencing (players + AI)
 
 The bot sequences clearances against **all live traffic** — players *and* AI

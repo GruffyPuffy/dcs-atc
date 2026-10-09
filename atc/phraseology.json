@@ -52,6 +52,8 @@
     "control_climb": "{callsign}, {control}, radar contact, climb to Angels {angels}.",
     "control_descend": "{callsign}, {control}, descend to {descent_altitude}.",
     "go_around": "{callsign}, {tower}, go around, runway {runway} is occupied.",
+    "altitude_bust": "{callsign}, {tower}, you are leaving the control zone, contact {control} on channel {channel}.",
+    "runway_incursion": "{callsign}, {tower}, you are on the runway without clearance, vacate immediately.",
     "ctr_warning": "{callsign}, {tower}, you are entering controlled airspace without clearance. Squawk {squawk} and state intentions.",
     "roger": "{callsign}, {agency}, roger.",
     "radio_check": "{callsign}, {agency}, loud and clear.",
