@@ -38,8 +38,13 @@ DEFAULT_NAMES = ["Colt", "Springfield", "Enfield", "Chevy", "Pontiac", "Uzi",
 
 
 def _speaker_key(name: str) -> str:
-    """Normalise an SRS/DCS speaker name for speaker->callsign lookup."""
-    return re.sub(r"[\s_-]+", "", (name or "").lower())
+    """Normalise an SRS/DCS speaker name for speaker->callsign lookup.
+
+    Shared with `state_client.norm_identity` (single source of truth):
+    lower-case, strip separators, drop a trailing digit.
+    """
+    from state_client import norm_identity
+    return norm_identity(name)
 
 
 def _edit_distance(a: str, b: str) -> int:

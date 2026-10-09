@@ -165,8 +165,11 @@ function drawAircraft(list) {
       if (m) { aircraftLayer.removeLayer(m); markers.delete(ac.callsign); }
     } else {
       const pos = [ac.lat, ac.lon];
+      const gates = [ac.entry_gate ? `in ${ac.entry_gate}` : '',
+                     ac.exit_gate ? `out ${ac.exit_gate}` : '']
+        .filter(Boolean).join(' · ');
       const tip = `${ac.callsign} (${ac.type})<br>${ac.phase} · ${ac.controller || '—'}<br>`
-        + `${ac.alt_ft} ft · ${ac.heading}°`;
+        + `${ac.alt_ft} ft · ${ac.heading}°${gates ? '<br>' + gates : ''}`;
       if (markers.has(ac.callsign)) {
         const m = markers.get(ac.callsign);
         m.setLatLng(pos).setIcon(aircraftIcon(ac)).setTooltipContent(tip);

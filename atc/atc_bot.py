@@ -17,6 +17,7 @@ Usage:
 import argparse
 import datetime
 import math
+import re
 import threading
 import time
 import wave
@@ -32,7 +33,7 @@ from callsigns import CallsignRegistry
 from ctr import CtrEvent, CtrTracker
 from phonetics import stt_hint
 from srs_client import SrsClient
-from state_client import StateClient
+from state_client import StateClient, norm_identity, resolve_player_unit
 from workers import ControllerWorker, SharedState
 
 SAMPLE_RATE = 48000
@@ -306,18 +307,63 @@ def main() -> None:
         chatter("rx", freq_for(controller), who, text, controller)
         return text
 
-    def track_for(who: str):
-        """Live CTR track for the transmitting aircraft, or None."""
-        if state is None:
+    warned_ambiguous = set()  # speakers already warned about multiple matches
+
+    def unit_for_speaker(who: str):
+        """The live player unit whose identity matches an SRS speaker name.
+
+        The SRS name and the DCS player name need not be the same, and the TTI
+        mission has many slots sharing one callsign (several "Springfield11"
+        aircraft). `state_client.resolve_player_unit` tries player-name, then the
+        callsign the brain learned for this speaker, then the flight callsign
+        the SRS name implies, and only then (solo) the lone online pilot — and
+        returns None on ambiguity, so radar never binds to the wrong aircraft.
+        """
+        if state is None or not who:
             return None
         try:
-            for ac in state.aircraft():
-                if ac.player.lower() == who.lower():
-                    return tracker.track(ac.callsign, ac.lat, ac.lon, ac.alt_ft,
-                                         ac.heading)
+            units = state.aircraft()
         except (OSError, RuntimeError) as error:
             log(f"state bridge unavailable: {error}")
-        return None
+            return None
+        with lock:
+            learned = brain.callsign_for_speaker(who)
+            if learned == who:
+                learned = ""  # not learned yet
+            solo = len(units) == 1
+            # Prefer locating by SRS position when the mission reports it (and
+            # it is non-zero), to disambiguate players who share a name.
+            pos = None
+            if client is not None:
+                try:
+                    p = client.client_position(who)
+                    if p and (abs(p[0]) > 1e-6 or abs(p[1]) > 1e-6):
+                        pos = p
+                except Exception:
+                    pos = None
+            unit = resolve_player_unit(units, who, learned, solo=solo,
+                                       speaker_pos=pos)
+        if unit is None and units and _ambiguity_would_help(who, units):
+            key = norm_identity(who)
+            if key not in warned_ambiguous:
+                warned_ambiguous.add(key)
+                log(f"radar: could not uniquely resolve speaker {who!r} to a "
+                    f"live unit ({len(units)} player units online)")
+        return unit
+
+    def _ambiguity_would_help(who: str, units) -> bool:
+        """True if resolving `who` failed only because of a duplicate identity."""
+        key = norm_identity(who)
+        matches = [u for u in units if norm_identity(u.player) == key
+                   or norm_identity(u.callsign) == key]
+        return len(matches) > 1
+
+    def track_for(who: str):
+        """Live CTR track for the transmitting aircraft, or None."""
+        ac = unit_for_speaker(who)
+        if ac is None:
+            return None
+        return tracker.track(ac.callsign, ac.lat, ac.lon, ac.alt_ft, ac.heading)
 
     def traffic() -> list:
         """Every live unit (players + AI), for sequencing clearances."""

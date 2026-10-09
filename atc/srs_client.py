@@ -233,6 +233,25 @@ class SrsClient:
                     if self.on_transmission_end and len(pcm) > 9600:
                         self.on_transmission_end(key, name, pcm, duration)
 
+    def client_position(self, name: str) -> tuple[float, float] | None:
+        """Position (lat, lng) of an SRS client by name, or None.
+
+        SRS reports every client's `LatLngPosition` (from the DCS GameGUI
+        export), so this is an **independent** way to locate a transmitting
+        pilot — useful when the SRS name does not equal the DCS player name.
+        """
+        if not name:
+            return None
+        low = name.lower()
+        for client in self.clients.values():
+            if (client.get("Name") or "").lower() != low:
+                continue
+            pos = client.get("LatLngPosition") or {}
+            lat, lng = pos.get("lat"), pos.get("lng")
+            if lat is not None and lng is not None and (lat or lng):
+                return float(lat), float(lng)
+        return None
+
     # ---------- transmit ----------
 
     def transmit(self, pcm_48k: bytes, freq_hz: float) -> None:

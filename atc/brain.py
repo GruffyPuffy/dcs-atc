@@ -163,24 +163,45 @@ class AtcBrain:
 
     @staticmethod
     def _norm_speaker(name: str) -> str:
-        """Normalise a speaker name for lookup: lower-case, no separators."""
+        """Normalise a speaker name for lookup: lower-case, no separators.
+
+        Digits are **significant** (see `state_client.norm_identity`): DCS
+        appends a number to make duplicate names unique, so "caveman" and
+        "caveman1" must NOT be conflated. A trailing-digit variant is matched
+        explicitly in `_speaker_keys`, where it is safe.
+        """
         return re.sub(r"[\s_-]+", "", (name or "").lower())
+
+    @classmethod
+    def _speaker_keys(cls, name: str) -> list[str]:
+        """Every key a speaker name may be stored under.
+
+        Includes the exact normalised name, plus — only when the raw name has no
+        separator and no pre-existing digit — the trailing-"1" form (mirroring
+        `CallsignRegistry.speaker_spellings` for a flight-name SRS name like
+        "Springfield" vs "Springfield1"). This never conflates two distinct
+        DCS-uniquified names ("Caveman" vs "Caveman-1"), because separators and
+        digits in the raw name suppress the variant.
+        """
+        keys = [cls._norm_speaker(name)]
+        if re.fullmatch(r"[A-Za-z]+", name or ""):
+            keys.append(cls._norm_speaker(name) + "1")
+        return keys
 
     def callsign_for_speaker(self, who: str) -> str:
         """Flight callsign for an SRS/DCS player name, or the name itself.
 
-        The match is case- and separator-insensitive, so "Caveman", "caveman"
-        and "Caveman_1" resolve alike; if the exact form is unknown we fall back
-        to a separator-insensitive scan before giving up and returning `who`.
+        The match is case- and separator-insensitive ("Caveman" == "caveman"),
+        and a flight-name speaker ("Springfield") also matches the numbered
+        form DCS sometimes reports ("Springfield1"). Digits are otherwise
+        significant, so two DCS-uniquified players ("Caveman" vs "Caveman-1")
+        stay distinct.
         """
         if not who:
             return who
-        key = self._norm_speaker(who)
-        if key in self.speaker_callsigns:
-            return self.speaker_callsigns[key]
-        for stored, cs in self.speaker_callsigns.items():
-            if self._norm_speaker(stored) == key:
-                return cs
+        for key in self._speaker_keys(who):
+            if key in self.speaker_callsigns:
+                return self.speaker_callsigns[key]
         return who
 
     def _resolve_speaker(self, text: str, who: str) -> str | None:
@@ -396,7 +417,7 @@ class AtcBrain:
         # Trainer aid: "<callsign> request bearing and distance [to <gate>]"
         # gives a bearing/distance to a named entry/exit gate (or the field).
         if re.search(r"\b(bearing|directions?|how do i get|where is)\b", low):
-            return self._directions(callsign, low, track, controller)
+            return self._directions(callsign, low, track, controller, pilot)
 
         # Escape hatches (any frequency). These exist so a pilot can never get
         # stuck in a wrong state during training:
@@ -700,6 +721,27 @@ class AtcBrain:
 
     def _handle_control(self, callsign: str, pilot: PilotState, low: str,
                         track: AircraftTrack | None) -> str | None:
+        # Explicit entry request ("Control, Colt 1, request Entry North"):
+        # approve the pilot's chosen gate and remember it, so the join and any
+        # follow-up use it. A bare direction in an inbound call ("35 miles
+        # north") is a *position*, not a request, so it does not override the
+        # best entry (see `_requested_gate`).
+        requested = self._requested_gate(low)
+        if requested:
+            # Approve the pilot's requested gate and remember it in the pilot
+            # state (so the inbound/join and the map trail use it too).
+            pilot.entry_gate = requested
+            pilot.phase = Phase.INBOUND
+            pilot.cleared_inbound = True
+            heading = None
+            if track is not None and self.airfield is not None:
+                heading = self.airfield.join_heading(track.lat, track.lon,
+                                                     requested)
+            if heading is None:
+                return self._say("control_join_requested_nohdg", callsign,
+                                 gate=requested)
+            return self._say("control_join_requested", callsign, gate=requested,
+                             heading=f"{heading:03.0f}", turn="right")
         # Readback of the join clearance ("150 to join via Entry East") ->
         # Control issues the descent to 1500 ft (once). Must come before the
         # inbound regex, which also matches "entry".
@@ -724,7 +766,7 @@ class AtcBrain:
         if re.search(r"\binbound\b|\bentry\b", low):
             pilot.phase = Phase.INBOUND
             pilot.cleared_inbound = True
-            gate = self._pick_entry_gate(track, low)
+            gate = self._pick_entry_gate(track, low, pilot)
             pilot.entry_gate = gate
             # Compute the join heading from the pilot's live position (not a
             # canned value); fall back to the static variable without a track.
@@ -774,22 +816,41 @@ class AtcBrain:
         return f"Exit {gate}"
 
     def _pick_entry_gate(self, track: AircraftTrack | None,
-                         low: str = "") -> str:
+                         low: str = "", pilot: PilotState | None = None) -> str:
         """Arrival entry point.
 
-        Priority: the direction the pilot *said* (e.g. "35 miles north" ->
-        Entry North), then the gate nearest the aircraft's live position, then
-        a default. The spoken direction wins because it is what the pilot
-        expects to hear back.
+        A gate the pilot **requested** (or was previously cleared) is honoured
+        first, so an approved "request Entry North" survives the inbound call.
+        Otherwise it is the gate that best sets up the landing: the CTR is
+        joined from the **approach side**, so we suggest the gate aligned with
+        the reciprocal of the landing heading (Kutaisi 25 -> Entry East, 07 ->
+        Entry West) — the common-sense straight-in entry, matching the Master
+        Arms practice. The pilot's reported *position* does not change it. Falls
+        back to the nearest gate to the live position, then a default.
         """
-        spoken = self._spoken_gate(low)
-        if spoken:
-            return spoken
+        if pilot is not None and pilot.entry_gate:
+            return pilot.entry_gate
+        if self.airfield is not None:
+            gate = self.airfield.best_entry_gate(self.runway)
+            if gate:
+                return f"Entry {gate}"
         if track is not None and self.gate_locator is not None:
             gate = self.gate_locator(track.lat, track.lon)
             if gate:
                 return f"Entry {gate}"
         return "Entry East"
+
+    def _requested_gate(self, low: str) -> str | None:
+        """A gate explicitly requested ("request Entry North", "we'd like Entry
+        West"), as an "Entry X" label, or None.
+
+        Requires a request verb *and* a gate name, so a bare directional position
+        report ("35 miles north") is not mistaken for a request.
+        """
+        if not re.search(r"\b(request(?:ing)?|like|prefer|would like|"
+                         r"asking for)\b", low):
+            return None
+        return self._spoken_gate(low)
 
     def _spoken_gate(self, low: str) -> str | None:
         """Entry gate named in the transmission, e.g. 'north' -> 'Entry North'."""
@@ -831,17 +892,21 @@ class AtcBrain:
 
     def _directions(self, callsign: str, low: str,
                     track: AircraftTrack | None,
-                    controller: Controller) -> str:
+                    controller: Controller,
+                    pilot: PilotState | None = None) -> str:
         """Bearing/distance to a named gate (or the field) from the pilot's
         live position. A trainer aid to help find the CTR entry/exit points."""
         agency = self._agency(controller)
         if track is None or self.airfield is None:
             return self._say("directions_unknown", callsign, agency=agency)
-        # Which gate? Prefer one named in the call, else the nearest.
+        # Which gate? Prefer one named in the call, else the gate the pilot is
+        # cleared to (or the best entry for the runway) — so a request for
+        # "directions to the field" points at the entry that sets up the landing.
         gate = self._spoken_gate(low)
-        if gate is None and self.gate_locator is not None:
-            nearest = self.gate_locator(track.lat, track.lon)
-            gate = f"Entry {nearest}" if nearest else None
+        if gate is None and pilot is not None and pilot.entry_gate:
+            gate = pilot.entry_gate
+        if gate is None:
+            gate = self._pick_entry_gate(track, low, pilot)
         if gate is None:
             # no gates configured: give directions to the field itself
             bearing, distance = bearing_distance(

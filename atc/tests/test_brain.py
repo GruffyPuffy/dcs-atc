@@ -264,7 +264,7 @@ def test_control_departure_checkin_climb(brain):
 def test_control_join_readback_descends(brain):
     brain.handle("Control, Colt 1, inbound 35 miles north",
                  controller=Controller.CONTROL)
-    reply = brain.handle("150 to join via Entry North, Colt 1",
+    reply = brain.handle("150 to join via Entry East, Colt 1",
                          controller=Controller.CONTROL)
     assert "descend to 1500 feet" in reply
     assert brain.pilots["Colt 1"].descend_issued
@@ -353,18 +353,27 @@ def test_control_inbound_routes_via_entry_gate(brain):
     assert brain.pilots["Colt 1"].entry_gate
 
 
-def test_control_inbound_uses_spoken_direction(brain):
-    # the direction the pilot says should win over the live position
+def test_control_inbound_uses_best_entry_for_runway(brain):
+    # The entry is always the common-sense one for the active runway (the side
+    # you land *from*), regardless of where the pilot reports from. Kutaisi
+    # runway 25 -> Entry East, even for a pilot inbound "35 miles north".
     reply = brain.handle("Control, Colt 1, inbound 35 miles north",
                          controller=Controller.CONTROL)
-    assert "Entry North" in reply
-    assert brain.pilots["Colt 1"].entry_gate == "Entry North"
+    assert "Entry East" in reply
+    assert brain.pilots["Colt 1"].entry_gate == "Entry East"
 
 
-def test_control_inbound_spoken_west(brain):
+def test_control_inbound_same_entry_from_other_directions(brain):
+    # A pilot reporting from the west still gets the straight-in Entry East.
     reply = brain.handle("Control, Colt 1, inbound 20 miles west",
                          controller=Controller.CONTROL)
-    assert "Entry West" in reply
+    assert "Entry East" in reply
+
+
+def test_best_entry_gate_follows_runway(airfield):
+    # The best entry is on the approach side: 25 -> East, 07 -> West.
+    assert airfield.best_entry_gate("25") == "East"
+    assert airfield.best_entry_gate("07") == "West"
 
 
 def test_control_departure_checkin_radar_contact(brain):
@@ -816,6 +825,75 @@ def test_directions_bearing_is_plausible(brain, airfield):
     assert 45 <= bearing <= 135
 
 
+def test_directions_defaults_to_best_entry_not_nearest(brain, airfield):
+    # A generic "directions to the field" gives the gate that sets up the
+    # landing (Entry East for runway 25), not the gate nearest the aircraft.
+    north = _track(airfield, airfield.ctr.center_lat + 0.3,
+                   airfield.ctr.center_lon)
+    reply = brain.handle("Control, Colt 1, request directions to the field",
+                         track=north, controller=Controller.CONTROL)
+    assert "Entry East" in reply
+
+
+# ---------- Explicit entry requests ----------
+
+def test_requested_entry_is_approved_and_remembered(brain):
+    reply = brain.handle("Control, Colt 1, request Entry North",
+                         controller=Controller.CONTROL)
+    assert "approved" in reply.lower()
+    assert "Entry North" in reply
+    assert brain.pilots["Colt 1"].entry_gate == "Entry North"
+
+
+def test_requested_entry_survives_followup_inbound(brain):
+    brain.handle("Control, Colt 1, request Entry North",
+                 controller=Controller.CONTROL)
+    # A later inbound call must keep the approved gate, not reset to best entry.
+    reply = brain.handle("Control, Colt 1, inbound 20 miles north",
+                         controller=Controller.CONTROL)
+    assert "Entry North" in reply
+    assert brain.pilots["Colt 1"].entry_gate == "Entry North"
+
+
+def test_bare_position_report_is_not_an_entry_request(brain):
+    # "35 miles north" in an inbound call is a position, not a gate request.
+    reply = brain.handle("Control, Colt 1, inbound 35 miles north",
+                         controller=Controller.CONTROL)
+    assert "Entry East" in reply
+    assert brain.pilots["Colt 1"].entry_gate == "Entry East"
+
+
+# ---------- Speaker identity ("Caveman" <-> "Springfield 1-1") ----------
+
+def test_speaker_mapping_holds_both_identities(brain):
+    brain.remember_speaker("Caveman", "Springfield 1-1")
+    # The SRS/DCS player name and the flight callsign are the same pilot; the
+    # SRS name resolves to the callsign, and the callsign maps to itself.
+    assert brain.callsign_for_speaker("Caveman") == "Springfield 1-1"
+    assert brain.callsign_for_speaker("Springfield 1-1") == "Springfield 1-1"
+
+
+def test_speaker_mapping_tolerates_dcs_duplicate_suffix(brain):
+    # Separators and case are insignificant ("caveman" == "CAVEMAN"), and a
+    # flight-name speaker ("Springfield") also matches DCS's numbered form
+    # ("Springfield1"). But two DCS-uniquified *players* ("Caveman" vs
+    # "Caveman-1") must stay distinct — the trailing digit is significant.
+    brain.remember_speaker("Caveman", "Springfield 1-1")
+    assert brain.callsign_for_speaker("caveman") == "Springfield 1-1"
+    assert brain.callsign_for_speaker("CAVEMAN") == "Springfield 1-1"
+    assert brain.callsign_for_speaker("Caveman_1") == "Caveman_1"  # different pilot
+
+
+def test_two_pilots_with_shared_callsign_stay_distinct(brain):
+    # The TTI hazard: several pilots share the "Springfield11" slot name. Each
+    # speaker must map to the gate/sign they actually used, not the callsign.
+    brain.remember_speaker("Alice", "Springfield 1-1")
+    brain.remember_speaker("Bob", "Springfield 1-2")
+    assert brain.callsign_for_speaker("Alice") == "Springfield 1-1"
+    assert brain.callsign_for_speaker("Bob") == "Springfield 1-2"
+    assert brain.callsign_for_speaker("Carol") == "Carol"  # unknown -> unchanged
+
+
 # ---------- Vectors (approach vector, real phraseology) ----------
 
 def test_vectors_gives_heading(brain, airfield):
@@ -848,14 +926,15 @@ def test_vectors_without_track(brain):
 # ---------- Computed join heading (not hardcoded) ----------
 
 def test_control_join_heading_is_computed(brain, airfield):
-    # from the south, the join heading toward Entry North should point north
+    # from the south, the join heading toward Entry East (north-east of the
+    # field) should point into the north-east quadrant
     south = _track(airfield, airfield.ctr.center_lat - 0.3,
                    airfield.ctr.center_lon)
     reply = brain.handle("Control, Colt 1, inbound 35 miles south",
                          track=south, controller=Controller.CONTROL)
     import re
     heading = int(re.search(r"heading (\d{3})", reply).group(1))
-    assert heading <= 45 or heading >= 315  # roughly north
+    assert 0 <= heading <= 90  # roughly north-east toward Entry East
 
 
 def test_control_join_heading_varies_with_position(brain, airfield):
@@ -878,7 +957,7 @@ def test_control_join_heading_varies_with_position(brain, airfield):
 def test_control_join_without_track_has_no_heading(brain):
     reply = brain.handle("Control, Colt 1, inbound 35 miles north",
                          controller=Controller.CONTROL)
-    assert "join via Entry North" in reply
+    assert "join via Entry East" in reply
     assert "heading" not in reply
 
 

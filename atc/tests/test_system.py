@@ -66,8 +66,8 @@ def test_full_arrival_two_ship(airfield, brain):
     sc.at_gate("North")
     r = sc.say("Kutaisi Control, Colt 1, inbound 35 miles north at Angels 12",
                Controller.CONTROL)
-    assert "join via Entry North" in r
-    r = sc.say("150 to join via Entry North, Colt 1", Controller.CONTROL)
+    assert "join via Entry East" in r
+    r = sc.say("150 to join via Entry East, Colt 1", Controller.CONTROL)
     assert "descend to 1500 feet" in r.lower()
 
     # Tower: entry, runway in sight (break), on final (land).
@@ -498,9 +498,9 @@ def test_full_lifecycle_all_pages(airfield, brain):
     sc.at_gate("North")
     r = sc.say("Kutaisi Control, Colt 1, inbound 35 miles north at Angels 12",
                Controller.CONTROL)
-    assert "join via Entry North" in r
+    assert "join via Entry East" in r
     assert sc.phase() == Phase.INBOUND
-    r = sc.say("150 to join via Entry North, Colt 1", Controller.CONTROL)
+    r = sc.say("150 to join via Entry East, Colt 1", Controller.CONTROL)
     assert "descend to 1500 feet" in r.lower()
 
     # Tower: entry, runway in sight (break), on final (land).

@@ -70,6 +70,35 @@ STT mangles callsigns, so matching is tolerant:
 Examples: `cold tree` → `Colt 3`, `kolt 2` → `Colt 2`, `fort 2` → `Ford 2`,
 `hog 1` → `Hawg 1`, `vyper 1` → `Viper 1`, `springfeeld 2` → `Springfield 2`.
 
+### Identity: SRS name ↔ flight callsign
+
+A pilot has **two** names and the bot keeps both. The **SRS/DCS player name**
+(e.g. `Caveman`) is the `player` field the state bridge reports
+(`Unit:getPlayerName()`); this is what SRS puts in the voice packet and what the
+radar/position lookup keys on. The **flight callsign** (e.g. `Springfield 1-1`)
+is what the pilot *says*; the brain learns the mapping the first time they
+identify (*"Ground, Springfield 1-1"* → `remember_speaker("Caveman", "Springfield 1-1")`),
+and from then on addresses their automatic calls (CTR warning, go-around) by
+callsign.
+
+The two are linked but neither implies the other: the DCS player name is **not**
+in the callsign, and the SRS name is **not** in the position data as a callsign.
+SRS reports the DCS player name as its client name (the SRS client's
+`LastSeenName` comes straight from the DCS GameGUI/export player info), so in the
+common case they match by construction; the bot still normalises both ways
+(case/separator-insensitive). **The trailing digit is significant** — DCS appends
+a number to make duplicate names unique (`Caveman` and `Caveman-1` can be two
+*different* players), so it is never stripped.
+
+Because a mission like TTI has **many** client slots sharing one callsign
+(several `Springfield11` aircraft), the radar lookup resolves the transmitting
+**speaker** to a live unit in confidence order: (1) `player` == SRS name, (2)
+`player` == the callsign the brain already learned for that speaker, (3) the SRS
+name is a slot callsign and a unit's own name implies the same flight callsign,
+(4) the SRS-reported client position matches exactly one unit, (5) solo — the one
+pilot online. It returns **None on ambiguity** and never guesses by unit name, so
+radar never binds to the wrong aircraft (see `state_client.resolve_player_unit`).
+
 If a callsign is recognised but the request is not understood, the tower replies
 **"say again"**.
 
@@ -109,8 +138,8 @@ step on the next controller's first call.
 | "Tower, Colt 1, at runway 25, ready for departure" | **departure** (after taxi/holding) | "Colt 1, Tower, line up and wait runway 25." |
 | "Line up and wait 25, Colt 1" | **readback** | "Colt 1, Tower, readback correct, wind calm, runway 25, right turnout, cleared for takeoff." |
 | "Control, Colt 1, at 1500 ft" | **departure check-in** | "Colt 1, Control, radar contact, climb to Angels 15." |
-| "Kutaisi Control, Colt 1, inbound 35 miles north at Angels 12" | **inbound** | "Colt 1, Control, radar contact, turn right heading 150 to join via Entry North." (heading is **computed** from the live position) |
-| "150 to join via Entry North, Colt 1" | **readback** | "Colt 1, Control, descend to 1500 feet." |
+| "Kutaisi Control, Colt 1, inbound 35 miles north at Angels 12" | **inbound** | "Colt 1, Control, radar contact, turn right heading 150 to join via Entry East." (heading **computed** from the live position; entry is the best/straight-in gate for runway 25) |
+| "150 to join via Entry East, Colt 1" | **readback** | "Colt 1, Control, descend to 1500 feet." |
 | "Tower, Colt 1, Entry East" | **entry** | "Colt 1, Tower, report runway in sight." |
 | "Tower, Colt 1, runway in sight" | **runway in sight** | "2-ship Colt 1, Tower, wind calm, cleared for left overhead break runway 25." (the "2-ship" prefix appears once a formation size has been heard) | |
 | "Tower, Colt 1, on final" | **final** | "Colt 1, Tower, runway 25, wind calm, cleared to land." |
@@ -277,8 +306,10 @@ still works offline.
 To help find the CTR entry/exit points, a pilot can **request bearing and
 distance**: *"<callsign> request bearing and distance [to Entry East]"*. This is
 real phraseology (used especially in military/GCA control). The bot replies with
-a **bearing and distance** from the pilot's live position to the named gate — or,
-if no gate is named, to the **nearest** gate.
+a **bearing and distance** from the pilot's live position to the named gate. If
+no gate is named it points at the gate that sets up the landing — the pilot's
+**cleared entry** if one has been approved, else the **best entry** for the
+runway (see §11).
 
 > "Colt 1, Control, bearing 014, distance 32 miles to Entry East."
 
@@ -288,9 +319,19 @@ uses the standard *"bearing X, distance Y"* format. Naming a CTR gate is an
 the bot replies *"unable, no radar contact."* Wording lives in the
 `directions_*` templates in `phraseology.json`.
 
+## 4c. Requesting an entry (pilot's choice)
+
+A pilot may **ask for a specific entry**: *"Control, Colt 1, request Entry
+North."* Control **approves** it (*"…approved, turn left heading 020 to join via
+Entry North"*) and **remembers the gate in the pilot's state**, so the join, the
+descent readback and the map trail all use it. A later inbound call keeps the
+approved gate rather than resetting to the best entry. A bare directional
+*position* report ("inbound 35 miles north") is **not** a request — only an
+explicit request verb changes the gate.
+
 ---
 
-## 4c. Vectors (approach vector, real phraseology)
+## 4d. Vectors (approach vector, real phraseology)
 
 *"<callsign> request vectors [for runway 25]"* gives a real **approach vector**:
 
@@ -673,12 +714,16 @@ never broadcast their arrival; pilots call them). Disable it with
 ### Control
 
 - "inbound" / "checking in" → radar contact and routing to join via the
-  **entry point** nearest the aircraft: *"turn right heading 150 to join via
+  **best entry** for the active runway: *"turn right heading 150 to join via
   Entry East"*. The heading is **computed** from the pilot's live position to
   the entry point (not a canned value); without a live position the heading is
-  omitted (*"join via Entry East"*). The entry point is chosen from the
-  aircraft's live position (`gate_locator`), falling back to a default. The
-  pilot's readback triggers the descent: *"descend to 1500 feet"*.
+  omitted (*"join via Entry East"*). The entry point is the **common-sense
+  straight-in one** — the gate on the approach side, i.e. whose bearing from
+  the field is closest to the reciprocal of the landing direction
+  (`Airfield.best_entry_gate`: Kutaisi 25 → Entry East, 07 → Entry West;
+  Gudauta 33 → Entry Southeast). This is independent of where the pilot reports
+  from, matching the Master Arms practice. The pilot's readback triggers the
+  descent: *"descend to 1500 feet"*.
   An **inbound** call wins over the departure keywords, so *"inbound 35 miles
   north at Angels 12"* is routed as an arrival (not answered with "climb to
   Angels 15").
@@ -763,8 +808,8 @@ Ground phase; 8–10 Tower; 11 Control.)
 
 | # | Freq | Pilot says | Bot replies |
 |---|------|-----------|-------------|
-| 1 | Control | "Kutaisi Control, Colt 1, inbound 35 miles north at Angels 12." | "Colt 1, Control, radar contact, turn right heading 150 to join via Entry North." (heading computed) |
-| 2 | Control | "150 to join via Entry North, Colt 1." | "Colt 1, Control, descend to 1500 feet." |
+| 1 | Control | "Kutaisi Control, Colt 1, inbound 35 miles north at Angels 12." | "Colt 1, Control, radar contact, turn right heading 150 to join via Entry East." (heading computed; entry = best/straight-in gate for the runway) |
+| 2 | Control | "150 to join via Entry East, Colt 1." | "Colt 1, Control, descend to 1500 feet." |
 | 3 | Tower | "Tower, Colt 1, Entry North." | "Colt 1, Tower, report runway in sight." |
 | 4 | Tower | "Tower, Colt 1, runway in sight." | "2-ship Colt 1, Tower, wind calm, cleared for left overhead break runway 25." |
 | 5 | Tower | "Tower, Colt 1, on final." | "Colt 1, Tower, runway 25, wind calm, cleared to land." |
@@ -783,6 +828,8 @@ Tower; 7 Ground.)
 | "Colt 1, cancel." | "Colt 1, Tower, clearance cancelled." (steps back one phase, see §3b) |
 | "Colt 1, say again." | replays the last clearance (see §3b) |
 | "Control, Colt 1, request bearing and distance to Entry East." | "Colt 1, Control, bearing 014, distance 32 miles to Entry East." |
+| "Control, Colt 1, request directions to the field." | "…bearing …, distance …" to the **best/cleared entry** (see §4b) |
+| "Control, Colt 1, request Entry North." | "Colt 1, Control, approved, turn left heading 020 to join via Entry North." (remembers the gate, see §4c) |
 | "Control, Colt 1, request vectors for runway 25." | "Colt 1, Control, fly heading 018, vectors for runway 25." |
 
 ### Position cross-checks (trainer: the bot checks you)

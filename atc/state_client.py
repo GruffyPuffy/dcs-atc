@@ -10,9 +10,115 @@ The protocol is one JSON request per connection, one JSON reply line back.
 from __future__ import annotations
 
 import json
+import re
 import socket
 import uuid
 from dataclasses import dataclass
+
+
+def norm_identity(name: str) -> str:
+    """Normalise a DCS/SRS name for identity matching.
+
+    Lower-case and strip separators (so "Caveman_1" == "caveman-1"), but keep
+    digits **significant**: DCS appends a number to make duplicate player names
+    unique ("Caveman" and "Caveman-1" can be two *different* people), so
+    dropping it would wrongly merge them.
+    """
+    return re.sub(r"[\s_-]+", "", (name or "").lower())
+
+
+def slot_callsign(unit_name: str) -> str:
+    """Derive a flight callsign from a DCS unit name.
+
+    DCS unit names can be a flight name with an element attached, e.g.
+    "Springfield11" -> "Springfield 1-1" (flight 1, element 1). Returns "" if
+    the name has no trailing digits to split.
+    """
+    m = re.match(r"^([A-Za-z]+)(\d+)$", unit_name or "")
+    if not m:
+        return ""
+    name, digits = m.group(1), m.group(2)
+    if len(digits) >= 2:
+        return f"{name} {digits[0]}-{digits[1]}"
+    return f"{name} {digits}"
+
+
+def resolve_player_unit(units, srs_name: str, learned_callsign: str = "",
+                        solo: bool = False, speaker_pos=None):
+    """Find the live unit for a transmitting pilot, None if not resolvable.
+
+    The SRS name and the DCS player name **need not be the same** (players can
+    set one name in DCS and a different one in SRS), so matching on the player
+    name alone is not enough. This resolves in confidence order and **never
+    guesses when it could be wrong**:
+
+    1. `player` equals the SRS name (the common case — SRS reports the DCS
+       player name, and most players use the same name in DCS and SRS).
+    2. `player` equals a callsign the brain already learned for this speaker.
+    3. `player` equals the flight callsign the *unit's own name* implies
+       (e.g. SRS "Springfield11" <-> unit "Springfield11" -> flight "Springfield 1-1").
+    4. `speaker_pos` (the SRS-reported client position) matches exactly one live
+       player unit — an independent signal that disambiguates duplicate names.
+    5. Solo training: exactly one live player unit — take it.
+
+    Returns None when ambiguous (more than one candidate at a winning step) so
+    the caller leaves the pilot unresolved rather than binding to the wrong
+    aircraft. `learned_callsign` is the flight callsign the brain has mapped the
+    speaker to; the caller owns that mapping.
+    """
+    units = list(units or [])
+    if not units:
+        return None
+
+    def by_player(candidate: str):
+        key = norm_identity(candidate)
+        if not key:
+            return []
+        exact = [u for u in units if (u.player or "").lower() == candidate.lower()]
+        return exact or [u for u in units if norm_identity(u.player) == key]
+
+    # 1) SRS name == DCS player name.
+    hits = by_player(srs_name)
+    if len(hits) == 1:
+        return hits[0]
+    if len(hits) > 1:
+        return None  # ambiguous — do not guess
+
+    # 2) The player name matches a callsign we already learned for this speaker.
+    if learned_callsign:
+        hits = by_player(learned_callsign)
+        if len(hits) == 1:
+            return hits[0]
+
+    # 3) The SRS name is a *slot* callsign, and a unit's own name implies the
+    #    same flight callsign (handles DCS name != SRS name, with a shared slot).
+    want = slot_callsign(srs_name)
+    if want:
+        hits = [u for u in units
+                if slot_callsign(u.callsign) == want
+                or norm_identity(u.player) == norm_identity(want)]
+        if len(hits) == 1:
+            return hits[0]
+
+    # 4) The SRS client's own reported position matches exactly one unit.
+    if speaker_pos is not None:
+        near = [u for u in units
+                if _within_nm(speaker_pos, (u.lat, u.lon), 3.0)]
+        if len(near) == 1:
+            return near[0]
+
+    # 5) Solo: only one player online, so it must be them.
+    if solo and len(units) == 1:
+        return units[0]
+    return None
+
+
+def _within_nm(a, b, max_nm: float) -> bool:
+    """True if two lat/lon points are within `max_nm` (flat-earth, small)."""
+    import math
+    dlat = (b[0] - a[0]) * 60.0
+    dlon = (b[1] - a[1]) * 60.0 * math.cos(math.radians(a[0]))
+    return math.hypot(dlat, dlon) <= max_nm
 
 
 @dataclass

@@ -49,6 +49,8 @@
     "contact_control": "{callsign}, {tower}, contact {control} on channel {channel}.",
     "control_join": "{callsign}, {control}, radar contact, turn {turn} heading {heading} to join via {gate}.",
     "control_join_nohdg": "{callsign}, {control}, radar contact, join via {gate}.",
+    "control_join_requested": "{callsign}, {control}, approved, turn {turn} heading {heading} to join via {gate}.",
+    "control_join_requested_nohdg": "{callsign}, {control}, approved, join via {gate}.",
     "control_contact": "{callsign}, {control}, radar contact.",
     "control_climb": "{callsign}, {control}, radar contact, climb to Angels {angels}.",
     "control_descend": "{callsign}, {control}, descend to {descent_altitude}.",

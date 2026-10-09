@@ -243,6 +243,32 @@ class Airfield:
             return ""
         return "right" if delta > 0 else "left"
 
+    def best_entry_gate(self, runway: str | None = None) -> str | None:
+        """Entry gate that best sets up a landing on a runway.
+
+        You join the CTR from the **approach side**, so the common-sense entry
+        is the gate whose bearing from the field is closest to the reciprocal of
+        the landing direction. For Kutaisi runway 25 (heading ~260) that is the
+        East gate; for 07 (~080) the West gate — matching the Master Arms
+        practice of always joining from the straight-in side, regardless of
+        where the pilot happens to be. Returns the gate name, or None if no
+        gates are configured.
+        """
+        if not self.gates:
+            return None
+        rwy_hdg = self.runway_heading(runway)
+        if rwy_hdg is None:
+            return next(iter(self.gates))
+        approach = (rwy_hdg + 180) % 360  # the side you land *from*
+        lat0, lon0 = self.ctr.center_lat, self.ctr.center_lon
+
+        def offset(name: str) -> float:
+            g = self.gates[name]
+            bearing = _bearing(lat0, lon0, g[0], g[1])
+            return abs((bearing - approach + 180) % 360 - 180)
+
+        return min(self.gates, key=offset)
+
     def holding_zone_geometry(self, runway: str | None = None,
                               thr_nm: float = 0.6,
                               point_nm: float = 0.2) -> list[dict]:
