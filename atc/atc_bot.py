@@ -30,6 +30,7 @@ from atis import build_atis
 from brain import AtcBrain, Controller, Phraseology
 from callsigns import CallsignRegistry
 from ctr import CtrEvent, CtrTracker
+from phonetics import stt_hint
 from srs_client import SrsClient
 from state_client import StateClient
 from workers import ControllerWorker, SharedState
@@ -167,11 +168,13 @@ def main() -> None:
     # to warn on unannounced CTR entry / occupied-runway go-arounds.
     state = None if args.no_state else StateClient(args.state_host, args.state_port)
     callsigns = CallsignRegistry()
+    callsign_names = list(callsigns.names)
     if state is not None:
         try:
             slots = state.callsigns()
             if slots:
                 callsigns = CallsignRegistry.from_mission(slots)
+                callsign_names = list(callsigns.names)
                 print(f"[*] Callsigns from mission: {len(callsigns.names)} flights "
                       f"({', '.join(callsigns.names[:8])}...)")
         except (OSError, RuntimeError) as error:
@@ -281,9 +284,14 @@ def main() -> None:
             language="en",
             beam_size=1,
             vad_filter=True,
-            initial_prompt="Kutaisi Tower, Colt 1, request taxi to startup, "
-                           "ready for departure, cleared to land, cleared for takeoff, "
-                           "hold short, inbound, final, runway 25.",
+            # Bias the decoder toward THIS mission's callsigns (the highest-value
+            # tokens) plus our standard phraseology. `hotwords` is the dedicated
+            # hint channel in faster-whisper; the callsigns dominate the front of
+            # the string.
+            hotwords=stt_hint(callsign_names,
+                              [airfield.name, airfield.tower]),
+            initial_prompt="ATC radio calls. Call signs and standard "
+                           "phraseology.",
         )
         text = " ".join(s.text.strip() for s in segments).strip()
         latency = (time.monotonic() - started) * 1000
@@ -376,6 +384,10 @@ def main() -> None:
                     # Solo training mode: with one (or zero) players online, an
                     # unrecognized call is prompted instead of ignored.
                     brain.set_pilot_count(len(players))
+                    # Known callsigns online, used to attribute a garbled call to
+                    # a pilot whose flight name the transmission still resembles.
+                    brain.set_active_pilots(
+                        [brain.callsign_for_speaker(ac.player) for ac in players])
                 for ac in players:
                     # Address the pilot by their flight callsign (learned from
                     # their transmissions), not the raw DCS unit name.

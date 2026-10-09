@@ -12,6 +12,8 @@ from pathlib import Path
 import numpy as np
 import wave
 
+from phonetics import stt_hint
+
 
 def load_wav(path: Path) -> np.ndarray:
     with wave.open(str(path), "rb") as wav:
@@ -55,6 +57,11 @@ def main() -> None:
             ("vad+prompt", {"vad_filter": True,
                             "initial_prompt": "Batumi Tower, Adder, Ford, Colt, "
                                               "inbound, final, runway 25, request taxi."}),
+            ("vad+hotwords", {"vad_filter": True,
+                              "hotwords": stt_hint(
+                                  ["Colt", "Ford", "Adder", "Hawg", "Viper",
+                                   "Springfield", "Enfield"],
+                                  ["Batumi", "Kutaisi", "Gudauta"])}),
         ):
             started = time.monotonic()
             segments, info = model.transcribe(audio, language="en", beam_size=1, **kwargs)

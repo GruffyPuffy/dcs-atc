@@ -17,6 +17,7 @@ import av
 import numpy as np
 
 from srs_client import SrsClient
+from phonetics import stt_hint
 
 SAMPLE_RATE = 48000
 STT_RATE = 16000  # faster-whisper expects 16 kHz numpy arrays
@@ -121,9 +122,9 @@ def main() -> None:
             language="en",
             beam_size=1,
             vad_filter=True,
-            initial_prompt="Kutaisi Tower, Batumi Tower, Colt 1, Adder, Ford, "
-                           "Hawg, inbound, final, runway 25, request taxi to startup, "
-                           "cleared to land.",
+            hotwords=stt_hint(),
+            initial_prompt="ATC radio calls. Call signs and standard "
+                           "phraseology.",
         )
         text = " ".join(s.text.strip() for s in segments).strip()
         latency = (time.monotonic() - started) * 1000

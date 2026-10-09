@@ -30,3 +30,20 @@ def test_respects_min_length():
 
 def test_empty_name():
     assert generate_variants("") == []
+
+
+def test_stt_hint_puts_callsigns_first():
+    from phonetics import stt_hint
+    hint = stt_hint(["Springfield", "Colt"], ["Gudauta"])
+    # callsigns dominate the front of the hint (highest-value tokens)
+    assert hint.startswith("Springfield, Colt")
+    assert "Gudauta" in hint
+    assert "cleared for takeoff" in hint
+
+
+def test_stt_hint_dedupes_and_caps():
+    from phonetics import stt_hint
+    hint = stt_hint(["Colt", "colt", "Colt"], ["Kutaisi", "kutaisi"])
+    assert hint.lower().count("colt") == 1
+    assert hint.lower().count("kutaisi") == 1
+    assert len(stt_hint(["X" * 100] * 50, max_chars=100)) <= 100

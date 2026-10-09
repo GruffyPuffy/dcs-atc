@@ -42,6 +42,11 @@ Enfield, Ford, Hawg, Heavy, Hornet, Pontiac, Springfield, Uzi, Viper.
 
 STT mangles callsigns, so matching is tolerant:
 
+- The decoder is **biased toward this mission's callsigns**: the actual flight
+  names are passed as `hotwords` to faster-whisper (callsigns first, then
+  agencies and standard phraseology — see `phonetics.stt_hint`). A misheard
+  callsign is the one error the bot cannot recover from, so it gets the
+  strongest bias.
 - flight-name variants are **generated from phonetic confusion rules**
   (`atc/phonetics.py`), not hand-listed. Voiced/unvoiced pairs swap
   (`t`↔`d`, `p`↔`b`, `k`↔`g`), nasals blur (`m`↔`n`), vowels drift
@@ -49,6 +54,15 @@ STT mangles callsigns, so matching is tolerant:
   So `Colt` yields `cold`, `bolt`, `coat`, `cult`, `kolt`, `cort`, … and
   `Ford` yields `fort`, `fold`, `vord`, … Variants that are themselves number
   words (e.g. `four` for `Ford`) are dropped to avoid false matches.
+- **multi-word fractures** are handled (e.g. `spring fail` / `springPill` →
+  `Springfield`), and a **fuzzy recovery** (edit distance, capped and
+  margin-checked) catches mishearings the rules miss — but only when a flight
+  number is present, so a bare word never becomes a callsign.
+- **speaker attribution** (training heuristic): if a transmission carries no
+  callsign but *resembles* a known pilot's flight name, it is attributed to
+  them — the pilot who previously used that callsign, or (solo) the only pilot
+  online who matches. Readbacks that open with the content (e.g. "Cleared
+  taxi …") do **not** resemble a name, so they are never silently guessed.
 - flight numbers accept digits or spoken words, including homophones
   (`one`/`won`, `two`/`to`/`too`, `three`/`tree`, `four`/`for`, `eight`/`ate`)
 - both `Colt 1` and `Colt 1-1` (flight + element) are recognised

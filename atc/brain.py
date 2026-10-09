@@ -130,19 +130,93 @@ class AtcBrain:
         # instead of being ignored. Set from the live pilot count (see
         # `set_pilot_count`); a silent miss is confusing on a solo trainer.
         self.solo_mode = False
+        # Callsigns currently online (from the state bridge). A single online
+        # pilot whose flight is known becomes the fallback for a garbled call.
+        self.active_pilots: list[str] = []
 
     def set_pilot_count(self, count: int) -> None:
         """Enable solo training mode when there is a single player online."""
         self.solo_mode = count <= 1
 
+    def set_active_pilots(self, callsigns) -> None:
+        """Record the callsigns currently online (from the live state bridge).
+
+        Used as the candidate set for attributing a garbled transmission to a
+        known pilot when no callsign could be extracted (see
+        `_resolve_speaker`).
+        """
+        self.active_pilots = [c for c in (callsigns or []) if c]
+
     def remember_speaker(self, who: str, callsign: str) -> None:
-        """Map an SRS speaker name to the callsign they used."""
-        if who and callsign:
-            self.speaker_callsigns[who.lower()] = callsign
+        """Map an SRS speaker name to the callsign they used.
+
+        A speaker name can only ever map to one flight callsign, so we key on a
+        normalised form (a stale mapping would send *another* pilot's automatic
+        calls to the wrong aircraft). Any extra spelling of the same pilot that
+        the registry knows about is mapped to the same callsign, so a player
+        whose SRS name matches a known STT variant is recognised too.
+        """
+        if not who or not callsign:
+            return
+        for key in self.callsigns.speaker_spellings(who):
+            self.speaker_callsigns[key] = callsign
+
+    @staticmethod
+    def _norm_speaker(name: str) -> str:
+        """Normalise a speaker name for lookup: lower-case, no separators."""
+        return re.sub(r"[\s_-]+", "", (name or "").lower())
 
     def callsign_for_speaker(self, who: str) -> str:
-        """Flight callsign for an SRS/DCS player name, or the name itself."""
-        return self.speaker_callsigns.get(who.lower(), who)
+        """Flight callsign for an SRS/DCS player name, or the name itself.
+
+        The match is case- and separator-insensitive, so "Caveman", "caveman"
+        and "Caveman_1" resolve alike; if the exact form is unknown we fall back
+        to a separator-insensitive scan before giving up and returning `who`.
+        """
+        if not who:
+            return who
+        key = self._norm_speaker(who)
+        if key in self.speaker_callsigns:
+            return self.speaker_callsigns[key]
+        for stored, cs in self.speaker_callsigns.items():
+            if self._norm_speaker(stored) == key:
+                return cs
+        return who
+
+    def _resolve_speaker(self, text: str, who: str) -> str | None:
+        """Attribute a transmission with no extracted callsign to a pilot.
+
+        Heuristic for training: if the transmission *resembles* a known pilot's
+        callsign, treat it as that callsign — so a garbled "Spring fail 1-1"
+        from the one pilot online is understood as "Springfield 1-1". Returns a
+        callsign only when it is unambiguous, and **only when the text actually
+        looks like that flight name**:
+
+        - the speaker's own known callsign, if they earlier used it and this
+          transmission still resembles it; or
+        - in solo training, the *only* pilot online whose callsign it resembles.
+
+        A transmission that does not reference any callsign (e.g. a readback
+        that opens "Cleared taxi …" or "After departure …") is deliberately
+        **not** attributed: those open with the content, and guessing there
+        would risk acting on the wrong intent.
+        """
+        if not who:
+            return None
+        # 1) A pilot we have already identified, whose own callsign the text
+        #    still resembles (a garbled repeat of their callsign).
+        own = self.callsign_for_speaker(who)
+        if own != who and self.callsigns.looks_like(text, own):
+            return own
+        # 2) Solo training: exactly one pilot online whose flight name it
+        #    resembles.
+        if not self.solo_mode:
+            return None
+        candidates = [c for c in self.active_pilots
+                      if self.callsigns.looks_like(text, c)]
+        if len(candidates) == 1:
+            return candidates[0]
+        return None
 
     def _note_formation(self, pilot: PilotState, low: str) -> None:
         """Learn the flight size from a position/formation call.
@@ -277,6 +351,11 @@ class AtcBrain:
             if name and re.search(r"\b(help|assist|what do i do|what now|"
                                   r"remind me)\b", text.lower()):
                 return self._help(name, self._pilot(name))
+            # Training heuristic: attribute a garbled transmission to a known
+            # pilot when the text still resembles their callsign (e.g.
+            # "Spring fail 1-1" from the one pilot online).
+            callsign = self._resolve_speaker(text, speaker)
+        if not callsign:
             # Solo training: a transmission we cannot tie to a callsign gets a
             # spoken "say again" prompt, so the pilot knows they were heard but
             # not understood (most often a forgotten callsign). On a multi-pilot

@@ -37,15 +37,71 @@ CONFUSIONS: dict[str, str] = {
 DROPPABLE = set("lrtdh")
 
 # Extra known STT errors that are not pure phonetics (e.g. Whisper guessing a
-# different word). Applied as whole-word substitutions.
+# different word). Applied as whole-word substitutions. Keys are the
+# lower-cased base name; multi-word values are matched as phrases (spaces are
+# made flexible in the callsign regex), so "spring fail" also catches
+# "Springfail".
 KNOWN_ERRORS: dict[str, list[str]] = {
-    "colt": ["coat", "cult", "bolt", "cold"],
-    "ford": ["fort", "four"],
-    "hawg": ["hog", "hawk"],
+    "colt": ["coat", "cult", "bolt", "cold", "colt's"],
+    "ford": ["fort", "four", "fourth", "fork"],
+    "hawg": ["hog", "hawk", "hulk"],
     "boar": ["bore", "boar"],
-    "uzi": ["oozie", "uzzie"],
-    "viper": ["vyper", "vipper"],
+    "uzi": ["oozie", "uzzie", "oozy"],
+    "viper": ["vyper", "vipper", "piper"],
+    "dodge": ["dodger", "dodges"],
+    # "Springfield" is long and Whisper reliably fractures it (observed live:
+    # "Spring fail", "SpringPill", "springfield"). Cover the common fractures.
+    "springfield": ["spring fail", "spring failed", "spring fails", "springfield",
+                    "spring field", "springpill", "springville", "spring pearl"],
+    "enfield": ["en field", "anfield", "enfeld"],
+    "pontiac": ["pontiac", "pontyack", "pontiack"],
+    "chevy": ["chevy", "shevy", "chevy"],
+    "anvil": ["anvil", "amble", "annville"],
+    "hornet": ["hornet", "hornets", "hornett"],
 }
+
+# Generic phraseology that recurs on every frequency. Kept short and after the
+# callsigns in the hint: Whisper's context window is small, and callsigns (the
+# one token that must be recognised *exactly*) get the strongest bias by being
+# closest to the prompt.
+OPERATIONS_HINT = [
+    "ready to copy clearance", "cleared taxi", "hold short", "line up and wait",
+    "cleared for takeoff", "cleared to land", "inbound", "on final",
+    "runway in use", "QNH", "wind calm", "with information", "requesting taxi",
+    "ready for departure", "airborne", "descend and maintain", "radar contact",
+]
+
+# Agency roles as heard over the radio (spelled as spoken, not the full name).
+AGENCY_HINT = ["Tower", "Ground", "Control", "Approach", "Departure", "ATIS"]
+
+
+def stt_hint(callsigns: list[str] | None = None,
+             airfield_names: list[str] | None = None,
+             *, max_chars: int = 900) -> str:
+    """Build a bias string for STT (`faster-whisper` `hotwords`/`initial_prompt`).
+
+    The **mission callsigns come first** because a misheard callsign is the one
+    error the bot cannot recover from: without it the transmission is treated as
+    \"not for me\" and ignored. Agencies and generic operations follow. The
+    result is de-duplicated (case-insensitively) and length-capped, since
+    Whisper's prompt context is limited (extra tokens are truncated anyway, and
+    a huge prompt can slow decoding).
+    """
+    parts: list[str] = []
+    seen: set[str] = set()
+
+    def add(words) -> None:
+        for word in words or []:
+            word = (word or "").strip()
+            if word and word.lower() not in seen:
+                seen.add(word.lower())
+                parts.append(word)
+
+    add(callsigns)         # flight names — highest-value bias
+    add(airfield_names)    # e.g. "Gudauta", "Kutaisi"
+    add(AGENCY_HINT)
+    add(OPERATIONS_HINT)
+    return ", ".join(parts)[:max_chars]
 
 
 def _edit_distance(a: str, b: str) -> int:
