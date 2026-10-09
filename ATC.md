@@ -84,7 +84,7 @@ the tower replies **"say again"**.
 | "Kutaisi Control, Colt 1, inbound 35 miles north at Angels 12" | **inbound** | "Colt 1, Control, radar contact, turn right heading 150 to join via Entry North." (heading is **computed** from the live position) |
 | "150 to join via Entry North, Colt 1" | **readback** | "Colt 1, Control, descend to 1500 feet." |
 | "Tower, Colt 1, Entry East" | **entry** | "Colt 1, Tower, report runway in sight." |
-| "Tower, Colt 1, runway in sight" | **runway in sight** | "Colt 1, Tower, wind calm, cleared for left overhead break runway 25." |
+| "Tower, Colt 1, runway in sight" | **runway in sight** | "2-ship Colt 1, Tower, wind calm, cleared for left overhead break runway 25." (the "2-ship" prefix appears once a formation size has been heard) | |
 | "Tower, Colt 1, on final" | **final** | "Colt 1, Tower, runway 25, wind calm, cleared to land." |
 | "Tower, Colt 1, runway vacated" | **vacated** | "Colt 1, Tower, contact Ground on channel 6." |
 | "Ground, Colt 1, rolling off runway 25, requesting taxi to parking" | **taxi to parking** | "Colt 1, Ground, cleared taxi to Ramp North via Alpha November." |
@@ -313,8 +313,29 @@ stateDiagram-v2
 
 Each `PilotState` also tracks `cleared_inbound` (used to decide whether a CTR
 entry is announced, see §6), `cleared_landing`, `descend_issued` (so Control
-only issues the descent to 1500 ft once, see §11), and `go_around_issued` (so a
-go-around is only called once per approach, see §7).
+only issues the descent to 1500 ft once, see §11), `go_around_issued` (so a
+go-around is only called once per approach, see §7), and `formation` (the
+flight size, learned from a "two-ship Hornets" / "4-ship" call — see §5a).
+
+---
+
+## 5a. Formation size (multi-ship)
+
+The bot **learns the flight size** from a position/formation call — "two-ship
+Hornets", "4-ship Adder11", "single ship" — and remembers it per callsign, so
+controllers can address the flight correctly. Master Arms controllers prefix the
+overhead-break and landing clearances with the size ("2-ship Adder11, cleared
+for the left overhead break"), and the bot now does the same.
+
+| Pilot says | Bot records | Later clearance |
+| --- | --- | --- |
+| "…two-ship Hornets on Ramp South" | `formation = 2` | "2-ship Colt 1, cleared for left overhead break runway 25." |
+| "…4-ship Hornets inbound" | `formation = 4` | "4-ship Colt 1, runway 25, cleared to land." |
+| (nothing said) | `formation = 0` | "Colt 1, runway 25, cleared to land." (no prefix) |
+
+Only a call that actually states a size updates it, so a later routine call does
+not clobber it. A single ship (or a flight that never stated its size) gets no
+prefix — the callsign alone.
 
 ---
 
@@ -667,7 +688,7 @@ Ground phase; 8–10 Tower; 11 Control.)
 | 1 | Control | "Kutaisi Control, Colt 1, inbound 35 miles north at Angels 12." | "Colt 1, Control, radar contact, turn right heading 150 to join via Entry North." (heading computed) |
 | 2 | Control | "150 to join via Entry North, Colt 1." | "Colt 1, Control, descend to 1500 feet." |
 | 3 | Tower | "Tower, Colt 1, Entry North." | "Colt 1, Tower, report runway in sight." |
-| 4 | Tower | "Tower, Colt 1, runway in sight." | "Colt 1, Tower, wind calm, cleared for left overhead break runway 25." |
+| 4 | Tower | "Tower, Colt 1, runway in sight." | "2-ship Colt 1, Tower, wind calm, cleared for left overhead break runway 25." |
 | 5 | Tower | "Tower, Colt 1, on final." | "Colt 1, Tower, runway 25, wind calm, cleared to land." |
 | 6 | Tower | "Tower, Colt 1, runway vacated." | "Colt 1, Tower, contact Ground on channel 6." |
 | 7 | Ground | "Ground, Colt 1, rolling off runway 25, requesting taxi to parking." | "Colt 1, Ground, cleared taxi to Ramp North via Alpha November." |

@@ -67,6 +67,7 @@ class PilotState:
     descend_issued: bool = False  # Control has issued the descent to 1500 ft
     exit_gate: str = ""  # assigned departure exit point
     entry_gate: str = ""  # assigned arrival entry point
+    formation: int = 0  # flight size (2+ = multi-ship), learned from calls
     last_reply: str = ""  # last clearance, replayed on "say again"
     last_controller: str = ""  # last agency talked to (for the map view)
 
@@ -131,6 +132,29 @@ class AtcBrain:
     def callsign_for_speaker(self, who: str) -> str:
         """Flight callsign for an SRS/DCS player name, or the name itself."""
         return self.speaker_callsigns.get(who.lower(), who)
+
+    def _note_formation(self, pilot: PilotState, low: str) -> None:
+        """Learn the flight size from a position/formation call.
+
+        A pilot says e.g. "two-ship Hornets" or "4-ship Adder11" when checking
+        in; we remember it so controllers can address the flight correctly
+        ("2-ship Adder11, cleared for the overhead break"). Only updates when a
+        formation is actually stated, so it is not clobbered by later calls.
+        """
+        words = {"one": 1, "single": 1, "two": 2, "three": 3, "four": 4,
+                 "five": 5, "six": 6}
+        m = re.search(r"\b(\d{1,2})[\s-]*ship\b", low)
+        if m:
+            pilot.formation = int(m.group(1))
+            return
+        m = re.search(r"\b(" + "|".join(words) + r")[\s-]*ship\b", low)
+        if m:
+            pilot.formation = words[m.group(1)]
+
+    def _formation_prefix(self, pilot: PilotState) -> str:
+        """A callsign prefix naming the flight size, or '' for a single ship."""
+        n = pilot.formation
+        return f"{n}-ship " if n >= 2 else ""
 
     def _pilot(self, callsign: str) -> PilotState:
         state = self.pilots.get(callsign)
@@ -246,6 +270,7 @@ class AtcBrain:
         low = text.lower()
         pilot = self._pilot(callsign)
         pilot.last_controller = controller.value
+        self._note_formation(pilot, low)
         reply = self._dispatch(callsign, pilot, low, track, controller, traffic,
                                speaker)
         if reply:
@@ -498,7 +523,8 @@ class AtcBrain:
             pilot.phase = Phase.AIRBORNE
             return self._say("contact_control", callsign)
         if re.search(r"\b(runway in sight|runway insight|visual)\b", low):
-            return self._say("cleared_overhead", callsign)
+            return self._say("cleared_overhead", callsign,
+                             flight=self._formation_prefix(pilot))
         # Arrival check-in at the entry point: "Tower, Adder11, Entry East" ->
         # "report runway in sight".
         if re.search(r"\bentry\b", low):
@@ -509,7 +535,8 @@ class AtcBrain:
         # the break clearance; "in the break" is a position report.
         if re.search(r"\b(overhead break|initial)\b", low):
             pilot.phase = Phase.LANDING
-            return self._say("cleared_overhead", callsign)
+            return self._say("cleared_overhead", callsign,
+                             flight=self._formation_prefix(pilot))
         if re.search(r"\b(in the break|the break|overhead)\b", low):
             pilot.phase = Phase.LANDING
             return self._say("break_ack", callsign)
@@ -531,7 +558,8 @@ class AtcBrain:
                 return self._say("continue_approach", callsign)
             pilot.phase = Phase.LANDING
             pilot.cleared_landing = True
-            return self._say("cleared_land", callsign)
+            return self._say("cleared_land", callsign,
+                             flight=self._formation_prefix(pilot))
         if re.search(r"\binbound\b|\bon approach\b|\blanding\b|\bentry\b", low):
             pilot.phase = Phase.INBOUND
             pilot.cleared_inbound = True

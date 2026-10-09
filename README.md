@@ -10,6 +10,8 @@ Layout
 - `deploy/dcs/` — docker-compose for the DCS dedicated server and the SRS server
 - `scripts/dcs.sh` — manage the containers (install/start/stop/logs/srs-*)
 - `scripts/state_client.py` — CLI for the DCS state API (JSON socket bridge, port 10309): `status`, `diag`, `eval`, `move`, `move-geo`, `hold`
+- `scripts/kneeboard.py` — generate DCS kneeboard JPGs from the exact MA SOP dialogs (`uv run --with pillow kneeboard.py`)
+- `kneeboard/` — generated phraseology cards (start/takeoff, RTB/landing, airborne)
 - `bridge/` — Saved Games hooks: `dcs_state_hook.lua` (state API socket + mission-env
   injection), `dcs_state_body.lua` (mission-side state logic, read fresh per request),
   `srs_autoconnect.lua` (SRS announce)

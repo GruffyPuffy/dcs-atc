@@ -138,6 +138,30 @@ def test_tower_overhead_break_clears_break(brain):
     assert "overhead break" in reply
 
 
+def test_formation_learned_and_used_in_clearance(brain):
+    # a two-ship checks in, then the break clearance addresses the flight
+    brain.handle("Ground, Colt 1, two-ship Hornets on Ramp South",
+                 controller=Controller.GROUND)
+    assert brain.pilots["Colt 1"].formation == 2
+    reply = brain.handle("Tower, Colt 1, runway in sight",
+                         controller=Controller.TOWER)
+    assert "2-ship Colt 1" in reply
+
+
+def test_single_ship_has_no_formation_prefix(brain):
+    reply = brain.handle("Tower, Colt 1, runway in sight",
+                         controller=Controller.TOWER)
+    assert "ship" not in reply
+
+
+def test_formation_digit_form(brain):
+    brain.handle("Control, Colt 1, 4-ship Hornets inbound",
+                 controller=Controller.CONTROL)
+    assert brain.pilots["Colt 1"].formation == 4
+    reply = brain.handle("Tower, Colt 1, on final", controller=Controller.TOWER)
+    assert "4-ship Colt 1" in reply
+
+
 def test_tower_in_the_break_acknowledged(brain):
     reply = brain.handle("Tower, Colt 1, in the break",
                          controller=Controller.TOWER)
