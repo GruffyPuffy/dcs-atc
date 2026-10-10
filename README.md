@@ -186,6 +186,27 @@ The map page has a **debrief** dropdown — pick one to load it and review a
 sortie after the fact (green trail, comm clusters, chatter), on any machine that
 can reach the map. Playback is visual only: it never re-synthesises TTS.
 
+### Restart / airfield switch from the map
+
+The map can **restart the bot** or **switch airfield** without touching the
+terminal. Because the map server runs *inside* the bot process it cannot restart
+itself, so run the bot through the supervisor instead of `start_bot.sh`:
+
+    ./atc/run_server.sh                     # supervisor (recommended)
+    ./atc/run_server.sh --debug             # + debrief recording
+    ATC_AIRFIELD=Gudauta ./atc/run_server.sh
+
+The map then shows an airfield dropdown plus **Restart** / **Stop** buttons.
+Restart writes the chosen airfield to `atc/.control` and the bot exits with code
+75; `run_server.sh` reads that file and relaunches the bot on the new airfield
+(saving the debrief first). Only code 75 loops — Ctrl+C, a crash, or **Stop**
+ends the supervisor, so a failure never becomes a restart loop. Airfields are
+validated against `airspace.json`, so the endpoint can never launch an arbitrary
+`--airfield`.
+
+> Keep the map/control endpoints on your LAN or VPN only — never forward them to
+> the internet.
+
 License
 -------
 

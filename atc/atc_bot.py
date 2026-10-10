@@ -17,6 +17,7 @@ Usage:
 import argparse
 import datetime
 import math
+import os
 import re
 import threading
 import time
@@ -114,6 +115,10 @@ def main() -> None:
                         help="serve the live map view on this port (0 disables)")
     parser.add_argument("--map-host", default="0.0.0.0",
                         help="bind address for the map view")
+    parser.add_argument("--control-file", default=None,
+                        help="state file the map writes the requested airfield "
+                             "to before exiting for a restart (default: "
+                             "atc/.control). Read by run_server.sh.")
     parser.add_argument("--tracks-file", default=None,
                         help="save/restore flight trails here for debrief. "
                              "Defaults to atc/debrief/tracks_<field>_<time>.json "
@@ -451,17 +456,43 @@ def main() -> None:
     # the bot stops. --replay loads a saved file read-only.
     map_service = None
     if args.map_port:
-        from map_server import start_map_server, DEBRIEF_DIR, debrief_filename
+        from map_server import (start_map_server, ControlPlane, DEBRIEF_DIR,
+                                debrief_filename, RESTART_EXIT_CODE)
         tracks_file = args.replay or args.tracks_file
         if tracks_file is None and args.debug:
             # One named snapshot per session: atc/debrief/tracks_<field>_<time>
             # .json, so a tester can later pick exactly this event to review.
             DEBRIEF_DIR.mkdir(parents=True, exist_ok=True)
             tracks_file = DEBRIEF_DIR / debrief_filename(airfield.name)
+
+        # Web-driven restart / airfield switch. The map server runs inside this
+        # process, so it cannot restart the bot itself: it writes the requested
+        # airfield to a small state file and asks us to exit with a sentinel
+        # code. The outer run_server.sh loop reads the file and relaunches the
+        # bot with the new --airfield. Airfields are validated against the
+        # loaded config (an allowlist), so the endpoint can never launch an
+        # arbitrary --airfield.
+        control_file = (Path(args.control_file) if args.control_file
+                        else Path(__file__).with_name(".control"))
+
+        def on_control_exit(action: str, new_airfield: str, save: bool) -> None:
+            # Persist the debrief before leaving, so a web-driven restart does
+            # not lose the sortie trail.
+            if map_service is not None:
+                map_service.save_tracks()
+            if action == "restart":
+                print(f"[*] Restart requested -> airfield {new_airfield} "
+                      f"(exit {RESTART_EXIT_CODE})")
+                os._exit(RESTART_EXIT_CODE)
+            print("[*] Stop requested via the map.")
+            os._exit(0)
+
+        control = ControlPlane(airspace.names(), control_file,
+                               on_control_exit, airfield.name, debug=args.debug)
         _server, map_service = start_map_server(
             airfield, brain, state, args.map_port,
             host=args.map_host, lock=lock, log=log, tracks_file=tracks_file,
-            replay=bool(args.replay))
+            replay=bool(args.replay), control=control)
 
     # Last speaker to transmit, so a TX mirror can be addressed to them.
     _debug_reply_to = [""]

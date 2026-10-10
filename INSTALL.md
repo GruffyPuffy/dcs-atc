@@ -68,6 +68,18 @@ exact calls at each step. Useful extras:
 Then review a sortie afterwards: open the map and pick your debrief from the
 **debrief** dropdown (see the *Map view* section of the [README](README.md)).
 
+To restart the bot or switch airfield from the map page, run it through the
+supervisor instead of `start_bot.sh`:
+
+    ./run_server.sh                        # map gets Restart / Stop buttons
+    ./run_server.sh --debug                # + debrief recording
+    ATC_AIRFIELD=Gudauta ./run_server.sh   # start on a specific airfield
+
+The map's **Restart** button writes the chosen airfield to `atc/.control` and
+the bot exits with code 75; `run_server.sh` relaunches it on the new airfield.
+Only code 75 loops (Ctrl+C / crash / **Stop** end the supervisor). Keep the map
+on your LAN or VPN — never forward it to the internet.
+
 ## Day-2 operation
 
 - `./scripts/dcs.sh status` / `logs` / `stop` / `start` — container lifecycle

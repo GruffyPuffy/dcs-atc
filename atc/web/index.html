@@ -21,6 +21,11 @@
     <select id="debrief-select" title="Load a saved debrief (read-only replay)">
       <option value="">— live —</option>
     </select>
+    <span id="control" class="control" hidden>
+      <select id="airfield-select" title="Airfield to restart the bot on"></select>
+      <button id="restart-btn" title="Restart the bot on the selected airfield">Restart</button>
+      <button id="stop-btn" title="Stop the bot">Stop</button>
+    </span>
   </header>
   <div id="map"></div>
   <aside id="panel">

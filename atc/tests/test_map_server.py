@@ -533,3 +533,116 @@ def test_chatter_log_records_and_returns(brain, airfield):
     assert log[2]["controller"] == "atis"
     # chatter is included in the snapshot the page polls
     assert len(service.snapshot()["chatter"]) == 3
+
+
+# ---------- Web-driven restart / airfield switch ----------
+
+def test_control_plane_validates_allowlist(tmp_path):
+    from map_server import ControlPlane
+    state_file = tmp_path / ".control"
+    calls = []
+    cp = ControlPlane(["Kutaisi", "Gudauta"], state_file,
+                      lambda *a: calls.append(a), "Kutaisi")
+    # An unknown airfield is refused and writes nothing.
+    result = cp.restart("Batumi", save_debrief=False)
+    assert result["ok"] is False
+    assert not state_file.exists()
+    # A known airfield is accepted and written as plain key=value.
+    result = cp.restart("Gudauta", save_debrief=True)
+    assert result["ok"] is True and result["restarting"] is True
+    text = state_file.read_text()
+    assert "ATC_AIRFIELD=Gudauta" in text
+    assert "ATC_DEBUG=1" in text
+
+
+def test_control_plane_run_pending_fires_exit(tmp_path):
+    from map_server import ControlPlane
+    state_file = tmp_path / ".control"
+    calls = []
+    cp = ControlPlane(["Kutaisi", "Gudauta"], state_file,
+                      lambda *a: calls.append(a), "Kutaisi")
+    cp.restart("Gudauta", save_debrief=False)
+    assert calls == []          # nothing fires until the response is flushed
+    cp.run_pending()
+    assert calls == [("restart", "Gudauta", False)]
+    cp.run_pending()            # idempotent: no second exit
+    assert len(calls) == 1
+
+
+def test_control_plane_stop(tmp_path):
+    from map_server import ControlPlane
+    state_file = tmp_path / ".control"
+    calls = []
+    cp = ControlPlane(["Kutaisi"], state_file, lambda *a: calls.append(a),
+                      "Kutaisi")
+    assert cp.stop()["ok"] is True
+    cp.run_pending()
+    assert calls == [("stop", "Kutaisi", False)]
+
+
+def test_control_payload_in_snapshot(brain, airfield, tmp_path):
+    from map_server import ControlPlane
+    cp = ControlPlane(["Kutaisi", "Gudauta"], tmp_path / ".control",
+                      lambda *a: None, "Kutaisi", debug=True)
+    service = MapService(airfield, brain, FakeState([]), control=cp)
+    control = service.snapshot()["control"]
+    assert control["airfields"] == ["Gudauta", "Kutaisi"]
+    assert control["current"] == "Kutaisi"
+    assert control["debug"] is True
+
+
+def test_snapshot_control_none_without_control(brain, airfield):
+    assert MapService(airfield, brain, FakeState([])).snapshot()["control"] is None
+
+
+def test_control_restart_endpoint(brain, airfield, tmp_path):
+    from map_server import ControlPlane
+    state_file = tmp_path / ".control"
+    calls = []
+    cp = ControlPlane(["Kutaisi", "Gudauta"], state_file,
+                      lambda *a: calls.append(a), "Kutaisi", debug=True)
+    service = MapService(airfield, brain, FakeState([]), control=cp)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(service))
+    port = server.server_address[1]
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/control/restart",
+            data=json.dumps({"airfield": "Gudauta"}).encode(),
+            headers={"Content-Type": "application/json"}, method="POST")
+        assert json.loads(urllib.request.urlopen(req).read())["ok"] is True
+        # The current debug state is preserved when the caller omits it.
+        assert calls == [("restart", "Gudauta", True)]
+        assert "ATC_DEBUG=1" in state_file.read_text()
+        # An unknown airfield is a 400 and does not exit.
+        bad = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/control/restart",
+            data=json.dumps({"airfield": "Batumi"}).encode(),
+            headers={"Content-Type": "application/json"}, method="POST")
+        try:
+            urllib.request.urlopen(bad)
+            assert False, "expected HTTP 400"
+        except urllib.error.HTTPError as e:
+            assert e.code == 400
+        assert len(calls) == 1
+    finally:
+        server.shutdown()
+
+
+def test_control_endpoints_404_without_control(brain, airfield):
+    service = MapService(airfield, brain, FakeState([]))  # no control plane
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(service))
+    port = server.server_address[1]
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/control/restart",
+            data=b"{}", headers={"Content-Type": "application/json"},
+            method="POST")
+        try:
+            urllib.request.urlopen(req)
+            assert False, "expected HTTP 404"
+        except urllib.error.HTTPError as e:
+            assert e.code == 404
+    finally:
+        server.shutdown()

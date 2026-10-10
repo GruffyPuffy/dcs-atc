@@ -567,6 +567,10 @@ class Airspace:
     def get(self, name: str) -> Airfield | None:
         return self.airfields.get(name)
 
+    def names(self) -> list[str]:
+        """Every configured airfield name (sorted), for allowlists/UI menus."""
+        return sorted(self.airfields)
+
     def nearest(self, lat: float, lon: float) -> Airfield | None:
         """Airfield whose reference point is closest to the given position."""
         if not self.airfields:

@@ -421,6 +421,7 @@ async function tick() {
     drawAircraft(data.aircraft);
     drawTable(data.aircraft);
     drawChatter(data.chatter || [], data.airfield.agencies || []);
+    drawControl(data.control);
     const err = document.getElementById('error');
     if (data.error) { err.hidden = false; err.textContent = `DCS: ${data.error}`; }
     else { err.hidden = true; }
@@ -435,6 +436,69 @@ async function tick() {
   } catch (e) {
     status.textContent = 'server offline';
     status.className = 'status bad';
+  }
+}
+
+// ---- web-driven restart / airfield switch ----
+
+// Populate the airfield dropdown + Restart/Stop buttons from the snapshot's
+// `control` block (present only when the bot was started via run_server.sh).
+function drawControl(control) {
+  const box = document.getElementById('control');
+  if (!box) return;
+  if (!control) { box.hidden = true; return; }
+  box.hidden = false;
+  const sel = document.getElementById('airfield-select');
+  const names = control.airfields || [];
+  if (sel.options.length !== names.length) {
+    sel.innerHTML = '';
+    for (const n of names) {
+      const o = document.createElement('option');
+      o.value = n; o.textContent = n;
+      sel.appendChild(o);
+    }
+  }
+  if (control.current) sel.value = control.current;
+}
+
+async function postControl(path, body) {
+  const status = document.getElementById('status');
+  try {
+    const res = await fetch(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body || {}),
+    });
+    const result = await res.json().catch(() => ({}));
+    if (!result.ok) {
+      alert(`Control failed: ${result.error || 'unknown error'}`);
+      return;
+    }
+    status.textContent = result.restarting ? 'restarting…' : 'stopping…';
+    status.className = 'status';
+  } catch (e) {
+    // The bot exits right after replying, so a dropped connection is expected.
+    status.textContent = 'restarting…';
+    status.className = 'status';
+  }
+}
+
+function initControl() {
+  const restart = document.getElementById('restart-btn');
+  const stop = document.getElementById('stop-btn');
+  if (restart) {
+    restart.addEventListener('click', () => {
+      const sel = document.getElementById('airfield-select');
+      const airfield = sel ? sel.value : '';
+      if (!confirm(`Restart the bot on ${airfield}?`)) return;
+      postControl('/api/control/restart', { airfield });
+    });
+  }
+  if (stop) {
+    stop.addEventListener('click', () => {
+      if (!confirm('Stop the bot?')) return;
+      postControl('/api/control/stop', {});
+    });
   }
 }
 
@@ -504,6 +568,7 @@ async function loadDebrief(name) {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+  initControl();
   const sel = document.getElementById('debrief-select');
   if (sel) {
     sel.addEventListener('change', () => loadDebrief(sel.value));

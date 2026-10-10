@@ -63,6 +63,68 @@ TRACKS_SAVE_INTERVAL = 10.0
 # A fresh file per session, so a tester can later pick the exact event.
 DEBRIEF_DIR = Path(__file__).with_name("debrief")
 
+# Process exit code the bot uses to ask its supervisor (run_server.sh) to
+# relaunch it (e.g. after a web-driven airfield switch). Any other code stops
+# the supervisor, so a normal exit or a crash never triggers a restart loop.
+RESTART_EXIT_CODE = 75
+
+
+class ControlPlane:
+    """Web-driven restart / airfield selection.
+
+    The map server runs *inside* the bot process, so it cannot restart the bot
+    itself. Instead this writes the requested airfield to a small state file and
+    asks the bot to exit with `RESTART_EXIT_CODE`; the outer `run_server.sh`
+    loop reads the state file and relaunches the bot with the new airfield. The
+    split keeps the dangerous part (spawning a process) out of the web server.
+
+    Airfields are validated against the loaded config (an allowlist), so the
+    endpoint can never be made to launch an arbitrary `--airfield`.
+    """
+
+    def __init__(self, airfields: list[str], state_file: Path | str,
+                 on_exit: Callable[[str, str, bool], None], current: str,
+                 debug: bool = False):
+        self.airfields = sorted(airfields)
+        self.state_file = Path(state_file)
+        self.on_exit = on_exit
+        self.current = current
+        # Current session's debug state, so a restart can preserve it (the web
+        # echoes this back; a restart must not silently drop --debug).
+        self.debug = bool(debug)
+        self._pending: tuple[str, str, bool] | None = None
+
+    def payload(self) -> dict:
+        return {"airfields": self.airfields, "current": self.current,
+                "debug": self.debug}
+
+    def restart(self, airfield: str, save_debrief: bool) -> dict:
+        """Record a restart request. Returns a result; the actual exit happens
+        via `run_pending()` *after* the HTTP response has been flushed."""
+        if airfield not in self.airfields:
+            return {"ok": False, "error": f"unknown airfield {airfield!r}"}
+        # Plain key=value so run_server.sh can read it with sed (no JSON shell).
+        self.state_file.write_text(
+            f"ATC_AIRFIELD={airfield}\nATC_DEBUG={1 if save_debrief else 0}\n",
+            encoding="utf-8")
+        self._pending = ("restart", airfield, save_debrief)
+        return {"ok": True, "restarting": True, "airfield": airfield}
+
+    def stop(self) -> dict:
+        """Ask the bot to exit *without* relaunch (the supervisor stops too)."""
+        self._pending = ("stop", self.current, False)
+        return {"ok": True, "stopping": True}
+
+    def run_pending(self) -> None:
+        """Fire the pending action (exits the process). Called after the
+        response is sent so the browser sees the result, not a reset."""
+        if self._pending is not None:
+            action, airfield, save = self._pending
+            self._pending = None
+            self.on_exit(action, airfield, save)
+
+
+
 
 def debrief_filename(airfield: str, when: float | None = None) -> str:
     """A timestamped debrief filename for an airfield (one file per session).
@@ -348,12 +410,15 @@ class MapService:
                  state: StateClient | None, lock: threading.RLock | None = None,
                  basemap: str | None = None,
                  tracks_file: Path | str | None = None,
-                 replay: bool = False):
+                 replay: bool = False,
+                 control: "ControlPlane | None" = None):
         self.airfield = airfield
         self.brain = brain
         self.state = state
         self.lock = lock or threading.RLock()
         self.basemap = basemap  # base-map layer name override (else config)
+        # Web-driven restart/airfield selection (None when running standalone).
+        self.control = control
         # Chatter log: recent radio traffic (rx + tx) for the map's log drawer.
         self._chatter: deque[dict] = deque(maxlen=CHATTER_LIMIT)
         self._chatter_lock = threading.Lock()
@@ -662,6 +727,8 @@ class MapService:
             "replay": self.replay,
             "replay_name": (self.tracks_file.name
                             if self.replay and self.tracks_file else ""),
+            # Web-driven restart/airfield selection (None when not wired).
+            "control": self.control.payload() if self.control else None,
         }
 
 
@@ -706,16 +773,42 @@ def make_handler(service: MapService):
 
         def _route_post(self) -> None:
             path = urlsplit(self.path).path
+            restart = False
             if path == "/api/debrief/load":
                 result = service.load_debrief(self._json_body().get("name", ""))
             elif path == "/api/debrief/unload":
                 result = service.unload_debrief()
+            elif path == "/api/control/restart":
+                body = self._json_body()
+                if service.control is None:
+                    self.send_error(404)
+                    return
+                # Preserve the current debug state unless the caller overrides.
+                debug = body.get("debug")
+                if debug is None:
+                    debug = service.control.debug
+                result = service.control.restart(
+                    str(body.get("airfield") or service.airfield.name),
+                    bool(debug))
+                restart = bool(result.get("ok"))
+            elif path == "/api/control/stop":
+                # Stop without relaunch: tell the supervisor not to loop.
+                if service.control is None:
+                    self.send_error(404)
+                    return
+                service.control.stop()
+                result = {"ok": True, "stopping": True}
+                restart = True  # exit now; the wrapper stops on the sentinel
             else:
                 self.send_error(404)
                 return
             body = json.dumps(result).encode()
             self._send(200 if result.get("ok") else 400, body,
                        "application/json; charset=utf-8")
+            # Only after the response is flushed: exit so the browser sees
+            # "restarting" rather than a connection reset.
+            if restart:
+                service.control.run_pending()
 
         def _route(self) -> None:
             path = urlsplit(self.path).path
@@ -754,6 +847,7 @@ def start_map_server(airfield: Airfield, brain: AtcBrain,
                      basemap: str | None = None,
                      tracks_file: Path | str | None = None,
                      replay: bool = False,
+                     control: "ControlPlane | None" = None,
                      ) -> tuple[ThreadingHTTPServer | None, MapService]:
     """Start the map server on a daemon thread.
 
@@ -766,7 +860,7 @@ def start_map_server(airfield: Airfield, brain: AtcBrain,
     bot restart for after-action review.
     """
     service = MapService(airfield, brain, state, lock, basemap=basemap,
-                         tracks_file=tracks_file, replay=replay)
+                         tracks_file=tracks_file, replay=replay, control=control)
     if tracks_file is not None:
         if service.replay:
             log(f"[*] Debrief replay (read-only): {Path(tracks_file)}")

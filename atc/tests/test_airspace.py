@@ -143,6 +143,13 @@ def test_nearest_airfield():
     assert nearest.name == "Kutaisi"
 
 
+def test_airspace_names_lists_all_airfields():
+    airspace = Airspace.load()
+    names = airspace.names()
+    assert "Kutaisi" in names and "Gudauta" in names
+    assert names == sorted(names)  # stable order for allowlists/UI menus
+
+
 def test_relative_position_singular_mile(airfield):
     # a point ~1 NM from the reference should read "1 mile", not "1 miles"
     import math

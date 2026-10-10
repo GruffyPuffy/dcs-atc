@@ -25,6 +25,17 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
   border: 1px solid var(--line); border-radius: 4px; padding: 3px 6px;
   font: inherit; max-width: 260px; }
 
+/* Web-driven restart / airfield switch (only shown when run via run_server.sh). */
+.control { display: flex; align-items: center; gap: 6px; }
+.control select { background: var(--panel); color: var(--muted);
+  border: 1px solid var(--line); border-radius: 4px; padding: 3px 6px;
+  font: inherit; }
+.control button { background: var(--panel); color: var(--text);
+  border: 1px solid var(--line); border-radius: 4px; padding: 3px 10px;
+  font: inherit; cursor: pointer; }
+.control button:hover { border-color: var(--control); color: var(--control); }
+#stop-btn:hover { border-color: #f85149; color: #f85149; }
+
 /* Clustered comm marker: several calls at (almost) the same spot. */
 .comm-group {
   display: flex; align-items: center; justify-content: center;

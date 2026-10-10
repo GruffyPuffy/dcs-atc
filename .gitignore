@@ -33,6 +33,9 @@ atc/voices/
 # Saved sortie snapshots (debrief replay files)
 atc/debrief/
 
+# Web-driven restart state file (written by the map, read by run_server.sh)
+atc/.control
+
 # TopGun easter egg: personal marker + dropped-in clips (never committed)
 atc/topgun.txt
 topgun.txt
