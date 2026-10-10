@@ -486,10 +486,20 @@ def main() -> None:
                 _mirror(f"TX {who}: {text}", _debug_reply_to[0])
 
     def _mirror(line: str, player: str) -> None:
+        # The bridge targets a player by their DCS player name, but `player` here
+        # is the SRS name / callsign, which can differ (TTI shares many slots per
+        # callsign). Resolve to the live DCS unit's player name so the mirror is
+        # addressed to the pilot; if we can't, the bridge falls back to a
+        # mission-wide outText (still shows, just to everyone).
+        name = player
+        ac = unit_for_speaker(player)
+        if ac is not None and ac.player:
+            name = ac.player
         try:
-            state.message(line, player=player)
+            state.message(line, player=name)
         except (OSError, RuntimeError):
             pass  # bridge down / no message API; the debug log is best-effort
+
 
     def on_end(freq: float, who: str, pcm: bytes, duration: float) -> None:
         """SRS rx callback: enqueue to the right controller worker (never blocks)."""

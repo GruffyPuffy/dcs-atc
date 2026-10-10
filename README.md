@@ -1,86 +1,99 @@
 dcs-atc
 =======
 
-Standalone DCS ATC project: DCS dedicated server + SRS in Docker, plus a
-headless Python ATC bot (SRS client, Whisper STT, Piper TTS, rules-based brain).
+A **trainer ATC** for DCS World: a bot that acts as Tower, Ground and Control on
+real radio (SRS), listens to spoken pilot calls, and answers with correct
+phraseology — so you can practise flying the radio like a pro without a human
+controller online.
+
+The goal is **training**, not replicating a busy real-world sector. The bot
+follows the Master Arms (MA) community SOP and is deliberately a *coach*:
+
+- every clearance is spoken with correct phraseology, so you learn by doing;
+- **readbacks are checked** — a complete one is confirmed, an incomplete one is
+  flagged ("readback incomplete, I did not get your altitude") but you are
+  **never blocked**, so a fumbled call never traps you mid-flight;
+- it is forgiving: `say again`, `help`, `reset` and `cancel` always work;
+- a **live map** shows the picture, and a saved **debrief** (your trail plus
+  every radio call) lets you review a sortie afterwards.
+
+It runs headless beside a DCS dedicated server with **no `.miz` edits and no
+mission-scripting changes**: it reads live state through a Saved Games hook and
+talks over SRS.
+
+- **Getting it running:** [`INSTALL.md`](INSTALL.md) — Docker, DCS + SRS
+  containers, hooks, mission, bot.
+- **Behaviour reference:** [`ATC.md`](ATC.md) — callsigns, phraseology, the
+  per-pilot state machine, controllers, CTR and runway logic.
+- **First test scenario:** [`TESTING.md`](TESTING.md).
+
+What's in the box
+-----------------
+A DCS dedicated server + SRS server in Docker, and a headless Python ATC bot
+(SRS client → Whisper STT → rules-based `brain` → Piper TTS → SRS). No LLM:
+the brain is deterministic and testable (offline pytest suite, ~340 tests).
+
+Phraseology cards
+-----------------
+Glanceable kneeboard cards generated from the **exact** Master Arms SOP dialogs,
+so the trainee always has the right call to hand. Page 4 is a **shortened trainer
+path**: the fewest calls that get a single-ship airborne and back, using the bot's
+actual replies.
+
+<p align="center">
+  <a href="kneeboard/01-start-takeoff.jpg"><img src="kneeboard/01-start-takeoff.jpg" width="30%" alt="Start / Takeoff card"></a>
+  <a href="kneeboard/02-rtb-landing.jpg"><img src="kneeboard/02-rtb-landing.jpg" width="30%" alt="RTB / Landing card"></a>
+  <a href="kneeboard/04-light-path.jpg"><img src="kneeboard/04-light-path.jpg" width="30%" alt="Single-ship light path card"></a>
+</p>
+
+- `01-start-takeoff.jpg` — Ground + Tower: check-in, ATIS, clearance, taxi, line-up, takeoff
+- `02-rtb-landing.jpg` — Control + Tower + Ground: inbound, join, descent, break, landing
+- `03-airborne.jpg` — AWACS / package (check-in, push, attack, RTB handoff)
+- `04-light-path.jpg` — **single-ship light path**: skip Ground and the overhead break
+
+Stuck at any point? Say *"<callsign> help"* on any frequency. Regenerate with
+`cd scripts && uv run --with pillow kneeboard.py --out ../kneeboard` — see
+[`kneeboard/README.md`](kneeboard/README.md).
 
 Layout
 ------
-- `atc/` — the ATC bot (`atc_bot.py` full bot, `listen.py` listen-only, `debug_stt.py` offline STT tuning, `brain.py` rules brain, `callsigns.py` mission callsign recognition, `phonetics.py` STT-variant generation, `atis.py` weather/ATIS, `srs_client.py` headless SRS client, `airspace.py` CTR geometry, `ctr.py` boundary tracker, `state_client.py` DCS state reader, `map_server.py` live map view, `airspace.json` per-airfield config, `phraseology.json` reply wording, `web/` map page)
-- `deploy/dcs/` — docker-compose for the DCS dedicated server and the SRS server
+- `atc/` — the ATC bot:
+  - `atc_bot.py` full bot, `listen.py` listen-only, `debug_stt.py` offline STT tuning
+  - `brain.py` rules brain + per-pilot state machine, `callsigns.py` mission
+    callsign recognition, `phonetics.py` STT-variant generation,
+    `speech.py` aviation spoken-number normalisation for TTS
+  - `atis.py` weather/ATIS, `srs_client.py` headless SRS client,
+    `airspace.py` CTR geometry, `ctr.py` boundary tracker,
+    `state_client.py` DCS state reader, `map_server.py` + `web/` live map view
+  - `airspace.json` per-airfield config, `phraseology.json` reply wording
+  - `tests/` offline pytest suite (`cd atc && uv run pytest`), including
+    **system tests** (`test_system.py` + `scenario.py`) that fly full MA dialogs
+    through the brain with faked radar/traffic (runway occupied, position
+    cross-checks, single/2/4-ship)
+- `deploy/dcs/` — docker-compose for the DCS dedicated server and SRS server
 - `scripts/dcs.sh` — manage the containers (install/start/stop/logs/srs-*)
-- `scripts/state_client.py` — CLI for the DCS state API (JSON socket bridge, port 10309): `status`, `diag`, `eval`, `move`, `move-geo`, `hold`
-- `scripts/kneeboard.py` — generate DCS kneeboard JPGs from the exact MA SOP dialogs (`uv run --with pillow kneeboard.py`)
-- `kneeboard/` — generated phraseology cards (start/takeoff, RTB/landing, airborne)
-- `bridge/` — Saved Games hooks: `dcs_state_hook.lua` (state API socket + mission-env
-  injection), `dcs_state_body.lua` (mission-side state logic, read fresh per request),
-  `srs_autoconnect.lua` (SRS announce)
-- `ATC.md` — ATC behaviour reference (callsigns, phraseology, controllers, CTR)
-- `TESTING.md` — first live test scenario + how to read the log
-- `atc/tests/` — offline pytest suite (no DCS/SRS needed): `cd atc && uv run pytest`. Includes **system tests** (`test_system.py` + `scenario.py`) that fly full MA dialogs through the brain with faked radar/traffic (runway occupied, position cross-checks, single/2-ship/4-ship).
+- `scripts/state_client.py` — CLI for the DCS state API (JSON socket bridge, port
+  10309): `status`, `diag`, `eval`, `move`, `move-geo`, `hold`
+- `scripts/kneeboard.py` — generate DCS kneeboard JPGs from the MA SOP dialogs
+- `kneeboard/` — generated phraseology cards (see above)
+- `bridge/` — Saved Games hooks: `dcs_state_hook.lua` (state API socket +
+  mission-env injection), `dcs_state_body.lua` (mission-side state logic, read
+  fresh per request), `srs_autoconnect.lua` (SRS announce)
+- `ATC.md` — ATC behaviour reference · `TESTING.md` — first live test scenario
 
 Install
 -------
+Step-by-step setup (Docker, DCS + SRS containers, Saved Games hooks, mission,
+bot) is in **[`INSTALL.md`](INSTALL.md)**. Short version:
 
-### 1. Docker (once per host)
+    sudo ./scripts/install-docker-ubuntu.sh   # once per host
+    ./scripts/dcs.sh install                  # DCS + SRS containers
+    ./scripts/dcs.sh bridge                   # state-API hook (port 10309)
+    cd atc && uv sync && ./start_bot.sh       # join SRS on 263.000 AM
 
-    sudo ./scripts/install-docker-ubuntu.sh
-
-Installs Docker Engine + Compose plugin on Ubuntu 24.04. Log out/in (or
-`newgrp docker`) so your user can run `docker` without sudo.
-
-### 2. DCS + SRS containers
-
-    ./scripts/dcs.sh install
-
-First run: generates `deploy/dcs/.env` (Webtop user/password — see
-`deploy/dcs/README.md` to set your own), creates `/data/dcs-atc/config`, pulls
-the images and starts both containers. The DCS container then downloads and
-installs the DCS dedicated server itself (several GB) — watch it with:
-
-    ./scripts/dcs.sh logs
-
-Wait until the log shows the DCS server running (Webtop at
-`https://<lan-ip>:3001` also works for a first login check).
-
-### 3. Install the Saved Games hooks
-
-Once DCS is installed and running:
-
-    ./scripts/dcs.sh bridge            # state-API hook (port 10309)
-    ./scripts/dcs.sh srs-autoconnect   # optional: SRS announce on player join
-
-Then restart the DCS process from Webtop (stop/start the server) so the hooks
-load — no need to restart the container. Verify the state API:
-
-    python3 scripts/state_client.py status
-
-### 4. Add a mission
-
-Copy any `.miz` (e.g. TTI Caucasus) into the DCS Saved Games mission folder:
-
-    /data/dcs-atc/config/.wine/drive_c/users/abc/Saved Games/DCS.dcs_serverrelease/Missions/
-
-and select it in the DCS WebGUI. The mission needs at least one blue airbase
-for the ATC bot to talk about; TTI Caucasus works as-is.
-
-### 5. ATC bot
-
-    cd atc
-    uv sync                            # once; creates .venv from uv.lock
-    ./start_bot.sh                     # joins SRS on 263.000 AM
-
-First bot run downloads the Whisper model (`small.en`). The Piper voice is a
-download too — copy `en_US-amy-medium.onnx(.json)` into `atc/voices/` or fetch
-it with piper's downloader. Point the bot at a different frequency with
-`./start_bot.sh --freq 124.0`.
-
-Day-2 operation
----------------
-- `./scripts/dcs.sh status` / `logs` / `stop` / `start` — container lifecycle
-- `./scripts/dcs.sh srs-logs` / `srs-status` — SRS server log and connected clients
-- `python3 scripts/state_client.py status` — live mission picture (groups,
-  airbases, positions) used by the ATC logic
+Day-2 operation is also in [`INSTALL.md`](INSTALL.md): `./scripts/dcs.sh
+status|logs|stop|start`, `srs-logs`, and `python3 scripts/state_client.py
+status`.
 
 State API
 ---------
@@ -164,6 +177,14 @@ dependencies — the server is stdlib `http.server`; Leaflet loads from a CDN.
 If the port is already in use the bot logs a warning and keeps running without
 the map. The page also has a collapsible **Chatter** drawer (recent radio
 traffic, filterable by agency) for live debugging.
+
+### Debriefs / replay
+
+Run the bot with `--debug` (or `./start_bot.sh --debug`) and it saves a
+**debrief** each session: every aircraft's flight trail plus every radio call.
+The map page has a **debrief** dropdown — pick one to load it and review a
+sortie after the fact (green trail, comm clusters, chatter), on any machine that
+can reach the map. Playback is visual only: it never re-synthesises TTS.
 
 License
 -------
