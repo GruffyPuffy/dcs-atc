@@ -150,12 +150,12 @@ step on the next controller's first call.
 | "Line up and wait 25, Colt 1" | **readback** | "Colt 1, Tower, readback correct, wind calm, runway 25, right turnout, cleared for takeoff." |
 | "Control, Colt 1, at 1500 ft" | **departure check-in** | "Colt 1, Control, radar contact, climb to Angels 15." |
 | "Kutaisi Control, Colt 1, inbound 35 miles north at Angels 12" | **inbound** | "Colt 1, Control, radar contact, turn right heading 150 to join via Entry East." (heading **computed** from the live position; entry is the best/straight-in gate for runway 25) |
-| "150 to join via Entry East, Colt 1" | **readback** | "Colt 1, Control, descend to 1500 feet." |
+| "150 to join via Entry East, Colt 1" | **readback** | "Colt 1, Control, descend and maintain 5000 feet." (far out) / "…descend to 1500 feet." (within 15 NM of the entry) — the descent is **stepped by distance** |
 | "Descend to 1500 feet, Colt 1" | **readback** | "Colt 1, Control, contact Tower on channel 7." (Control hands off right after the descend readback) |
 | "Tower, Colt 1, Entry East" | **entry** | "Colt 1, Tower, report runway in sight." |
 | "Tower, Colt 1, runway in sight" | **runway in sight** | "2-ship Colt 1, Tower, wind calm, cleared for left overhead break runway 25." (the "2-ship" prefix appears once a formation size has been heard) | |
 | "Tower, Colt 1, on final" | **final** | "Colt 1, Tower, runway 25, wind calm, cleared to land." |
-| "Tower, Colt 1, runway vacated" | **vacated** | "Colt 1, Tower, contact Ground on channel 6." |
+| "Tower, Colt 1, runway vacated" | **vacated** | "Colt 1, Tower, contact Ground on channel 6." (normally Tower pushes you to Ground **unprompted** once you roll off the runway — see §7) |
 | "Ground, Colt 1, rolling off runway 25, requesting taxi to parking" | **taxi to parking** | "Colt 1, Ground, cleared taxi to Ramp North via Alpha November." |
 | "Colt 1, checking in" / "with you" | **check-in** | "Colt 1, Tower, roger." |
 | "Colt 1, radio check" | **radio check** | "Colt 1, Tower, loud and clear." |
@@ -272,6 +272,8 @@ report).
 | --- | --- | --- |
 | "holding short runway 25" | at the threshold **or any named holding position** (P1–P4) | "…negative. I show you on the ground. Confirm your position." |
 | "ready for departure" | at the threshold or any named holding position | "…negative. I show you 3 miles north. Confirm your position." |
+| "on final" | on the final approach wedge | "…negative. I show you 3 miles north. Confirm your position." |
+| "entry west" / "at the entry" (Control) | within 5 NM of the named/assigned entry gate | "…negative. I show you 30 miles north. Confirm your position." (and **not** handed to Tower) |
 
 The challenge uses the pilot's **actual** position (distance + compass, or "on
 the ground" when very close), so the trainee learns to report correctly. The
@@ -327,11 +329,12 @@ runway (see §11).
 
 > "Colt 1, Control, bearing 014, distance 32 miles to Entry East."
 
-DCS-style synonyms ("directions", "where is…") are also accepted, but the reply
-uses the standard *"bearing X, distance Y"* format. Naming a CTR gate is an
-**addition beyond the Master Arms SOP** (a training aid). Without a live position
-the bot replies *"unable, no radar contact."* Wording lives in the
-`directions_*` templates in `phraseology.json`.
+DCS-style synonyms ("directions", "where is…") are also accepted, as is
+**"azimuth"** (a synonym for bearing), but the reply uses the standard
+*"bearing X, distance Y"* format. Naming a CTR gate is an **addition beyond the
+Master Arms SOP** (a training aid). Without a live position the bot replies
+*"unable, no radar contact."* Wording lives in the `directions_*` templates in
+`phraseology.json`.
 
 ## 4c. Requesting an entry (pilot's choice)
 
@@ -356,6 +359,10 @@ The heading is the bearing from the pilot's live position to a point on the
 the approach — the classic *"090 for 25"* call. The runway can be named in the
 call; otherwise the active runway is used. Without a live position the bot
 replies *"unable, no radar contact."* Template: `vectors` in `phraseology.json`.
+
+A **request for a heading** ("request heading to the field", "requesting
+heading") is the same aid — it is matched by a request verb, so it is never
+mistaken for a readback of the join clearance ("turn right heading 150").
 
 > Note: this is distinct from §4b — **vectors** = headings to intercept the
 > approach; **bearing and distance** = where a point is.
@@ -531,6 +538,21 @@ re-arms if they are held again:
 This is standard real-world practice: the controller delivers the clearance
 itself — there is no separate "the runway is now clear" phrase (`brain.
 check_runway_clear`).
+
+**Post-landing handoff to Ground.** Master Arms SOP (Mission Procedures §9):
+*"after landing, tower will push you to the Ground channel."* The handoff
+happens **at touchdown** — as the flight that was **cleared to land** touches
+down and rolls out — so the pilot is already on Ground before vacating, and does
+not report "vacated" to Tower. It fires once per landing and re-arms on the next
+approach (go-around / touch-and-go). A pilot who reports "vacated" first still
+gets the handoff (and the unprompted check then stays silent). A flight that was
+never *cleared to land* (e.g. an overhead break) is not pushed
+(`brain.check_landing_handoff`).
+
+**No extra comms after the landing clearance.** Master Arms (Landing Procedures
+§Comms): *"after the landing clearance (and your readback) there's generally no
+need for additional comms."* So the bot stays **silent** after the pilot reads
+back "cleared to land" — no "roger".
 
 ---
 
@@ -757,7 +779,11 @@ never broadcast their arrival; pilots call them). Disable it with
   (`Airfield.best_entry_gate`: Kutaisi 25 → Entry East, 07 → Entry West;
   Gudauta 33 → Entry Southeast). This is independent of where the pilot reports
   from, matching the Master Arms practice. The pilot's readback triggers the
-  descent: *"descend to 1500 feet"*.
+  descent, **stepped by distance** to the entry gate (like a real controller,
+  rather than dropping an arrival to the final altitude 35 miles out): far out
+  → *"descend and maintain 5000 feet"*; within 15 NM of the entry → *"descend to
+  1500 feet"*. After the far-out step-down, Control issues the final descent
+  unprompted once the aircraft reaches the entry area (`check_arrival_descent`).
   An **inbound** call wins over the departure keywords, so *"inbound 35 miles
   north at Angels 12"* is routed as an arrival (not answered with "climb to
   Angels 15").
@@ -855,7 +881,7 @@ Ground phase; 8–10 Tower; 11 Control.)
 | 4 | Tower | "Tower, Colt 1, Entry North." | "Colt 1, Tower, report runway in sight." |
 | 5 | Tower | "Tower, Colt 1, runway in sight." | "2-ship Colt 1, Tower, wind calm, cleared for left overhead break runway 25." |
 | 6 | Tower | "Tower, Colt 1, on final." | "Colt 1, Tower, runway 25, wind calm, cleared to land." |
-| 7 | Tower | "Tower, Colt 1, runway vacated." | "Colt 1, Tower, contact Ground on channel 6." |
+| 7 | Tower | *(touch down — no call needed)* | "Colt 1, Tower, contact Ground on channel 6." (Tower pushes you to Ground **unprompted** at touchdown) |
 | 8 | Ground | "Ground, Colt 1, rolling off runway 25, requesting taxi to parking." | "Colt 1, Ground, cleared taxi to Ramp North via Alpha November." |
 
 You are now cleared to park — the flight is complete. (Steps 1–3 Control; 4–7
@@ -870,7 +896,9 @@ Tower; 8 Ground.)
 | "Colt 1, cancel." | "Colt 1, Tower, clearance cancelled." (steps back one phase, see §3b) |
 | "Colt 1, say again." | replays the last clearance (see §3b) |
 | "Control, Colt 1, request bearing and distance to Entry East." | "Colt 1, Control, bearing 014, distance 32 miles to Entry East." |
+| "Control, Colt 1, request azimuth to Entry East." | "Colt 1, Control, bearing 014, distance 32 miles to Entry East." (azimuth = bearing) |
 | "Control, Colt 1, request directions to the field." | "…bearing …, distance …" to the **best/cleared entry** (see §4b) |
+| "Control, Colt 1, request heading to the field." | "Colt 1, Control, fly heading 018, vectors for runway 25." (a heading *request* is a vector, not a readback) |
 | "Control, Colt 1, request Entry North." | "Colt 1, Control, approved, turn left heading 020 to join via Entry North." (remembers the gate, see §4c) |
 | "Control, Colt 1, request vectors for runway 25." | "Colt 1, Control, fly heading 018, vectors for runway 25." |
 
@@ -884,6 +912,7 @@ If a report does not match your live position, the bot **challenges** it and doe
 | "Colt 1, holding short runway 25." *(still on the ramp)* | "Colt 1, Ground, negative. I show you on the ground. Confirm your position." |
 | "Tower, Colt 1, ready for departure." *(still on the taxiway)* | "Colt 1, Tower, negative. I show you 2 miles south. Confirm your position." |
 | "Tower, Colt 1, on final." *(not on final)* | "Colt 1, Tower, negative. I show you 3 miles north. Confirm your position." |
+| "Control, Colt 1, entry west." *(still 30 miles out)* | "Colt 1, Control, negative. I show you 30 miles north. Confirm your position." (and **not** handed to Tower) |
 
 ### Automatic calls (no pilot action)
 
@@ -924,7 +953,7 @@ Every reply here is the bot's actual output. Kneeboard card:
 | 8 | Tower | "Tower, Colt 1, Entry East." | "Colt 1, Tower, report runway in sight." |
 | 9 | Tower | "Colt 1, runway in sight." | "Colt 1, Tower, wind calm, cleared for left overhead break runway 25." |
 | 10 | Tower | "Colt 1, on final." | "Colt 1, Tower, runway 25, wind calm, cleared to land." |
-| 11 | Tower | "Colt 1, runway vacated." | "Colt 1, Tower, contact Ground on channel 6." |
+| 11 | Tower | *(touch down — no call needed)* | "Colt 1, Tower, contact Ground on channel 6." *(unprompted handoff at touchdown; a "runway vacated" call also works)* |
 
 That is ~10 calls for a full circuit, versus ~21 in §12. The Control→Tower switch
 at step 7 is pilot-initiated (as in the full walkthrough; the bot does not require

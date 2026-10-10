@@ -1081,6 +1081,30 @@ def test_vectors_without_track(brain):
     assert "unable" in reply.lower()
 
 
+def test_azimuth_request_gives_bearing(brain, airfield):
+    # "azimuth" is a synonym for bearing/directions (trainer aid).
+    south = _track(airfield, airfield.ctr.center_lat - 0.3,
+                   airfield.ctr.center_lon)
+    reply = brain.handle("Control, Colt 1, request azimuth to Entry East",
+                         track=south, controller=Controller.CONTROL)
+    assert "bearing" in reply.lower()
+    assert "Entry East" in reply
+
+
+def test_heading_request_gives_vector_not_handoff(brain, airfield):
+    # A *request* for a heading is a trainer aid (a vector), NOT a readback of
+    # the join clearance — it must not hand the flight to Tower.
+    south = _track(airfield, airfield.ctr.center_lat - 0.3,
+                   airfield.ctr.center_lon)
+    brain.handle("Control, Colt 1, inbound 35 miles south",
+                 track=south, controller=Controller.CONTROL)
+    reply = brain.handle("Control, Colt 1, request heading to the field",
+                         track=south, controller=Controller.CONTROL)
+    assert "fly heading" in reply.lower()
+    assert "contact Tower" not in reply
+    assert brain.pilots["Colt 1"].phase == Phase.INBOUND
+
+
 # ---------- Computed join heading (not hardcoded) ----------
 
 def test_control_join_heading_is_computed(brain, airfield):

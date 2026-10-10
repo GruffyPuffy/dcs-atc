@@ -234,6 +234,60 @@ def test_held_landing_is_recleared_when_runway_clears(airfield, brain):
     assert brain.check_runway_clear("Colt 1", runway_occupied=False) is None
 
 
+# ---------- Post-landing handoff to Ground (MA SOP) ----------
+
+def test_landed_flight_is_pushed_to_ground(airfield, brain):
+    # MA SOP: "after landing, tower will push you to the Ground channel" — the
+    # pilot does not report "vacated" to Tower. The push happens at TOUCHDOWN
+    # (while still rolling out), so the pilot is on Ground before vacating.
+    sc = _scenario(airfield, brain).on_final("25")
+    r = sc.say("Tower, Colt 1, on final", Controller.TOWER)
+    assert "cleared to land" in r.lower()
+    assert sc.phase() == Phase.LANDING
+    # On approach (not yet on the runway): no handoff.
+    assert brain.check_landing_handoff("Colt 1", on_runway=False) is None
+    # Touched down (on the runway, rolling out): Tower pushes to Ground.
+    call = brain.check_landing_handoff("Colt 1", on_runway=True)
+    assert call and "contact Ground" in call
+    assert sc.phase() == Phase.TAXI
+    # Fires once — an idle pilot is not spammed.
+    assert brain.check_landing_handoff("Colt 1", on_runway=True) is None
+
+
+def test_vacated_report_hands_to_ground_once(airfield, brain):
+    # A pilot who reports "vacated" first still gets the handoff, and the
+    # proactive check must not repeat it.
+    sc = _scenario(airfield, brain).on_final("25")
+    sc.say("Tower, Colt 1, on final", Controller.TOWER)
+    r = sc.say("Colt 1, runway 25 vacated", Controller.TOWER)
+    assert "contact Ground" in r
+    assert sc.phase() == Phase.TAXI
+    assert brain.check_landing_handoff("Colt 1", on_runway=True) is None
+
+
+def test_landing_handoff_rearms_on_next_approach(airfield, brain):
+    # A go-around / touch-and-go (back on approach) re-arms the handoff for the
+    # next landing.
+    sc = _scenario(airfield, brain).on_final("25")
+    sc.say("Tower, Colt 1, on final", Controller.TOWER)
+    brain.check_landing_handoff("Colt 1", on_runway=True)
+    assert brain.pilots["Colt 1"].landing_handoff_announced is True
+    # Back on approach (go-around): re-arm.
+    brain.pilots["Colt 1"].phase = Phase.INBOUND
+    brain.check_landing_handoff("Colt 1", on_runway=False)
+    assert brain.pilots["Colt 1"].landing_handoff_announced is False
+
+
+def test_no_handoff_without_landing_clearance(airfield, brain):
+    # A pilot in the Landing phase who was never *cleared to land* (e.g. an
+    # overhead break) is not pushed to Ground.
+    sc = _scenario(airfield, brain).on_final("25")
+    sc.say("Tower, Colt 1, overhead break", Controller.TOWER)
+    assert sc.phase() == Phase.LANDING
+    assert brain.pilots["Colt 1"].cleared_landing is False
+    assert brain.check_landing_handoff("Colt 1", on_runway=True) is None
+
+
 # ---------- Position cross-checks (faked radar) ----------
 
 def test_ready_for_departure_challenged_on_ramp(airfield, brain):
@@ -262,6 +316,78 @@ def test_holding_short_accepted_at_named_point(airfield, brain):
     r = sc.say("Colt 1, holding short runway 25", Controller.GROUND)
     assert "contact Tower" in r
     assert sc.phase() == Phase.HOLDING
+
+
+def test_entry_report_far_from_gate_is_challenged(airfield, brain):
+    # A pilot who reports "at the entry" while still far away is challenged and
+    # NOT handed to Tower (they would arrive unannounced).
+    sc = _scenario(airfield, brain).at_gate("North")  # far from Entry West
+    sc.say("Kutaisi Control, Colt 1, inbound 35 miles north at Angels 12",
+           Controller.CONTROL)
+    sc.say("150 to join via Entry East, Colt 1", Controller.CONTROL)
+    # Still far from Entry West, but claims to be there (before the descend
+    # readback would hand the flight off).
+    r = sc.say("Control, Colt 1, entry west", Controller.CONTROL)
+    assert "negative" in r.lower()
+    assert "contact Tower" not in r
+    assert sc.phase() == Phase.INBOUND  # did not advance
+
+
+def test_entry_report_at_gate_hands_to_tower(airfield, brain):
+    # A pilot actually at the entry point is handed to Tower.
+    sc = _scenario(airfield, brain).at_gate("West")
+    sc.say("Kutaisi Control, Colt 1, inbound 35 miles west at Angels 12",
+           Controller.CONTROL)
+    sc.say("150 to join via Entry East, Colt 1", Controller.CONTROL)
+    r = sc.say("Control, Colt 1, entry west", Controller.CONTROL)
+    assert "contact Tower" in r
+    assert sc.phase() == Phase.LANDING
+
+
+# ---------- Stepped arrival descent (distance-based) ----------
+
+def test_far_inbound_gets_intermediate_descent(airfield, brain):
+    # 35 miles out: Control steps the flight down (5000 ft), not straight to
+    # 1500 ft (a real controller does not drop an arrival to the final altitude
+    # 35 miles out).
+    sc = _scenario(airfield, brain)
+    sc.lat = airfield.ctr.center_lat + 0.58  # ~35 NM north of the field
+    sc.lon = airfield.ctr.center_lon
+    sc.say("Kutaisi Control, Colt 1, inbound 35 miles north at Angels 12",
+           Controller.CONTROL)
+    r = sc.say("150 to join via Entry East, Colt 1", Controller.CONTROL)
+    assert "descend and maintain 5000" in r.lower()
+    assert brain.pilots["Colt 1"].descend_intermediate is True
+    assert brain.pilots["Colt 1"].descend_issued is False
+
+
+def test_close_inbound_gets_final_descent(airfield, brain):
+    # At the entry point: Control clears the final descent to 1500 ft.
+    sc = _scenario(airfield, brain).at_gate("East")
+    sc.say("Kutaisi Control, Colt 1, inbound 10 miles east at Angels 12",
+           Controller.CONTROL)
+    r = sc.say("150 to join via Entry East, Colt 1", Controller.CONTROL)
+    assert "descend to 1500 feet" in r.lower()
+    assert brain.pilots["Colt 1"].descend_issued is True
+
+
+def test_final_descent_issued_when_close_after_step(airfield, brain):
+    # After the far-out step-down, the monitor issues the final descent once the
+    # aircraft reaches the entry area.
+    sc = _scenario(airfield, brain)
+    sc.lat = airfield.ctr.center_lat + 0.58  # ~35 NM north of the field
+    sc.lon = airfield.ctr.center_lon
+    sc.say("Kutaisi Control, Colt 1, inbound 35 miles north at Angels 12",
+           Controller.CONTROL)
+    sc.say("150 to join via Entry East, Colt 1", Controller.CONTROL)
+    assert brain.pilots["Colt 1"].descend_intermediate is True
+    # Still far: no final descent yet.
+    assert brain.check_arrival_descent("Colt 1", sc._track()) is None
+    # Now at the entry: the final descent is issued, once.
+    sc.at_gate("East")
+    call = brain.check_arrival_descent("Colt 1", sc._track())
+    assert call and "descend to 1500 feet" in call.lower()
+    assert brain.check_arrival_descent("Colt 1", sc._track()) is None
 
 
 # ---------- Line-up lock regression (the one that trapped a real flight) ----------
@@ -646,14 +772,16 @@ def test_full_lifecycle_all_pages(airfield, brain):
 
 # ---------- Go-around (runway occupied on final) ----------
 
-def test_landing_clearance_readback_gets_roger_not_say_again(airfield, brain):
-    # A pilot reading back "cleared to land" is busy landing — acknowledge it,
-    # don't nag with "say again" (a real frustration in live testing).
+def test_landing_clearance_readback_is_silent(airfield, brain):
+    # A pilot reading back "cleared to land" is busy landing. Master Arms
+    # (Landing Procedures §Comms): after the landing clearance and readback
+    # "there's generally no need for additional comms" — so the bot stays
+    # silent (no "roger", no "say again").
     sc = _scenario(airfield, brain).on_final("25")
     sc.say("Tower, Colt 1, on final", Controller.TOWER)
     assert sc.phase() == Phase.LANDING
     r = sc.say("Runway 25, cleared to land, Colt 1", Controller.TOWER)
-    assert "say again" not in r.lower()
+    assert r == ""  # deliberate silence (no "roger", no "say again")
 
 
 def test_go_around_fires_once(airfield, brain):

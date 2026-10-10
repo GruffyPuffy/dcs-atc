@@ -688,6 +688,24 @@ def main() -> None:
                     if clear_call:
                         log(f"RUNWAY CLEAR: {callsign} ({ac.player})")
                         speak(clear_call, controller=Controller.TOWER)
+                    # After landing, Tower pushes the flight to Ground at
+                    # touchdown (Master Arms SOP) — the pilot does not have to
+                    # report "vacated" to Tower.
+                    on_rwy_self = airfield.runway_occupied(
+                        [ac], exclude=None, on_runway=True)
+                    with lock:
+                        handoff = brain.check_landing_handoff(callsign, on_rwy_self)
+                    if handoff:
+                        log(f"LANDED: {callsign} ({ac.player}) -> Ground")
+                        speak(handoff, controller=Controller.TOWER)
+                    # Arrival descent: after the far-out step-down, Control
+                    # issues the final "descend to 1500 feet" once the aircraft
+                    # reaches the entry area.
+                    with lock:
+                        descend = brain.check_arrival_descent(callsign, tr)
+                    if descend:
+                        log(f"DESCEND: {callsign} ({ac.player})")
+                        speak(descend, controller=Controller.CONTROL)
             except (OSError, RuntimeError):
                 pass  # bridge down or mission not running; retry next tick
 

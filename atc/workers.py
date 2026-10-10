@@ -31,6 +31,7 @@ _STATE_FIELDS = {
     "cleared_inbound": "inbound",
     "cleared_landing": "landing",
     "descend_issued": "descend",
+    "descend_intermediate": "descstep",
     "climb_issued": "climb",
     "formation": "formation",
     "go_around_issued": "goaround",
@@ -38,6 +39,7 @@ _STATE_FIELDS = {
     "incursion_warned": "incursion",
     "awaiting_takeoff": "awaitto",
     "awaiting_landing": "awaitland",
+    "landing_handoff_announced": "landhandoff",
 }
 
 

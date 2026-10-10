@@ -33,6 +33,19 @@ TOWER = "Kutaisi Tower"
 RUNWAY = "25"
 DEFAULT_PHRASEOLOGY = Path(__file__).with_name("phraseology.json")
 
+# How close (NM) a pilot must be to a named entry gate for an "at the entry"
+# report to be accepted. Beyond this, Control challenges the position instead of
+# handing the flight to Tower (a pilot who is not actually at the entry point
+# should not be handed off).
+ENTRY_REPORT_RADIUS_NM = 5.0
+
+# Arrival descent is stepped by distance to the entry gate, like a real
+# controller (not a single canned "descend to 1500" at 35 miles). Within
+# `DESCENT_FINAL_NM` of the entry -> cleared down to the final altitude (1500
+# ft); further out -> an intermediate step-down (5000 ft) first.
+DESCENT_FINAL_NM = 15.0
+DESCENT_INTERMEDIATE_FT = 5000
+
 
 class Controller(str, Enum):
     """Which controlling agency is being addressed (see ATC.md §11)."""
@@ -66,6 +79,7 @@ class PilotState:
     cleared_landing: bool = False
     go_around_issued: bool = False
     descend_issued: bool = False  # Control has issued the descent to 1500 ft
+    descend_intermediate: bool = False  # Control issued the far-out step-down
     climb_issued: bool = False  # Control has issued the departure climb
     altitude_warned: bool = False  # warned about busting the CTR ceiling
     incursion_warned: bool = False  # warned about being on the runway uncleared
@@ -77,6 +91,10 @@ class PilotState:
     awaiting_landing: bool = False
     takeoff_ready_announced: bool = False
     landing_ready_announced: bool = False
+    # Tower has pushed a landed flight to Ground (Master Arms SOP: "after
+    # landing, tower will push you to the Ground channel"). Fires once per
+    # landing; re-arms on the next approach (go-around / touch-and-go).
+    landing_handoff_announced: bool = False
     formation: int = 0  # flight size (2+ = multi-ship), learned from calls
     last_reply: str = ""  # last clearance, replayed on "say again"
     last_clearance: str = ""  # last clearance issued, for readback verification
@@ -567,13 +585,20 @@ class AtcBrain:
 
         # Trainer aid: "<callsign> request vectors [for runway 25]" gives an
         # approach vector ("fly heading X, vectors for runway Y"). Real ATC
-        # phraseology — distinct from a bearing/distance request.
-        if re.search(r"\bvectors?\b", low):
+        # phraseology — distinct from a bearing/distance request. A *request*
+        # for a heading ("request heading to the field") is the same aid; a
+        # readback ("turn right heading 150") is not (it has no request verb).
+        if re.search(r"\bvectors?\b", low) or (
+                re.search(r"\bheading\b", low)
+                and re.search(r"\b(request(?:ing)?|like|prefer|would like|"
+                              r"asking for|need|give me|what)\b", low)):
             return self._vectors(callsign, low, track, controller)
 
         # Trainer aid: "<callsign> request bearing and distance [to <gate>]"
         # gives a bearing/distance to a named entry/exit gate (or the field).
-        if re.search(r"\b(bearing|directions?|how do i get|where is)\b", low):
+        # "azimuth" is a synonym for bearing.
+        if re.search(r"\b(bearing|azimuth|directions?|how do i get|where is)\b",
+                     low):
             return self._directions(callsign, low, track, controller, pilot)
 
         # Hidden TopGun easter egg (env-gated). A request to bust/buzz the tower
@@ -667,6 +692,7 @@ class AtcBrain:
         pilot.cleared_landing = False
         pilot.go_around_issued = False
         pilot.descend_issued = False
+        pilot.descend_intermediate = False
         pilot.climb_issued = False
         pilot.exit_gate = ""
         pilot.entry_gate = ""
@@ -675,6 +701,7 @@ class AtcBrain:
         pilot.awaiting_landing = False
         pilot.takeoff_ready_announced = False
         pilot.landing_ready_announced = False
+        pilot.landing_handoff_announced = False
         return self._say("state_reset", callsign,
                          agency=self._agency(controller))
 
@@ -700,8 +727,10 @@ class AtcBrain:
         pilot.phase = back
         pilot.cleared_landing = False
         pilot.descend_issued = False
+        pilot.descend_intermediate = False
         pilot.awaiting_takeoff = False
         pilot.awaiting_landing = False
+        pilot.landing_handoff_announced = False
         return self._say("cancel_ack", callsign,
                          agency=self._agency(controller))
 
@@ -920,17 +949,27 @@ class AtcBrain:
                 r"\b(cleared|takeoff|take off|right turn|left turn|turnout)\b",
                 low):
             return self._say("roger", callsign, agency=self.tower_short)
-        # After landing, Tower hands the flight to Ground.
+        # After landing, Tower hands the flight to Ground. Normally the bot
+        # pushes the pilot to Ground *unprompted* once they roll off the runway
+        # (check_landing_handoff); this branch covers a pilot who reports
+        # "vacated" first. Idempotent: if the handoff was already given, just
+        # acknowledge rather than repeating "contact Ground".
         if re.search(r"\b(vacated|clear of the runway|off the runway|"
                      r"runway vacated|clear of runway)\b", low):
+            if pilot.landing_handoff_announced:
+                return self._say("roger", callsign, agency=self.tower_short)
+            pilot.landing_handoff_announced = True
             pilot.phase = Phase.TAXI
             return self._say("contact_ground", callsign)
-        # Readback of the landing clearance ("runway 33, cleared to land") once
-        # already cleared — acknowledge, don't "say again" (the pilot is busy
-        # landing). Must come before the "on final" branch below.
+        # Readback of the landing clearance ("runway 25, cleared to land") once
+        # already cleared. Master Arms (Landing Procedures §Comms): "after the
+        # landing clearance (and your readback) there's generally no need for
+        # additional comms" — so the bot stays SILENT (no "roger"). The branch
+        # still exists so the readback is not misrouted to another intent.
+        # "" is the deliberate-silence convention (see workers._handle).
         if pilot.phase == Phase.LANDING and re.search(
                 r"\b(cleared|clear to land|copy|roger|wilco|readback)\b", low):
-            return self._say("roger", callsign, agency=self.tower_short)
+            return ""
         # "on final" is a landing clearance (distinct from a general inbound call).
         if re.search(r"\b(on final|short final|final)\b", low):
             # Cross-check: only clear to land if actually on final.
@@ -989,11 +1028,17 @@ class AtcBrain:
         # Arms arrival flow, where Control hands off right after the descend
         # readback (there is no separate "passing the entry point" call). An
         # explicit entry report is handled by the branch below.
+        # NOTE: a *request* for a heading/vector/azimuth is a trainer aid and is
+        # matched in `_dispatch` BEFORE controller dispatch, so it never reaches
+        # this readback branch. Only a genuine readback ("150 to join via Entry
+        # East") gets here.
         if pilot.phase == Phase.INBOUND and re.search(
                 r"\b(join|via|heading|turn|descend|1500?)\b", low):
             if not pilot.descend_issued:
-                pilot.descend_issued = True
-                return self._say("control_descend", callsign)
+                # Step the descent by distance: far out -> an intermediate
+                # altitude; close to the entry -> the final 1500 ft. The
+                # handoff to Tower waits until the final descent has been given.
+                return self._descend_reply(callsign, pilot, track)
             pilot.phase = Phase.LANDING
             return self._say("contact_tower_from_control", callsign)
         # Already inbound / handed off, and the pilot reports being at or near
@@ -1004,6 +1049,14 @@ class AtcBrain:
         if pilot.phase in (Phase.INBOUND, Phase.LANDING) and re.search(
                 r"\b(passing|entering|at the entry|entry|established|abeam)\b",
                 low):
+            # Cross-check the report against the live position: a pilot who
+            # claims to be at the entry point but is still far away is
+            # challenged, and is NOT handed to Tower (they would arrive
+            # unannounced). The named gate is used if given, else the assigned
+            # one. Without a live track we trust the pilot.
+            gate = self._spoken_gate(low) or pilot.entry_gate
+            if gate and not self._at_entry(track, gate):
+                return self._challenge(callsign, self.control_short, track)
             pilot.phase = Phase.LANDING
             return self._say("contact_tower_from_control", callsign)
         # First arrival check-in ("inbound ..."). Blocked once the flight has
@@ -1146,6 +1199,80 @@ class AtcBrain:
         for gate in self.gates:
             if re.search(rf"\b{re.escape(gate.lower())}\b", low):
                 return f"Entry {gate}"
+        return None
+
+    def _at_entry(self, track: AircraftTrack | None, gate: str) -> bool:
+        """True if the aircraft is within `ENTRY_REPORT_RADIUS_NM` of `gate`.
+
+        Used to cross-check an "at the entry" report before handing the flight
+        to Tower. Without a live track we cannot tell, so we trust the pilot
+        (offline behaviour unchanged).
+        """
+        if track is None or self.airfield is None:
+            return True
+        name = gate.split()[-1]  # "Entry West" -> "West"
+        target = self.airfield.gates.get(name)
+        if target is None:
+            return True
+        _, distance = bearing_distance(track.lat, track.lon,
+                                       target[0], target[1])
+        return distance <= ENTRY_REPORT_RADIUS_NM
+
+    def _distance_to_gate(self, track: AircraftTrack | None,
+                          gate: str) -> float | None:
+        """Distance (NM) from the aircraft to `gate`, or None if unknown."""
+        if track is None or self.airfield is None:
+            return None
+        name = gate.split()[-1]  # "Entry West" -> "West"
+        target = self.airfield.gates.get(name)
+        if target is None:
+            return None
+        _, distance = bearing_distance(track.lat, track.lon,
+                                       target[0], target[1])
+        return distance
+
+    def _descend_reply(self, callsign: str, pilot: PilotState,
+                       track: AircraftTrack | None) -> str:
+        """The arrival descent, stepped by distance to the entry gate.
+
+        A real controller steps an arrival down rather than dropping it to the
+        final altitude 35 miles out. Far from the entry -> an intermediate
+        step-down (5000 ft); within `DESCENT_FINAL_NM` -> the final altitude
+        (1500 ft). Without a live position we issue the final descent (the
+        documented Master Arms example).
+        """
+        gate = pilot.entry_gate or self._pick_entry_gate(track, None, pilot)
+        distance = self._distance_to_gate(track, gate)
+        if distance is not None and distance > DESCENT_FINAL_NM:
+            if pilot.descend_intermediate:
+                # Already stepped down; this is the readback. Acknowledge and
+                # wait until closer for the final descent (issued by the
+                # monitor, see check_arrival_descent).
+                return self._say("readback_correct", callsign,
+                                 agency=self.control_short)
+            pilot.descend_intermediate = True
+            return self._say("control_descend_step", callsign,
+                             altitude=f"{DESCENT_INTERMEDIATE_FT} feet")
+        pilot.descend_issued = True
+        return self._say("control_descend", callsign)
+
+    def check_arrival_descent(self, callsign: str,
+                              track: AircraftTrack | None) -> str | None:
+        """Issue the final arrival descent once the aircraft is close enough.
+
+        After the intermediate step-down (issued far out), Control calls the
+        final "descend to 1500 feet" when the aircraft reaches the entry area —
+        so the pilot is not left at the intermediate altitude. Fires once.
+        """
+        pilot = self._pilot(callsign)
+        if (pilot.phase != Phase.INBOUND or pilot.descend_issued
+                or not pilot.descend_intermediate):
+            return None
+        gate = pilot.entry_gate or self._pick_entry_gate(track, None, pilot)
+        distance = self._distance_to_gate(track, gate)
+        if distance is not None and distance <= DESCENT_FINAL_NM:
+            pilot.descend_issued = True
+            return self._say("control_descend", callsign)
         return None
 
     def _spoken_parking(self, low: str) -> str | None:
@@ -1340,4 +1467,29 @@ class AtcBrain:
             pilot.cleared_landing = True
             return self._say("cleared_land", callsign,
                              flight=self._formation_prefix(pilot))
+        return None
+
+    def check_landing_handoff(self, callsign: str, on_runway: bool) -> str | None:
+        """Push a landed flight to Ground, unprompted, at touchdown.
+
+        Master Arms SOP (Mission Procedures §9): "after landing, tower will push
+        you to the Ground channel" — the pilot does not report "vacated" to
+        Tower. The handoff happens **as the aircraft touches down** (while it is
+        still rolling out on the runway), so the pilot is already on Ground by
+        the time they are clear — not after they have vacated. Fires once per
+        landing; re-arms on the next approach (go-around / touch-and-go).
+        """
+        pilot = self._pilot(callsign)
+        if not on_runway:
+            # On approach again (go-around / touch-and-go): re-arm for the next
+            # landing. After a handoff the phase is Taxi, so this does not
+            # re-arm while the aircraft is still rolling out.
+            if pilot.phase in (Phase.INBOUND, Phase.LANDING):
+                pilot.landing_handoff_announced = False
+            return None
+        if (pilot.phase == Phase.LANDING and pilot.cleared_landing
+                and not pilot.landing_handoff_announced):
+            pilot.landing_handoff_announced = True
+            pilot.phase = Phase.TAXI
+            return self._say("contact_ground", callsign)
         return None
