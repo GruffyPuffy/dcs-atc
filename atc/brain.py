@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
+import topgun
 from callsigns import CallsignRegistry
 from ctr import AircraftTrack, CtrEvent
 from airspace import bearing_distance
@@ -133,6 +134,11 @@ class AtcBrain:
         # Callsigns currently online (from the state bridge). A single online
         # pilot whose flight is known becomes the fallback for a garbled call.
         self.active_pilots: list[str] = []
+        # TopGun easter egg (env-gated, off by default; see topgun.py). This is
+        # a pure side-channel: it never touches a pilot's phase. `_topgun_armed`
+        # holds the callsigns who have asked to bust the tower, so the stunt can
+        # be caught off-mic without changing the ATC state machine.
+        self._topgun_armed: set[str] = set()
 
     def set_pilot_count(self, count: int) -> None:
         """Enable solo training mode when there is a single player online."""
@@ -146,6 +152,14 @@ class AtcBrain:
         `_resolve_speaker`).
         """
         self.active_pilots = [c for c in (callsigns or []) if c]
+
+    def topgun_armed(self, callsign: str) -> bool:
+        """True if `callsign` has asked to bust the tower (easter egg)."""
+        return callsign in self._topgun_armed
+
+    def disarm_topgun(self, callsign: str) -> None:
+        """Clear the TopGun arm flag (fire the stunt sting at most once)."""
+        self._topgun_armed.discard(callsign)
 
     def remember_speaker(self, who: str, callsign: str) -> None:
         """Map an SRS speaker name to the callsign they used.
@@ -418,6 +432,16 @@ class AtcBrain:
         # gives a bearing/distance to a named entry/exit gate (or the field).
         if re.search(r"\b(bearing|directions?|how do i get|where is)\b", low):
             return self._directions(callsign, low, track, controller, pilot)
+
+        # Hidden TopGun easter egg (env-gated). A request to bust/buzz the tower
+        # gets the film's canned denial and arms the stunt; it changes no phase.
+        if topgun.enabled():
+            if topgun.spike(low):
+                self._topgun_armed.add(callsign)
+                return topgun.NEGATIVE_LINE
+            if callsign in self._topgun_armed and topgun.stall(low):
+                self._topgun_armed.discard(callsign)
+                return topgun.NEGATIVE_LINE
 
         # Escape hatches (any frequency). These exist so a pilot can never get
         # stuck in a wrong state during training:

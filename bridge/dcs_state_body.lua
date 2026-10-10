@@ -14,12 +14,16 @@ local function unit_json(u)
     local lat, lon, alt = coord.LOtoLL(p.p)
     -- p.x is the unit's forward vector; DCS world is x=north, z=east, y=up.
     local heading = math.deg(math.atan2(p.x.z, p.x.x)) % 360
+    -- Ground speed (m/s) from the velocity vector, for the low-and-fast check.
+    local v = p.v or { x = 0, y = 0, z = 0 }
+    local speed = math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z)
     return {
         name = u:getName(),
         type = u:getTypeName(),
         x = p.p.x, y = p.p.y, z = p.p.z,
         lat = lat, lon = lon, alt = alt,
         heading = heading,
+        speed = speed,
         player = u:getPlayerName() or "",
     }
 end
@@ -157,7 +161,26 @@ elseif op == 'runways' then
             end
         end
     end
-    return envelope(true, out)elseif op == 'weather' then
+    return envelope(true, out)elseif op == 'tower' then
+    -- Dispatcher/tower position for an airbase (by name), so the bot knows
+    -- where the tower actually is without a hand-entered coordinate. Falls
+    -- back to the tech object (control tower) then the airbase centre.
+    for _, b in ipairs(coalition.getAirbases(2)) do
+        if b:getName() == req.airbase then
+            local p = nil
+            local ok, disp = pcall(function() return b:getDispatcherTowerPos() end)
+            if ok and disp then p = disp end
+            if not p then
+                local ok2, tech = pcall(function() return b:getTechObjectPos() end)
+                if ok2 and tech then p = tech end
+            end
+            if not p then p = b:getPoint() end
+            local lat, lon, alt = coord.LOtoLL(p)
+            return envelope(true, { name = b:getName(), lat = lat, lon = lon, alt = alt })
+        end
+    end
+    return envelope(false, 'NO_AIRBASE')
+elseif op == 'weather' then
     local w = env.mission.weather or {}
     local wind = w.wind or {}
     local ground = wind.atGround or {}

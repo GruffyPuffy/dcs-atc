@@ -132,6 +132,7 @@ class Aircraft:
     heading: float
     coalition: int
     category: int = 0  # DCS group category: 0 plane, 1 helicopter, 2 ground, 3 ship
+    speed_kt: float = 0.0  # ground speed (from the velocity vector)
 
 
 class StateClient:
@@ -182,6 +183,7 @@ class StateClient:
                     heading=float(unit.get("heading", 0.0)),
                     coalition=int(group.get("coalition", 0)),
                     category=int(group.get("category", 0)),
+                    speed_kt=float(unit.get("speed", 0.0)) * 1.9438444924,
                 ))
         return out
 
@@ -212,4 +214,11 @@ class StateClient:
         reply = self.exchange("weather")
         if not reply.get("ok"):
             raise RuntimeError(f"state bridge error: {reply.get('error')}")
+        return reply["result"]
+
+    def tower(self, name: str) -> dict | None:
+        """Tower/dispatcher position for an airbase, or None if unavailable."""
+        reply = self.exchange("tower", airbase=name)
+        if not reply.get("ok"):
+            return None
         return reply["result"]

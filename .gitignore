@@ -30,6 +30,10 @@ atc/tx_*.wav
 atc/samples/
 atc/voices/
 
+# TopGun easter egg: personal marker + dropped-in clips (never committed)
+atc/topgun.txt
+topgun.txt
+
 # Editor and OS files
 .idea/
 .vscode/

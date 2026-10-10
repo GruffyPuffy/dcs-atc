@@ -26,7 +26,7 @@ from pathlib import Path
 import av
 import numpy as np
 
-from airspace import Airspace
+from airspace import Airspace, bearing_distance
 from atis import build_atis
 from brain import AtcBrain, Controller, Phraseology
 from callsigns import CallsignRegistry
@@ -35,6 +35,7 @@ from phonetics import stt_hint
 from srs_client import SrsClient
 from speech import spell_atc_numbers
 from state_client import StateClient, norm_identity, resolve_player_unit
+import topgun
 from workers import ControllerWorker, SharedState
 
 SAMPLE_RATE = 48000
@@ -246,6 +247,12 @@ def main() -> None:
               controller: Controller | None = None,
               agency: str | None = None) -> None:
         """TTS the reply in the given voice and transmit it on the frequency."""
+        # TopGun easter egg: if the reply is the canonical denial, play the
+        # drop-in clip instead of synthesising the line (its presence is the
+        # switch; see topgun.enabled()).
+        if topgun_neg_clip is not None and text == topgun.NEGATIVE_LINE:
+            play_wav(topgun_neg_clip, freq, controller)
+            return
         spoken = text
         for word, phonetic in PRONUNCIATION.items():
             spoken = spoken.replace(word, phonetic)
@@ -278,6 +285,22 @@ def main() -> None:
             if ctrl == controller:
                 return hz
         return freq_hz
+
+    def play_wav(path, freq: int = freq_hz,
+                 controller: Controller | None = None) -> None:
+        """Transmit a drop-in WAV clip (TopGun easter egg). Serialised with TTS
+        so the clip and a spoken reply can never overlap on the frequency."""
+        with wave.open(str(path), "rb") as wav:
+            channels = wav.getnchannels()
+            rate = wav.getframerate()
+            frames = wav.readframes(wav.getnframes())
+        if channels != 1:
+            raise ValueError(f"{path}: expected mono, got {channels} channels")
+        pcm48k = frames if rate == SAMPLE_RATE else resample_to_48k(frames, rate)
+        with tts_lock:
+            client.transmit(pcm48k, freq)
+        tag = f"[{controller.value}] " if controller else ""
+        log(f"{tag}ATC (tx wav): {Path(path).name}")
 
     def transcribe(pcm: bytes, who: str, duration: float,
                    controller: Controller) -> str:
@@ -421,6 +444,30 @@ def main() -> None:
             return
         worker.submit(who, apply_gain(pcm), duration)
 
+    # TopGun easter egg: the tower position (from the bridge, cached) and the
+    # per-callsign bust timer (close + low + fast held for BUST_HOLD_S).
+    _tower_pos: list = [None]
+    _bust_watch = topgun.BustWatch()
+
+    def tower_position():
+        """(lat, lon) of the tower/dispatcher for this airfield, or None."""
+        if _tower_pos[0] is None and state is not None:
+            try:
+                info = state.tower(airfield.name)
+            except (OSError, RuntimeError):
+                info = None
+            if info:
+                _tower_pos[0] = (info["lat"], info["lon"])
+        return _tower_pos[0]
+
+    topgun_on = topgun.enabled()
+    topgun_neg_clip = topgun.negative_clip()
+    topgun_bust_clip = topgun.clip("topgun_bust")
+    if topgun_on:
+        log(f"TopGun easter egg ENABLED ("
+            f"negative {'wav' if topgun_neg_clip else 'tts'}, "
+            f"bust {'wav' if topgun_bust_clip else 'tts'}).")
+
     def monitor_ctr() -> None:
         """Poll live positions: warn on unannounced CTR entry, and issue
         go-arounds when the runway is occupied on final."""
@@ -450,6 +497,38 @@ def main() -> None:
                     if warning:
                         log(f"CTR {event.value}: {callsign} ({ac.player})")
                         speak(warning, controller=Controller.TOWER)
+                    # TopGun easter egg: only for a pilot who asked to bust the
+                    # tower, and only once per pass. This is off to the side of
+                    # the ATC state machine: it plays a sting and adds nothing to
+                    # the clearance log.
+                    if topgun_on:
+                        with lock:
+                            armed = brain.topgun_armed(callsign)
+                        if armed:
+                            pos = tower_position()
+                            if pos is not None:
+                                _, tdist = bearing_distance(
+                                    ac.lat, ac.lon, pos[0], pos[1])
+                                slow = getattr(ac, "speed_kt", 0.0) < topgun.BUST_SPEED_KT
+                                low = (ac.alt_ft - airfield.elevation_ft) < topgun.BUST_AGL_FT
+                                near = tdist <= topgun.BUST_DISTANCE_NM
+                                # The hold timer runs on the *whole* bust
+                                # condition (close AND low AND fast), so a
+                                # wide/high entry that then dives in must still
+                                # hold low+fast for the full duration.
+                                if _bust_watch.update(callsign, near, low, not slow,
+                                                      time.monotonic()):
+                                    with lock:
+                                        brain.disarm_topgun(callsign)
+                                    log(f"TOPGUN: tower busted by {callsign} "
+                                        f"({ac.player}) at {tdist:.2f} nm, "
+                                        f"{ac.alt_ft - airfield.elevation_ft:.0f} ft AGL, "
+                                        f"{getattr(ac, 'speed_kt', 0.0):.0f} kt")
+                                    if topgun_bust_clip is not None:
+                                        play_wav(topgun_bust_clip, freq_for(Controller.TOWER),
+                                                 controller=Controller.TOWER)
+                                    else:
+                                        speak(topgun.BUST_LINE, controller=Controller.TOWER)
                     on_final = airfield.is_on_final(ac.lat, ac.lon, ac.heading)
                     if on_final:
                         occupied = airfield.runway_occupied(
