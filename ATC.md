@@ -66,6 +66,14 @@ STT mangles callsigns, so matching is tolerant:
 - flight numbers accept digits or spoken words, including homophones
   (`one`/`won`, `two`/`to`/`too`, `three`/`tree`, `four`/`for`, `eight`/`ate`)
 - both `Colt 1` and `Colt 1-1` (flight + element) are recognised
+- the name↔number separator may be a space, hyphen, **or comma** (`Ground,
+  Springfield, 11` — STT punctuates the callsign at a pause), but a comma is
+  never read as an element separator, so `Colt 1, two-ship` is `Colt 1` (not
+  `Colt 1-2`).
+- when a transmission names **more than one** flight (a readback like `Climbing
+  to Ford 15, Springfield 1` names Ford *and* the sender), the **speaker's own**
+  callsign wins — a flight name that merely appears in the message never hijacks
+  the transmission.
 
 Examples: `cold tree` → `Colt 3`, `kolt 2` → `Colt 2`, `fort 2` → `Ford 2`,
 `hog 1` → `Hawg 1`, `vyper 1` → `Viper 1`, `springfeeld 2` → `Springfield 2`.
@@ -136,6 +144,7 @@ step on the next controller's first call.
 | "Cleared taxi Sierra Echo and hold short runway 25, Colt 1" | **readback** | "Colt 1, Ground, readback correct." |
 | "Colt 1, holding short runway 25" | **hold short** (after taxi) | "Colt 1, Ground, contact Tower on channel 7." |
 | "Tower, Colt 1, at runway 25, ready for departure" | **departure** (after taxi/holding) | "Colt 1, Tower, line up and wait runway 25." |
+| "Tower, Colt 1, ready for departure" (**while an arrival**) | **wrong call** | "Colt 1, Tower, negative, report runway in sight for landing." (never clears a takeoff for a pilot who is inbound/landing) |
 | "Line up and wait 25, Colt 1" | **readback** | "Colt 1, Tower, readback correct, wind calm, runway 25, right turnout, cleared for takeoff." |
 | "Control, Colt 1, at 1500 ft" | **departure check-in** | "Colt 1, Control, radar contact, climb to Angels 15." |
 | "Kutaisi Control, Colt 1, inbound 35 miles north at Angels 12" | **inbound** | "Colt 1, Control, radar contact, turn right heading 150 to join via Entry East." (heading **computed** from the live position; entry is the best/straight-in gate for runway 25) |

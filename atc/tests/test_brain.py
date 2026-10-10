@@ -486,6 +486,39 @@ def test_speaker_callsign_mapping(brain):
     assert brain.callsign_for_speaker("Unknown") == "Unknown"
 
 
+def test_content_flight_name_does_not_hijack_transmission(brain):
+    # "Climbing to Ford 15" is heading 150 for the *sender* (Springfield 1),
+    # not flight Ford. The speaker's own callsign wins.
+    brain.remember_speaker("Caveman", "Springfield 1")
+    brain.handle("Springfield 1, at 1500 ft", controller=Controller.CONTROL,
+                 speaker="Caveman")
+    brain.handle("Climbing to Ford 15, Springfield 1",
+                 controller=Controller.CONTROL, speaker="Caveman")
+    assert "Springfield 1" in brain.pilots
+    assert not any(k.startswith("Ford") for k in brain.pilots)
+
+
+def test_comma_separated_callsign_is_attributed(brain):
+    # "Ground, Springfield, 11" must extract (comma), so it is addressed to the
+    # right flight instead of becoming an un-attributable ghost track.
+    reply = brain.handle("Ground, Springfield, 11", controller=Controller.GROUND,
+                         speaker="Caveman")
+    assert reply is not None and "Springfield 1" in reply
+    assert "Springfield 1" in brain.pilots
+
+
+def test_arrival_ready_for_departure_is_guided_not_cleared(brain):
+    # An arrival never asks for departure: guide them, never clear takeoff.
+    brain.handle("Control, Colt 1, inbound 30 miles south",
+                 controller=Controller.CONTROL)
+    assert brain.pilots["Colt 1"].phase == Phase.INBOUND
+    reply = brain.handle("Tower, Colt 1, ready for departure",
+                         controller=Controller.TOWER)
+    assert "negative" in reply.lower()
+    assert "takeoff" not in reply.lower()
+    assert brain.pilots["Colt 1"].phase == Phase.INBOUND
+
+
 # ---------- Shared / fallback ----------
 
 def test_unknown_request_says_again(brain):
@@ -1114,5 +1147,21 @@ def test_control_passing_entry_hands_to_tower(brain):
     assert brain.pilots["Colt 1"].phase == Phase.INBOUND
     reply = brain.handle("Control, Colt 1, passing entry east, inbound",
                          controller=Controller.CONTROL)
+    assert "contact Tower" in reply
+    assert brain.pilots["Colt 1"].phase == Phase.LANDING
+
+
+def test_control_never_reissues_join_after_handoff(brain):
+    # After the full join -> descend -> handoff, an "entry" mention must NOT
+    # re-issue the join or pull the flight back from Tower (live-log regression).
+    brain.handle("Control, Colt 1, inbound 35 miles southeast",
+                 controller=Controller.CONTROL)
+    brain.handle("150 to join via Entry East, Colt 1", controller=Controller.CONTROL)
+    reply = brain.handle("Descend to 1500 feet, Colt 1", controller=Controller.CONTROL)
+    assert "contact Tower" in reply
+    assert brain.pilots["Colt 1"].phase == Phase.LANDING
+    # A later "entry" report stays a handoff, never a re-issued join.
+    reply = brain.handle("Colt 1, entry southeast", controller=Controller.CONTROL)
+    assert "join via" not in reply
     assert "contact Tower" in reply
     assert brain.pilots["Colt 1"].phase == Phase.LANDING

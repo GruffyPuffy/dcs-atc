@@ -227,6 +227,24 @@ class AtcBrain:
                 return self.speaker_callsigns[key]
         return who
 
+    def extract_callsign(self, text: str, speaker: str = "") -> str | None:
+        """The callsign a transmission is *from*, or None.
+
+        Prefers the speaker's own known callsign when the text names it, so a
+        flight name that merely appears in the message (a readback "descend to
+        Enfield 15" = heading 150 to Enfield) does not hijack the transmission;
+        otherwise the first callsign named. A speaker never established still
+        uses the first match, and a call with no callsign returns None (the
+        caller may then fall back to `_resolve_speaker`).
+        """
+        found = self.callsigns.extract_all(text)
+        if not found:
+            return None
+        own = self.callsign_for_speaker(speaker) if speaker else ""
+        if own and own != speaker and own in found:
+            return own
+        return found[0]
+
     def _resolve_speaker(self, text: str, who: str) -> str | None:
         """Attribute a transmission with no extracted callsign to a pilot.
 
@@ -486,7 +504,12 @@ class AtcBrain:
         `speaker` is the transmitting pilot's SRS/DCS name, used to exclude them
         from the runway-occupancy check (they are not traffic to themselves).
         """
-        callsign = self.callsigns.extract(text)
+        # Every callsign the text names, in order. A transmission can mention
+        # several (a readback "descend to Enfield 15" names Enfield; a formation
+        # call names two flights). Prefer the *speaker's own* callsign when it is
+        # among them, so a content flight name does not hijack the transmission
+        # (this was "Climbing to Enfield 15" being handled as flight Enfield).
+        callsign = self.extract_callsign(text, speaker)
         if not callsign:
             # Some calls may omit the flight number (e.g. "Colt help").
             name = self.callsigns.extract_name(text)
@@ -776,7 +799,13 @@ class AtcBrain:
         # counts once Ground has advanced the phase (avoids false positives).
         # Master Arms: Tower answers with "line up and wait"; the takeoff
         # clearance follows the pilot's readback (see handle()).
-        if re.search(r"\bready for departure\b|\bready for takeoff\b", low):
+        if re.search(r"\bready for departure\b|\bready for takeoff\b|\bready to go\b",
+                     low):
+            # An *arrival* never asks for departure — a pilot who does is on the
+            # wrong call (or a mis-parse); guide them to the arrival report
+            # instead of wrongly clearing a takeoff.
+            if pilot.phase in (Phase.INBOUND, Phase.LANDING):
+                return self._say("arrival_wrong_call", callsign)
             # Already cleared for takeoff: re-issue the clearance (idempotent)
             # rather than dropping the pilot back to Lineup.
             if pilot.phase == Phase.DEPARTURE:
@@ -830,6 +859,13 @@ class AtcBrain:
                      r"taking off|rolling|rolling out)\b", low):
             pilot.phase = Phase.AIRBORNE
             return self._say("contact_control", callsign)
+        # Readback of "report runway in sight" ("Report runway in sight, Adder11")
+        # is NOT the runway-in-sight report itself — only the actual report (said
+        # when the runway is genuinely in sight) triggers the break clearance.
+        # Must come before the runway-in-sight branch.
+        if re.search(r"\b(report|reporting|wilco|roger|copy)\b.*"
+                     r"\brunway in sight\b", low):
+            return self._say("roger", callsign, agency=self.tower_short)
         if re.search(r"\b(runway in sight|runway insight|visual)\b", low):
             return self._say("cleared_overhead", callsign,
                              flight=self._formation_prefix(pilot))
@@ -931,18 +967,26 @@ class AtcBrain:
                 return self._say("control_descend", callsign)
             pilot.phase = Phase.LANDING
             return self._say("contact_tower_from_control", callsign)
-        # Already inbound and reporting they have reached the entry point ->
-        # hand to Tower (must come before the generic inbound regex, which also
-        # matches "entry"/"inbound").
-        if pilot.phase == Phase.INBOUND and re.search(
-                r"\b(passing|entering|at the entry|established|abeam)\b", low):
+        # Already inbound / handed off, and the pilot reports being at or near
+        # the entry point -> hand to Tower. NEVER re-issue the join here: once
+        # the join has been given, an "entry" mention must not loop the arrival
+        # back to the start (it did — any call containing "entry" re-issued the
+        # join regardless of phase, so a handoff could be undone).
+        if pilot.phase in (Phase.INBOUND, Phase.LANDING) and re.search(
+                r"\b(passing|entering|at the entry|entry|established|abeam)\b",
+                low):
             pilot.phase = Phase.LANDING
             return self._say("contact_tower_from_control", callsign)
-        # Arrival check-in ("inbound ...") takes priority over the departure
-        # keywords: an inbound call often names an altitude ("inbound 35 miles
-        # north at Angels 12"), which must NOT be read as a departure check-in
-        # (that would answer a joining aircraft with "climb to Angels 15").
-        if re.search(r"\binbound\b|\bentry\b", low):
+        # First arrival check-in ("inbound ..."). Blocked once the flight has
+        # been handed to Tower (Landing), so a stray "inbound" cannot loop the
+        # arrival back; on the first call it issues the join, and a follow-up
+        # inbound (still with Control) keeps the assigned/requested gate.
+        # Arrival check-in takes priority over the departure keywords: it often
+        # names an altitude ("inbound 35 miles north at Angels 12"), which must
+        # NOT be read as a departure check-in (that would answer a joining
+        # aircraft with "climb to Angels 15").
+        if pilot.phase != Phase.LANDING and re.search(
+                r"\binbound\b|\bentry\b", low):
             pilot.phase = Phase.INBOUND
             pilot.cleared_inbound = True
             gate = self._pick_entry_gate(track, low, pilot)
@@ -975,6 +1019,13 @@ class AtcBrain:
                      r"break|initial|passing|entering)\b", low):
             pilot.phase = Phase.LANDING
             return self._say("contact_tower_from_control", callsign)
+        # Initial Control check-in, bare: "Kutaisi Control, Adder11" (Master Arms
+        # kneeboard page 2, step 1) -> "Adder11, Control". Answer it instead of
+        # "say again"; the pilot follows with the inbound call.
+        if re.search(r"\bcontrol\b", low):
+            pilot.phase = Phase.INBOUND
+            return self._say("control_ack", callsign,
+                             agency=self.control_short)
         return None
 
     def _inbound_reply(self, callsign: str, pilot: PilotState,

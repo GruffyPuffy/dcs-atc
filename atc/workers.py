@@ -128,7 +128,7 @@ class ControllerWorker:
             reply = self.shared.brain.handle(
                 text, track, controller=self.controller, traffic=traffic,
                 speaker=who)
-            callsign = self.shared.brain.callsigns.extract(text)
+            callsign = self.shared.brain.extract_callsign(text, who)
             if callsign:
                 self.shared.brain.remember_speaker(who, callsign)
             after = _state_snapshot(self.shared.brain)

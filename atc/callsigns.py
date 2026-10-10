@@ -136,9 +136,14 @@ class CallsignRegistry:
             return None
         name_alt = self._name_alt()
         num = _number_pattern()
-        # "Name 1", "Name 1-1", "Name 11" (flight+element), with optional separators
+        # "Name 1", "Name 1-1", "Name 11" (flight+element). The separator
+        # between the name and number may be a space, hyphen, OR comma — radio
+        # traffic often punctuates the callsign ("Ground, Springfield, 11"), and
+        # STT inserts commas at pauses, so a comma must not break the match.
+        # The element separator stays space/hyphen only: a comma there would
+        # swallow a formation count ("Colt 1, two-ship" -> "Colt 1-2").
         pattern = (
-            rf"\b(?P<name>{name_alt})\s*[- ]?\s*"
+            rf"\b(?P<name>{name_alt})\s*[- ,]?\s*"
             rf"(?P<num>{num})(?:\s*[- ]?\s*(?P<elem>{num}))?\b"
         )
         return re.compile(pattern, re.IGNORECASE)
@@ -148,16 +153,37 @@ class CallsignRegistry:
         if self._regex is not None:
             match = self._regex.search(text)
             if match:
-                name = match.group("name").strip().title()
-                # canonicalise the name to the mission spelling if we can
-                canonical = self._canonical_name(name)
-                number = _normalise_number(match.group("num"))
-                element = match.group("elem")
-                return canonical_callsign(canonical, number,
-                                          _normalise_number(element) if element else None)
+                return self._canonical_match(match)
         # Nothing matched exactly — recover a near-miss on the flight name (the
         # number is usually intelligible even when the name is not).
         return self._fuzzy_extract(text)
+
+    def extract_all(self, text: str) -> list[str]:
+        """Every callsign the text mentions, in order (may be several).
+
+        A transmission can name more than one flight: a controller readback
+        ("descend to Enfield 15" = heading 150 to Enfield) or a formation call
+        ("Springfield 2, this is Springfield 1"). Returning them all lets the
+        caller prefer the *speaker's own* callsign over a content flight name
+        that merely appears in the message.
+        """
+        if self._regex is None:
+            return []
+        out = []
+        for match in self._regex.finditer(text):
+            cs = self._canonical_match(match)
+            if cs and cs not in out:
+                out.append(cs)
+        return out
+
+    def _canonical_match(self, match: "re.Match") -> str:
+        name = match.group("name").strip().title()
+        # canonicalise the name to the mission spelling if we can
+        canonical = self._canonical_name(name)
+        number = _normalise_number(match.group("num"))
+        element = match.group("elem")
+        return canonical_callsign(canonical, number,
+                                  _normalise_number(element) if element else None)
 
     def _fuzzy_extract(self, text: str) -> str | None:
         """Recover a callsign whose flight name was misheard beyond the rules.

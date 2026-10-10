@@ -38,6 +38,26 @@ def test_recovers_multiword_fracture(callsigns):
 def test_element_lead_collapses_to_flight_callsign(callsigns):
     # The lead says "Springfield 1" or "Springfield 1-1" — same pilot, one key.
     assert callsigns.extract("Springfield 1-1, ready") == "Springfield 1"
+
+
+def test_comma_between_name_and_number(callsigns):
+    # STT punctuates the callsign at a pause ("Ground, Springfield, 11").
+    assert callsigns.extract("Ground, Springfield, 11") == "Springfield 1"
+    assert callsigns.extract("Ground, Springfield, 1-1") == "Springfield 1"
+
+
+def test_comma_does_not_swallow_formation_count(callsigns):
+    # A comma before a *word* number must not become an element ("Colt 1-2").
+    assert callsigns.extract(
+        "Colt 1, two-ship Hornets on Ramp South") == "Colt 1"
+
+
+def test_extract_all_lists_every_flight_named(callsigns):
+    # A readback naming an altitude (Ford 15 = heading 150 toward Ford) and the
+    # sender lists both, in the order they appear.
+    assert callsigns.extract_all("Climbing to Ford 15, Springfield 1") == [
+        "Ford 1-5", "Springfield 1"
+    ]
     assert callsigns.extract("Springfield 1, ready") == "Springfield 1"
     # A wingman (element 2+) stays distinct.
     assert callsigns.extract("Springfield 1-2, ready") == "Springfield 1-2"
