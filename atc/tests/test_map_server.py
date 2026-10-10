@@ -2,6 +2,7 @@
 
 import json
 import threading
+import time
 import urllib.error
 import urllib.request
 
@@ -611,6 +612,12 @@ def test_control_restart_endpoint(brain, airfield, tmp_path):
             data=json.dumps({"airfield": "Gudauta"}).encode(),
             headers={"Content-Type": "application/json"}, method="POST")
         assert json.loads(urllib.request.urlopen(req).read())["ok"] is True
+        # The exit fires *after* the response is flushed (so the browser sees
+        # the result), so wait for the callback rather than racing it.
+        for _ in range(50):
+            if calls:
+                break
+            time.sleep(0.02)
         # The current debug state is preserved when the caller omits it.
         assert calls == [("restart", "Gudauta", True)]
         assert "ATC_DEBUG=1" in state_file.read_text()

@@ -63,6 +63,7 @@ check in with Control. See the generated kneeboard cards (`kneeboard/`) for the
 exact calls at each step. Useful extras:
 
     ./start_bot.sh --debug                 # + richer logs + a saved debrief file
+    ./start_bot.sh --tx-volume 0.6         # quieten loud ATC voices (1.0 = unchanged)
     ./start_bot.sh --help                  # all bot options
 
 Then review a sortie afterwards: open the map and pick your debrief from the

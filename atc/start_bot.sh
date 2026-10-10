@@ -9,6 +9,7 @@
 #   ./start_bot.sh --freq 124.0             # override the frequency
 #   ./start_bot.sh --speech-rate 0.6        # faster TTS voice
 #   ./start_bot.sh --gain 3                 # boost quiet mic audio
+#   ./start_bot.sh --tx-volume 0.6          # quieten loud ATC voices
 #   ./start_bot.sh --map-port 9000          # move the map to another port
 #   ./start_bot.sh --map-port 0             # disable the map
 #   ./start_bot.sh --debug                  # + save a debrief to atc/debrief/tracks_<field>_<time>.json

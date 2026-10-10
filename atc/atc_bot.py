@@ -10,7 +10,8 @@ Usage:
                       [--ground-voice en_US-ryan-medium]
                       [--control-voice en_US-lessac-medium]
                       [--atis-voice en_GB-alan-medium]
-                      [--log /tmp/atc_log.txt] [--gain 1.0] [--save-audio]
+                      [--log /tmp/atc_log.txt] [--gain 1.0] [--tx-volume 1.0]
+                      [--save-audio]
                       [--state-host 127.0.0.1] [--state-port 10309] [--no-state]
 """
 
@@ -67,6 +68,19 @@ def resample_to_48k(pcm: bytes, rate: int) -> bytes:
     return b"".join(bytes(f.planes[0]) for f in out)
 
 
+def scale_pcm(pcm: bytes, factor: float) -> bytes:
+    """Scale 16-bit mono PCM by `factor`, clipped to int16. 1.0 = unchanged.
+
+    Used for the output volume (`--tx-volume`) so loud Piper voices can be
+    quietened without editing the voice files, and for the input gain
+    (`--gain`) on received audio.
+    """
+    if factor == 1.0:
+        return pcm
+    samples = np.frombuffer(pcm, dtype=np.int16).astype(np.int32)
+    return np.clip(samples * factor, -32768, 32767).astype(np.int16).tobytes()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--airfield", default="Kutaisi",
@@ -104,7 +118,11 @@ def main() -> None:
                              "debugging (off by default)")
     parser.add_argument("--keep", type=int, default=10,
                         help="how many rx WAVs to keep with --save-audio")
-    parser.add_argument("--gain", type=float, default=1.0)
+    parser.add_argument("--gain", type=float, default=1.0,
+                        help="input gain for received audio (STT), 1.0 = none")
+    parser.add_argument("--tx-volume", type=float, default=0.6,
+                        help="output volume for the ATC voices (TTS), 1.0 = "
+                             "unchanged; e.g. 0.6 to quieten loud voices")
     parser.add_argument("--speech-rate", type=float, default=0.7,
                         help="Piper length_scale; lower = faster (0.6-1.0)")
     parser.add_argument("--state-host", default="127.0.0.1")
@@ -221,10 +239,7 @@ def main() -> None:
             log(f"DBG {line}")
 
     def apply_gain(pcm: bytes) -> bytes:
-        if args.gain == 1.0:
-            return pcm
-        samples = np.frombuffer(pcm, dtype=np.int16).astype(np.int32)
-        return np.clip(samples * args.gain, -32768, 32767).astype(np.int16).tobytes()
+        return scale_pcm(pcm, args.gain)
 
     def peak_dbfs(pcm: bytes) -> float:
         samples = np.frombuffer(pcm, dtype=np.int16).astype(np.float32)
@@ -307,6 +322,9 @@ def main() -> None:
             rate = chunks[0].sample_rate
             pcm22k = b"".join(c.audio_int16_bytes for c in chunks)
             pcm48k = resample_to_48k(pcm22k, rate)
+            # Apply the output volume (--tx-volume) so loud Piper voices can be
+            # quietened without touching the voice files.
+            pcm48k = scale_pcm(pcm48k, args.tx_volume)
             # Transmit outside the synthesis lock is not needed (the lock only
             # serialises Piper); the per-agency client queues the audio.
             client_for(controller, freq).transmit(pcm48k, freq)
