@@ -290,11 +290,13 @@ positions, and the bot knows where they are (`airspace.json` → `holding_points
 | P3 | Holding A/N | 42.17923, 42.46583 |
 | P4 | Holding S/W | 42.17232, 42.46738 |
 
-When a pilot reports holding short, the bot **names the holding position** it
-shows them at: *"Colt 1, Ground, roger, holding at Holding C. Contact Tower on
-channel 7."* A report is accepted if the aircraft is at the threshold **or** at
-any holding point (`Airfield.is_holding_short`), so holding at B/A/N/S/W is not
-wrongly challenged.
+When a pilot reports holding short, the bot hands them to Tower, matching the
+Master Arms kneeboard: *"Colt 1, Ground, contact Tower on channel 7."* A report
+is accepted if the aircraft is at the threshold **or** at any holding point
+(`Airfield.is_holding_short`), so holding at B/A/N/S/W is not wrongly
+challenged. (The holding position is still cross-checked — a pilot not actually
+at a holding point is challenged — but it is not named in the reply, because the
+kneeboard dialog does not name it.)
 
 **Check areas on the map.** The map draws the areas the bot actually checks,
 derived from the **same parameters** the brain uses (so the map cannot drift

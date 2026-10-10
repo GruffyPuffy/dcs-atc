@@ -653,3 +653,62 @@ def test_control_endpoints_404_without_control(brain, airfield):
             assert e.code == 404
     finally:
         server.shutdown()
+
+
+# ---------- Debrief save robustness + timed autosave ----------
+
+def test_save_sanitises_non_serialisable_payload(brain, airfield, tmp_path):
+    """A stray non-serialisable value is coerced, so the save still succeeds."""
+    from collections import deque
+    messages = []
+    service = MapService(airfield, brain, FakeState([]),
+                         tracks_file=tmp_path / "tracks.json",
+                         log=messages.append)
+    # A set is not JSON-serialisable; _json_safe coerces it to a list, so the
+    # save still succeeds (and nothing is logged).
+    service.tracks._tracks["Colt 1"] = deque([(42.18, 42.50, 100.0)])
+    service.tracks._comms["Colt 1"] = deque(
+        [{"kind": "rx", "text": "hi", "tags": {"a", "b"}}])
+    service.save_tracks()
+    assert (tmp_path / "tracks.json").exists()
+    assert messages == []
+
+
+def test_save_reports_write_failure(brain, airfield, tmp_path):
+    """A write error is reported through the bot's log() (with a traceback)."""
+    messages = []
+    # A directory where the file should be makes os.replace/write fail.
+    bad = tmp_path / "tracks.json"
+    bad.mkdir()
+    service = MapService(airfield, brain, FakeState([]),
+                         tracks_file=bad, log=messages.append)
+    service.tracks.update("Colt 1", 42.18, 42.50, 2.0, 100.0)
+    service.save_tracks()
+    assert any("debrief" in m for m in messages)
+
+
+def test_start_autosave_writes_on_a_timer(brain, airfield, tmp_path):
+    """The periodic timer saves the trail even with no record()/snapshot()."""
+    tracks_file = tmp_path / "tracks.json"
+    service = MapService(airfield, brain, FakeState([]),
+                         tracks_file=tracks_file)
+    service.tracks.update("Colt 1", 42.18, 42.50, 2.0, 100.0)
+    service.start_autosave(interval=0.05)
+    deadline = time.time() + 2.0
+    while time.time() < deadline and not tracks_file.exists():
+        time.sleep(0.02)
+    assert tracks_file.exists()
+    assert "Colt 1" in json.loads(tracks_file.read_text())["tracks"]
+
+
+def test_start_autosave_noop_for_replay(brain, airfield, tmp_path):
+    """A replay (or no tracks_file) must not start a writing timer."""
+    tracks_file = tmp_path / "tracks.json"
+    tracks_file.write_text(json.dumps(
+        {"tracks": {"Colt 1": [[42.18, 42.50, 100.0]]}, "comms": {}}))
+    service = MapService(airfield, brain, None, tracks_file=tracks_file)
+    assert service.replay is True
+    service.start_autosave(interval=0.05)  # must be a no-op
+    before = tracks_file.read_text()
+    time.sleep(0.2)
+    assert tracks_file.read_text() == before  # untouched

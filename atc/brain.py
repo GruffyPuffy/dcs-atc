@@ -376,7 +376,6 @@ class AtcBrain:
         return self.airfield.nearest_holding_point(track.lat, track.lon) or ""
 
     # ---------- readback training ----------
-    #
     # A trainer that never blocks: a readback is checked against the clearance
     # actually issued. A complete readback is confirmed; an incomplete one gets
     # one targeted "say again your X" (teaching) and the phase still advances, so
@@ -407,12 +406,21 @@ class AtcBrain:
 
         Only the clearance's numbers (runway/QNH/altitude/heading) and gate names
         are required — the filler wording is ignored, so a normal abbreviated
-        readback passes.
+        readback passes. Callsigns are stripped from both sides first: the
+        clearance text contains the callsign ("Pontiac 1, Ground, ..."), and its
+        flight number must not be compared as a clearance value (a readback
+        ending "Pontiac 11" would otherwise look like a missing "1").
         """
-        clearance = clearance or ""
+        clearance = self.callsigns.strip(clearance or "")
+        low = self.callsigns.strip(low or "")
         spoken = self._numbers(low)
         missing_num = [n for n in self._numbers(clearance) if n not in spoken]
-        gates = [g for g in self.gates if g.lower() in clearance.lower()]
+        # Only a gate named as "Exit X" / "Entry X" counts. A bare gate word
+        # collides with parking-area names ("Ramp South" contains "South"), so
+        # matching the word alone would demand a gate the clearance never gave.
+        gates = [g for g in self.gates
+                 if re.search(rf"\b(?:exit|entry)\s+{re.escape(g)}\b",
+                              clearance, re.IGNORECASE)]
         missing_gate = [g for g in gates if g.lower() not in low]
         if not missing_num and not missing_gate:
             return None
@@ -746,14 +754,22 @@ class AtcBrain:
                 lat = track.lat if track is not None else None
                 lon = track.lon if track is not None else None
                 route = self.airfield.parking_route(lat, lon)
-            return self._say("taxi_parking", callsign,
-                             parking=parking or "the ramp",
-                             taxi_route=route or "Whiskey")
+            reply = self._say("taxi_parking", callsign,
+                              parking=parking or "the ramp",
+                              taxi_route=route or "Whiskey")
+            # Remember this clearance so the pilot's readback is checked against
+            # it — not the previous (departure) taxi clearance, which named a
+            # runway and would make a correct parking readback look incomplete.
+            pilot.last_clearance = reply
+            return reply
         # Readback of the taxi clearance ("cleared taxi Sierra Echo and hold
         # short runway 25") -> "readback correct". Must come before the taxi
-        # request and the hold-short report (which also say "hold short").
-        if pilot.phase == Phase.TAXI and re.search(
-                r"\b(clear|cleared|copy|roger|via|taxi)\b", low) \
+        # request and the hold-short report (which also say "hold short"). A
+        # parking readback may name only the ramp ("Ramp North, Alpha November")
+        # with no keyword, so a named parking area also counts.
+        if pilot.phase == Phase.TAXI and (
+                re.search(r"\b(clear|cleared|copy|roger|via|taxi)\b", low)
+                or self._spoken_parking(low)) \
                 and not re.search(r"\bholding\b", low):
             return self._check_readback(callsign, pilot, low,
                                         pilot.last_clearance or pilot.last_reply,
@@ -780,11 +796,11 @@ class AtcBrain:
                     and not self.airfield.is_holding_short(track.lat, track.lon):
                 return self._challenge(callsign, self.ground_short, track)
             pilot.phase = Phase.HOLDING
-            # Name the holding position the pilot is actually at (P1..P4).
-            holding = self._holding_point(track)
-            if holding:
-                return self._say("contact_tower_holding", callsign,
-                                 holding=holding)
+            # Match the Master Arms kneeboard: just hand the pilot to Tower
+            # ("contact Tower on channel 7"). The holding position is still
+            # cross-checked above (a pilot not actually at a holding point is
+            # challenged), but it is not named in the reply — the kneeboard
+            # dialog does not name it.
             return self._say("contact_tower", callsign)
         # Initial check-in: "Ground, Adder11" -> "Adder11, Ground". If the pilot
         # gives a position/formation ("two-ship Hornets on Ramp South") without

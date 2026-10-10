@@ -16,7 +16,7 @@ REQUIRED_TEMPLATES = {
     "ground_ack", "ground_info", "ground_info_readback", "readback_correct",
     "inbound_outside", "inbound_inside", "inbound_via_gate",
     "report_runway_in_sight", "cleared_land", "cleared_overhead", "break_ack",
-    "departure_exit", "contact_tower", "contact_tower_holding", "contact_control", "control_join",
+    "departure_exit", "contact_tower", "contact_control", "control_join",
     "control_join_nohdg", "control_join_requested",
     "control_join_requested_nohdg",
     "contact_ground", "taxi_parking", "control_contact",

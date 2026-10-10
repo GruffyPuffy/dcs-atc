@@ -176,6 +176,17 @@ class CallsignRegistry:
                 out.append(cs)
         return out
 
+    def strip(self, text: str) -> str:
+        """Remove every callsign from `text` (replaced with a space).
+
+        Used before comparing a readback against a clearance: the clearance
+        text contains the callsign ("Pontiac 1, Ground, ..."), and its flight
+        number must not be mistaken for a clearance value (runway/altitude/QNH).
+        """
+        if self._regex is None:
+            return text
+        return self._regex.sub(" ", text)
+
     def _canonical_match(self, match: "re.Match") -> str:
         name = match.group("name").strip().title()
         # canonicalise the name to the mission spelling if we can

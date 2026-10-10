@@ -288,6 +288,25 @@ def test_readback_numbers_accept_spoken_digits():
     assert "070" in AtcBrain._numbers("heading zero seven zero")
 
 
+def test_readback_ignores_the_callsign_number(brain):
+    # The clearance text contains the callsign ("Colt 1, Ground, ..."); its
+    # flight number must not be compared as a clearance value. A readback that
+    # ends "Colt 11" (STT doubling the element) must still pass.
+    brain.handle("Ground, Colt 1, ready to copy clearance",
+                 controller=Controller.GROUND)
+    reply = brain.handle(
+        "After departure, turn right, exit west, 1500 feet or below, Colt 11",
+        controller=Controller.GROUND)
+    assert "readback correct" in reply.lower()
+
+
+def test_taxi_readback_ignores_the_callsign_number(brain):
+    brain.handle("Ground, Colt 1, requesting taxi", controller=Controller.GROUND)
+    reply = brain.handle("Cleared taxi whiskey, hold short runway 25, Colt 11",
+                         controller=Controller.GROUND)
+    assert "readback correct" in reply.lower()
+
+
 def test_takeoff_readback_after_clearance_gets_roger(brain):
     # Once cleared for takeoff, reading the clearance back must NOT "say again".
     brain.handle("Ground, Colt 1, requesting taxi", controller=Controller.GROUND)
@@ -887,14 +906,16 @@ def test_holding_short_accepted_when_at_runway(brain, airfield):
     assert brain.pilots["Colt 1"].phase == Phase.HOLDING
 
 
-def test_holding_short_names_the_holding_position(brain, airfield):
+def test_holding_short_hands_to_tower(brain, airfield):
+    # The Master Arms kneeboard hands the pilot to Tower without naming the
+    # holding position ("contact Tower on channel 7").
     brain.handle("Ground, Colt 1, requesting taxi", controller=Controller.GROUND)
     # sit at Holding C (P1) and report holding short
     p1 = airfield.holding_points["Holding C"]
     at_p1 = _track(airfield, p1[0], p1[1])
     reply = brain.handle("Colt 1, holding short runway 25",
                          track=at_p1, controller=Controller.GROUND)
-    assert "Holding C" in reply
+    assert "contact Tower" in reply
     assert brain.pilots["Colt 1"].phase == Phase.HOLDING
 
 

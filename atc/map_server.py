@@ -21,6 +21,7 @@ import json
 import os
 import threading
 import time
+import traceback
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -30,6 +31,14 @@ from urllib.parse import urlsplit
 from airspace import Airfield
 from brain import AtcBrain
 from state_client import StateClient
+
+# Debrief saving is best-effort, but a *silent* failure is what let a whole
+# sortie go missing. `MapService` takes the bot's own `log()` callable and
+# dumps every save problem (with a traceback) through it, so the next
+# occurrence shows up in the bot log instead of vanishing.
+def _noop_log(_line: str) -> None:
+    pass
+
 
 WEB = Path(__file__).with_name("web")
 OVERLAYS = WEB / "overlays"
@@ -158,11 +167,14 @@ class TrackHistory:
     def __init__(self, radius_nm: float = TRACK_RADIUS_NM,
                  max_points: int = TRACK_MAX_POINTS,
                  min_move_nm: float = TRACK_MIN_MOVE_NM,
-                 comm_max: int = COMM_MAX):
+                 comm_max: int = COMM_MAX,
+                 log: Callable[[str], None] | None = None):
         self.radius_nm = radius_nm
         self.max_points = max_points
         self.min_move_nm = min_move_nm
         self.comm_max = comm_max
+        # Where to report save failures (the bot's log()); no-op by default.
+        self.log = log or _noop_log
         self._tracks: dict[str, deque[tuple[float, float, float]]] = {}
         self._comms: dict[str, deque[dict]] = {}
         self._active: set[str] = set()
@@ -267,13 +279,30 @@ class TrackHistory:
         self.save_json(self.to_json(), path)
 
     def save_json(self, data: dict, path: Path) -> None:
-        """Write a debrief payload (tracks + optional chatter) atomically."""
+        """Write a debrief payload (tracks + optional chatter) atomically.
+
+        Best-effort: a debrief file must never take the map/bot down. But a
+        failure is *logged* (with a traceback) rather than swallowed, so a
+        missing sortie is diagnosable. The payload is sanitised first, so a
+        stray non-serialisable value (e.g. an enum that leaked into a field)
+        degrades to a string instead of aborting the whole save.
+        """
+        try:
+            text = json.dumps(_json_safe(data))
+        except (TypeError, ValueError) as error:
+            self.log(f"[!] debrief serialise failed for {path}: {error}\n"
+                     f"{traceback.format_exc()}")
+            return
         try:
             tmp = path.with_name(path.name + ".tmp")
-            tmp.write_text(json.dumps(data))
+            tmp.write_text(text)
             os.replace(tmp, path)
-        except OSError:
-            pass  # a debrief file is best-effort; never take the map down
+        except OSError as error:
+            self.log(f"[!] debrief write failed for {path}: {error}\n"
+                     f"{traceback.format_exc()}")
+        except Exception as error:  # noqa: BLE001 - never lose the trail silently
+            self.log(f"[!] debrief save failed for {path}: {error}\n"
+                     f"{traceback.format_exc()}")
 
     def load(self, path: Path) -> None:
         """Restore tracks from `path`, if it exists and parses."""
@@ -302,6 +331,26 @@ def _nm_between(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     dl = math.radians(lon2 - lon1)
     a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
     return 2 * r * math.asin(math.sqrt(a)) / 1852.0
+
+
+def _json_safe(value):
+    """Coerce a value into something `json.dumps` can always serialise.
+
+    The debrief payload is built from live data (positions, brain state, STT
+    text). A single stray non-serialisable value (an enum, a set, a custom
+    object) would otherwise abort the *entire* save. This walks the structure
+    and replaces anything unknown with its `str()`, so the trail is still
+    written. `json.dumps` already escapes control characters and non-ASCII
+    (including lone surrogates from odd STT bytes), so text needs no special
+    handling here.
+    """
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set, frozenset, deque)):
+        return [_json_safe(v) for v in value]
+    return str(value)
 
 
 def _overlay_payload(airfield: Airfield) -> dict | None:
@@ -411,7 +460,8 @@ class MapService:
                  basemap: str | None = None,
                  tracks_file: Path | str | None = None,
                  replay: bool = False,
-                 control: "ControlPlane | None" = None):
+                 control: "ControlPlane | None" = None,
+                 log: Callable[[str], None] | None = None):
         self.airfield = airfield
         self.brain = brain
         self.state = state
@@ -419,11 +469,15 @@ class MapService:
         self.basemap = basemap  # base-map layer name override (else config)
         # Web-driven restart/airfield selection (None when running standalone).
         self.control = control
+        # The bot's own log() callable, used to report save failures (with a
+        # traceback) instead of swallowing them. Defaults to a no-op so the
+        # standalone map server / tests need no logger.
+        self.log = log or _noop_log
         # Chatter log: recent radio traffic (rx + tx) for the map's log drawer.
         self._chatter: deque[dict] = deque(maxlen=CHATTER_LIMIT)
         self._chatter_lock = threading.Lock()
         # Flight-path trails (per callsign), for the map's path overlay.
-        self.tracks = TrackHistory()
+        self.tracks = TrackHistory(log=self.log)
         # Optional debrief file: restore saved trails on startup and autosave
         # them periodically, so a sortie survives a bot/map restart. When set
         # and the file already exists it is a *replay*: we restore it and, by
@@ -470,6 +524,30 @@ class MapService:
             return
         self._last_saved = now
         self.save_tracks()
+
+    def start_autosave(self, interval: float = TRACKS_SAVE_INTERVAL) -> None:
+        """Save the trails on a wall-clock timer, independent of any caller.
+
+        `record()`/`snapshot()` already autosave, but only while they are being
+        called (a live monitor tick or an open map page). This timer guarantees
+        the debrief file is refreshed on a fixed cadence regardless, so a
+        missed/blocked caller — or a crash — still leaves a recent file on disk.
+        No-op for a replay or when no `tracks_file` is configured.
+        """
+        if self.tracks_file is None or self.replay:
+            return
+
+        def _loop() -> None:
+            while True:
+                time.sleep(interval)
+                try:
+                    self.save_tracks()
+                except Exception as error:  # noqa: BLE001 - keep the timer alive
+                    self.log(f"[!] periodic debrief save failed: {error}\n"
+                             f"{traceback.format_exc()}")
+
+        threading.Thread(target=_loop, daemon=True,
+                         name="atc-debrief-autosave").start()
 
     def record(self, players) -> None:
         """Record positions + phase events for the live players (no map needed).
@@ -587,7 +665,7 @@ class MapService:
         path = (DEBRIEF_DIR / base).resolve()
         if path.parent != DEBRIEF_DIR.resolve() or not path.is_file():
             return {"ok": False, "error": "not found"}
-        loaded = TrackHistory()
+        loaded = TrackHistory(log=self.log)
         loaded.load(path)
         if loaded.is_empty():
             return {"ok": False, "error": "empty debrief — no trail was recorded"}
@@ -607,7 +685,7 @@ class MapService:
     def unload_debrief(self) -> dict:
         """Leave replay and resume live recording (clears the loaded trail)."""
         with self.lock:
-            self.tracks = TrackHistory()
+            self.tracks = TrackHistory(log=self.log)
             self._last_phase = {}
             with self._chatter_lock:
                 self._chatter.clear()
@@ -860,14 +938,19 @@ def start_map_server(airfield: Airfield, brain: AtcBrain,
     bot restart for after-action review.
     """
     service = MapService(airfield, brain, state, lock, basemap=basemap,
-                         tracks_file=tracks_file, replay=replay, control=control)
+                         tracks_file=tracks_file, replay=replay, control=control,
+                         log=log)
     if tracks_file is not None:
         if service.replay:
             log(f"[*] Debrief replay (read-only): {Path(tracks_file)}")
         else:
             import atexit
             atexit.register(service.save_tracks)
-            log(f"[*] Flight-track debrief file: {Path(tracks_file)}")
+            # A wall-clock timer, so the debrief is refreshed even if the
+            # monitor tick or the map page never calls record()/snapshot().
+            service.start_autosave()
+            log(f"[*] Flight-track debrief file: {Path(tracks_file)} "
+                f"(autosave every {TRACKS_SAVE_INTERVAL:.0f}s)")
     try:
         server = ThreadingHTTPServer((host, port), make_handler(service))
     except OSError as error:

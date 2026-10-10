@@ -161,6 +161,24 @@ def test_full_arrival_two_ship(airfield, brain):
     assert "cleared taxi" in r.lower()
 
 
+def test_parking_readback_is_checked_against_the_parking_clearance(airfield, brain):
+    # A parking readback that names only the ramp ("Ramp North, Alpha November")
+    # must be confirmed — not checked against the earlier departure taxi
+    # clearance (which named a runway and made it look incomplete).
+    sc = _scenario(airfield, brain).park("Ramp South")
+    sc.say("Ground, Colt 1, requesting taxi", Controller.GROUND)
+    sc.say("Cleared taxi Sierra Echo and hold short runway 25, Colt 1",
+           Controller.GROUND)
+    sc.say("Tower, Colt 1, ready for departure", Controller.TOWER)
+    sc.say("Line up and wait 25, Colt 1", Controller.TOWER)
+    sc.say("Tower, Colt 1, airborne", Controller.TOWER)
+    sc.say("Tower, Colt 1, runway vacated", Controller.TOWER)
+    r = sc.say("Ground, Colt 1, requesting taxi to parking", Controller.GROUND)
+    assert "cleared taxi" in r.lower()
+    r = sc.say("Ramp North, Alpha November, Colt 1", Controller.GROUND)
+    assert "readback correct" in r.lower()
+
+
 # ---------- Sequencing: runway occupied ----------
 
 def test_departure_held_when_runway_occupied(airfield, brain):
@@ -237,10 +255,12 @@ def test_holding_short_challenged_on_ramp(airfield, brain):
 
 
 def test_holding_short_accepted_at_named_point(airfield, brain):
+    # Holding at a named point (B) is accepted (not challenged) and hands the
+    # pilot to Tower, matching the Master Arms kneeboard wording.
     sc = _scenario(airfield, brain).holding("Holding B")
     sc.say("Ground, Colt 1, requesting taxi", Controller.GROUND)
     r = sc.say("Colt 1, holding short runway 25", Controller.GROUND)
-    assert "Holding B" in r
+    assert "contact Tower" in r
     assert sc.phase() == Phase.HOLDING
 
 
