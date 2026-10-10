@@ -106,6 +106,10 @@ def test_full_arrival_two_ship(airfield, brain):
     assert "join via Entry East" in r
     r = sc.say("150 to join via Entry East, Colt 1", Controller.CONTROL)
     assert "descend to 1500 feet" in r.lower()
+    # Readback of the descent -> Control hands off to Tower (MA flow, kn. page 2)
+    r = sc.say("Descend to 1500 feet, Colt 1", Controller.CONTROL)
+    assert "contact Tower" in r
+    assert sc.phase() == Phase.LANDING
 
     # Tower: entry, runway in sight (break), on final (land).
     r = sc.say("Tower, Colt 1, Entry East", Controller.TOWER)
@@ -151,6 +155,35 @@ def test_landing_sequenced_when_runway_occupied(airfield, brain):
     r = sc.say("Tower, Colt 1, on final", Controller.TOWER)
     assert "cleared to land" in r.lower()
     assert sc.phase() == Phase.LANDING
+
+
+def test_held_departure_is_called_back_when_runway_clears(airfield, brain):
+    # Real ATC calls a held pilot back — the pilot shouldn't have to re-ask.
+    sc = _scenario(airfield, brain).at_threshold("25").traffic_on_runway("25")
+    r = sc.say("Tower, Colt 1, ready for departure", Controller.TOWER)
+    assert "hold short" in r.lower()
+    assert sc.phase() == Phase.HOLDING
+
+    # Runway still occupied: no unprompted call.
+    assert brain.check_runway_clear("Colt 1", runway_occupied=True) is None
+    # Cleared: the *real* clearance is issued (line up and wait), unprompted.
+    call = brain.check_runway_clear("Colt 1", runway_occupied=False)
+    assert call and "line up and wait" in call.lower()
+    assert sc.phase() == Phase.LINEUP
+    # Fires once — an idle pilot is not spammed.
+    assert brain.check_runway_clear("Colt 1", runway_occupied=False) is None
+
+
+def test_held_landing_is_recleared_when_runway_clears(airfield, brain):
+    sc = _scenario(airfield, brain).on_final("25").traffic_on_runway("25")
+    r = sc.say("Tower, Colt 1, on final", Controller.TOWER)
+    assert "continue approach" in r.lower()
+
+    assert brain.check_runway_clear("Colt 1", runway_occupied=True) is None
+    call = brain.check_runway_clear("Colt 1", runway_occupied=False)
+    assert call and "cleared to land" in call.lower()
+    assert sc.phase() == Phase.LANDING
+    assert brain.check_runway_clear("Colt 1", runway_occupied=False) is None
 
 
 # ---------- Position cross-checks (faked radar) ----------
@@ -561,6 +594,16 @@ def test_full_lifecycle_all_pages(airfield, brain):
 
 
 # ---------- Go-around (runway occupied on final) ----------
+
+def test_landing_clearance_readback_gets_roger_not_say_again(airfield, brain):
+    # A pilot reading back "cleared to land" is busy landing — acknowledge it,
+    # don't nag with "say again" (a real frustration in live testing).
+    sc = _scenario(airfield, brain).on_final("25")
+    sc.say("Tower, Colt 1, on final", Controller.TOWER)
+    assert sc.phase() == Phase.LANDING
+    r = sc.say("Runway 25, cleared to land, Colt 1", Controller.TOWER)
+    assert "say again" not in r.lower()
+
 
 def test_go_around_fires_once(airfield, brain):
     # the background monitor calls check_final; it must fire once per approach

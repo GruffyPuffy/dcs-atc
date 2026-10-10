@@ -71,6 +71,12 @@ class PilotState:
     incursion_warned: bool = False  # warned about being on the runway uncleared
     exit_gate: str = ""  # assigned departure exit point
     entry_gate: str = ""  # assigned arrival entry point
+    # Held because the runway was occupied; the bot calls the pilot back when it
+    # clears. `*_ready_announced` fires the unprompted "runway is clear" once.
+    awaiting_takeoff: bool = False
+    awaiting_landing: bool = False
+    takeoff_ready_announced: bool = False
+    landing_ready_announced: bool = False
     formation: int = 0  # flight size (2+ = multi-ship), learned from calls
     last_reply: str = ""  # last clearance, replayed on "say again"
     last_clearance: str = ""  # last clearance issued, for readback verification
@@ -625,6 +631,10 @@ class AtcBrain:
         pilot.exit_gate = ""
         pilot.entry_gate = ""
         pilot.readback_fails = 0
+        pilot.awaiting_takeoff = False
+        pilot.awaiting_landing = False
+        pilot.takeoff_ready_announced = False
+        pilot.landing_ready_announced = False
         return self._say("state_reset", callsign,
                          agency=self._agency(controller))
 
@@ -650,6 +660,8 @@ class AtcBrain:
         pilot.phase = back
         pilot.cleared_landing = False
         pilot.descend_issued = False
+        pilot.awaiting_takeoff = False
+        pilot.awaiting_landing = False
         return self._say("cancel_ack", callsign,
                          agency=self._agency(controller))
 
@@ -768,6 +780,7 @@ class AtcBrain:
             # Already cleared for takeoff: re-issue the clearance (idempotent)
             # rather than dropping the pilot back to Lineup.
             if pilot.phase == Phase.DEPARTURE:
+                pilot.awaiting_takeoff = False
                 return self._say("lineup_readback", callsign, turnout="right")
             # Already lined up and waiting: this "ready" call is the natural
             # trigger for the takeoff clearance (the pilot has done the line-up
@@ -778,8 +791,11 @@ class AtcBrain:
                 # Already lined up: this "ready" call is the natural trigger for
                 # the takeoff clearance. Still sequence against traffic.
                 if self._runway_busy(traffic, exclude=speaker):
+                    pilot.awaiting_takeoff = True
+                    pilot.takeoff_ready_announced = False
                     return self._say("hold_short_traffic", callsign)
                 pilot.phase = Phase.DEPARTURE
+                pilot.awaiting_takeoff = False
                 return self._say("lineup_readback", callsign, turnout="right")
             # Cross-check: a pilot who says "ready for departure" but is not at
             # the runway gets challenged, and is NOT cleared to line up.
@@ -789,6 +805,10 @@ class AtcBrain:
             # Traffic: do not let them line up if the runway is occupied.
             if self._runway_busy(traffic, exclude=speaker):
                 pilot.phase = Phase.HOLDING
+                # Held: remember it so the bot calls them back, unprompted, when
+                # the runway clears (see check_runway_clear).
+                pilot.awaiting_takeoff = True
+                pilot.takeoff_ready_announced = False
                 return self._say("hold_short_traffic", callsign)
             pilot.phase = Phase.LINEUP
             return self._say("line_up", callsign)
@@ -797,8 +817,11 @@ class AtcBrain:
             if pilot.phase == Phase.LINEUP:
                 # already lined up: a bare "ready" also clears takeoff
                 if self._runway_busy(traffic, exclude=speaker):
+                    pilot.awaiting_takeoff = True
+                    pilot.takeoff_ready_announced = False
                     return self._say("hold_short_traffic", callsign)
                 pilot.phase = Phase.DEPARTURE
+                pilot.awaiting_takeoff = False
                 return self._say("lineup_readback", callsign, turnout="right")
             pilot.phase = Phase.LINEUP
             return self._say("line_up", callsign)
@@ -837,6 +860,12 @@ class AtcBrain:
                      r"runway vacated|clear of runway)\b", low):
             pilot.phase = Phase.TAXI
             return self._say("contact_ground", callsign)
+        # Readback of the landing clearance ("runway 33, cleared to land") once
+        # already cleared — acknowledge, don't "say again" (the pilot is busy
+        # landing). Must come before the "on final" branch below.
+        if pilot.phase == Phase.LANDING and re.search(
+                r"\b(cleared|clear to land|copy|roger|wilco|readback)\b", low):
+            return self._say("roger", callsign, agency=self.tower_short)
         # "on final" is a landing clearance (distinct from a general inbound call).
         if re.search(r"\b(on final|short final|final)\b", low):
             # Cross-check: only clear to land if actually on final.
@@ -847,9 +876,15 @@ class AtcBrain:
             # Traffic: if the runway is occupied, sequence instead of clearing.
             if self._runway_busy(traffic, exclude=speaker):
                 pilot.phase = Phase.INBOUND
+                # Held on approach: the bot re-clears when the runway clears.
+                pilot.awaiting_landing = True
+                pilot.landing_ready_announced = False
                 return self._say("continue_approach", callsign)
             pilot.phase = Phase.LANDING
             pilot.cleared_landing = True
+            # Cleared: no longer waiting on the runway to clear.
+            pilot.awaiting_landing = False
+            pilot.landing_ready_announced = False
             return self._say("cleared_land", callsign,
                              flight=self._formation_prefix(pilot))
         if re.search(r"\binbound\b|\bon approach\b|\blanding\b|\bentry\b", low):
@@ -884,15 +919,18 @@ class AtcBrain:
             return self._say("control_join_requested", callsign, gate=requested,
                              heading=f"{heading:03.0f}", turn="right")
         # Readback of the join clearance ("150 to join via Entry East") ->
-        # Control issues the descent to 1500 ft (once). Must come before the
-        # inbound regex, which also matches "entry".
+        # Control issues the descent to 1500 ft (once). The pilot's readback of
+        # *that* descent then hands the flight to Tower — matching the Master
+        # Arms arrival flow, where Control hands off right after the descend
+        # readback (there is no separate "passing the entry point" call). An
+        # explicit entry report is handled by the branch below.
         if pilot.phase == Phase.INBOUND and re.search(
-                r"\b(join|via|heading|turn|descend)\b", low):
+                r"\b(join|via|heading|turn|descend|1500?)\b", low):
             if not pilot.descend_issued:
                 pilot.descend_issued = True
                 return self._say("control_descend", callsign)
-            return self._say("readback_correct", callsign,
-                             agency=self.control_short)
+            pilot.phase = Phase.LANDING
+            return self._say("contact_tower_from_control", callsign)
         # Already inbound and reporting they have reached the entry point ->
         # hand to Tower (must come before the generic inbound regex, which also
         # matches "entry"/"inbound").
@@ -1164,3 +1202,33 @@ class AtcBrain:
             return None
         pilot.incursion_warned = True
         return self._say("runway_incursion", callsign)
+
+    def check_runway_clear(self, callsign: str,
+                           runway_occupied: bool) -> str | None:
+        """Call a held pilot back, unprompted, once the runway clears.
+
+        Real ATC does not leave a pilot hanging after "hold short, runway
+        occupied" — it calls them back when able. This issues the *real* next
+        clearance: "line up and wait runway X" for a departure, or "cleared to
+        land" for an arrival. (Controllers deliver the clearance itself; there
+        is no standard "the runway is now clear" phrase.) Fires once, so an idle
+        pilot is not spammed, and re-arms when they are held again.
+        """
+        pilot = self._pilot(callsign)
+        if runway_occupied:
+            return None
+        if (pilot.awaiting_takeoff and not pilot.takeoff_ready_announced
+                and pilot.phase in (Phase.HOLDING, Phase.LINEUP)):
+            pilot.takeoff_ready_announced = True
+            pilot.awaiting_takeoff = False
+            pilot.phase = Phase.LINEUP
+            return self._say("line_up", callsign)
+        if (pilot.awaiting_landing and not pilot.landing_ready_announced
+                and pilot.phase == Phase.INBOUND):
+            pilot.landing_ready_announced = True
+            pilot.awaiting_landing = False
+            pilot.phase = Phase.LANDING
+            pilot.cleared_landing = True
+            return self._say("cleared_land", callsign,
+                             flight=self._formation_prefix(pilot))
+        return None

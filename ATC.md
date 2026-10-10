@@ -140,6 +140,7 @@ step on the next controller's first call.
 | "Control, Colt 1, at 1500 ft" | **departure check-in** | "Colt 1, Control, radar contact, climb to Angels 15." |
 | "Kutaisi Control, Colt 1, inbound 35 miles north at Angels 12" | **inbound** | "Colt 1, Control, radar contact, turn right heading 150 to join via Entry East." (heading **computed** from the live position; entry is the best/straight-in gate for runway 25) |
 | "150 to join via Entry East, Colt 1" | **readback** | "Colt 1, Control, descend to 1500 feet." |
+| "Descend to 1500 feet, Colt 1" | **readback** | "Colt 1, Control, contact Tower on channel 7." (Control hands off right after the descend readback) |
 | "Tower, Colt 1, Entry East" | **entry** | "Colt 1, Tower, report runway in sight." |
 | "Tower, Colt 1, runway in sight" | **runway in sight** | "2-ship Colt 1, Tower, wind calm, cleared for left overhead break runway 25." (the "2-ship" prefix appears once a formation size has been heard) | |
 | "Tower, Colt 1, on final" | **final** | "Colt 1, Tower, runway 25, wind calm, cleared to land." |
@@ -503,6 +504,20 @@ So an AI aircraft on the runway blocks a line-up, and one on final ahead of you
 is sequenced. The aircraft being cleared is excluded so it never blocks itself.
 Without live traffic the bot trusts the pilot (offline behaviour unchanged).
 
+**Callback when the runway clears.** A held pilot is not left hanging: once the
+runway clears, the bot calls them back **unprompted** and issues the real next
+clearance — no need to re-ask. It fires once (an idle pilot is not spammed) and
+re-arms if they are held again:
+
+| Held as | Clears to |
+| --- | --- |
+| "hold short, runway occupied" | "line up and wait runway 25" |
+| "continue approach, traffic on the runway" | "cleared to land" |
+
+This is standard real-world practice: the controller delivers the clearance
+itself — there is no separate "the runway is now clear" phrase (`brain.
+check_runway_clear`).
+
 ---
 
 ## 8. What the bot does NOT do (yet)
@@ -727,8 +742,10 @@ never broadcast their arrival; pilots call them). Disable it with
   An **inbound** call wins over the departure keywords, so *"inbound 35 miles
   north at Angels 12"* is routed as an arrival (not answered with "climb to
   Angels 15").
-- "passing the entry point" (already inbound) → handoff to Tower:
-  *"contact Tower on channel 7"*.
+- readback of the descent (or an entry report) → handoff to Tower:
+  *"contact Tower on channel 7"*. This matches the Master Arms flow (kneeboard
+  page 2): Control hands off right after the descend readback — there is no
+  separate "passing the entry point" call, and Control never re-issues the join.
 - "airborne" / "climbing" / "at 1500 ft" / "checking in" (departure check-in) →
   *"radar contact, climb to Angels 15"*.
 - "on final" / "runway in sight" / "overhead" → handoff to Tower:
@@ -810,14 +827,15 @@ Ground phase; 8–10 Tower; 11 Control.)
 |---|------|-----------|-------------|
 | 1 | Control | "Kutaisi Control, Colt 1, inbound 35 miles north at Angels 12." | "Colt 1, Control, radar contact, turn right heading 150 to join via Entry East." (heading computed; entry = best/straight-in gate for the runway) |
 | 2 | Control | "150 to join via Entry East, Colt 1." | "Colt 1, Control, descend to 1500 feet." |
-| 3 | Tower | "Tower, Colt 1, Entry North." | "Colt 1, Tower, report runway in sight." |
-| 4 | Tower | "Tower, Colt 1, runway in sight." | "2-ship Colt 1, Tower, wind calm, cleared for left overhead break runway 25." |
-| 5 | Tower | "Tower, Colt 1, on final." | "Colt 1, Tower, runway 25, wind calm, cleared to land." |
-| 6 | Tower | "Tower, Colt 1, runway vacated." | "Colt 1, Tower, contact Ground on channel 6." |
-| 7 | Ground | "Ground, Colt 1, rolling off runway 25, requesting taxi to parking." | "Colt 1, Ground, cleared taxi to Ramp North via Alpha November." |
+| 3 | Control | "Descend to 1500 feet, Colt 1." | "Colt 1, Control, contact Tower on channel 7." |
+| 4 | Tower | "Tower, Colt 1, Entry North." | "Colt 1, Tower, report runway in sight." |
+| 5 | Tower | "Tower, Colt 1, runway in sight." | "2-ship Colt 1, Tower, wind calm, cleared for left overhead break runway 25." |
+| 6 | Tower | "Tower, Colt 1, on final." | "Colt 1, Tower, runway 25, wind calm, cleared to land." |
+| 7 | Tower | "Tower, Colt 1, runway vacated." | "Colt 1, Tower, contact Ground on channel 6." |
+| 8 | Ground | "Ground, Colt 1, rolling off runway 25, requesting taxi to parking." | "Colt 1, Ground, cleared taxi to Ramp North via Alpha November." |
 
-You are now cleared to park — the flight is complete. (Steps 1–2 Control; 3–6
-Tower; 7 Ground.)
+You are now cleared to park — the flight is complete. (Steps 1–3 Control; 4–7
+Tower; 8 Ground.)
 
 ### Trainer aids (any frequency)
 
@@ -878,10 +896,11 @@ Every reply here is the bot's actual output. Kneeboard card:
 |---|------|-----------|-------------|
 | 5 | Control | "Kutaisi Control, Colt 1, inbound 35 miles north at Angels 12." | "Colt 1, Control, radar contact, turn right heading 150 to join via Entry East." *(heading computed)* |
 | 6 | Control | "150 to join via Entry East, Colt 1." | "Colt 1, Control, descend to 1500 feet." |
-| 7 | Tower | "Tower, Colt 1, Entry East." | "Colt 1, Tower, report runway in sight." |
-| 8 | Tower | "Colt 1, runway in sight." | "Colt 1, Tower, wind calm, cleared for left overhead break runway 25." |
-| 9 | Tower | "Colt 1, on final." | "Colt 1, Tower, runway 25, wind calm, cleared to land." |
-| 10 | Tower | "Colt 1, runway vacated." | "Colt 1, Tower, contact Ground on channel 6." |
+| 7 | Control | "Descend to 1500 feet, Colt 1." | "Colt 1, Control, contact Tower on channel 7." |
+| 8 | Tower | "Tower, Colt 1, Entry East." | "Colt 1, Tower, report runway in sight." |
+| 9 | Tower | "Colt 1, runway in sight." | "Colt 1, Tower, wind calm, cleared for left overhead break runway 25." |
+| 10 | Tower | "Colt 1, on final." | "Colt 1, Tower, runway 25, wind calm, cleared to land." |
+| 11 | Tower | "Colt 1, runway vacated." | "Colt 1, Tower, contact Ground on channel 6." |
 
 That is ~10 calls for a full circuit, versus ~21 in §12. The Control→Tower switch
 at step 7 is pilot-initiated (as in the full walkthrough; the bot does not require

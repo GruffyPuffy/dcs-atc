@@ -624,6 +624,14 @@ def main() -> None:
                     if inc_call:
                         log(f"RUNWAY INCURSION: {callsign} ({ac.player})")
                         speak(inc_call, controller=Controller.TOWER)
+                    # Call back a pilot held for an occupied runway, unprompted,
+                    # once it clears (takeoff line-up or landing clearance).
+                    busy = airfield.runway_occupied(all_units, exclude=ac.player)
+                    with lock:
+                        clear_call = brain.check_runway_clear(callsign, busy)
+                    if clear_call:
+                        log(f"RUNWAY CLEAR: {callsign} ({ac.player})")
+                        speak(clear_call, controller=Controller.TOWER)
             except (OSError, RuntimeError):
                 pass  # bridge down or mission not running; retry next tick
 

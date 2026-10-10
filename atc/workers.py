@@ -36,6 +36,8 @@ _STATE_FIELDS = {
     "go_around_issued": "goaround",
     "altitude_warned": "altwarn",
     "incursion_warned": "incursion",
+    "awaiting_takeoff": "awaitto",
+    "awaiting_landing": "awaitland",
 }
 
 
