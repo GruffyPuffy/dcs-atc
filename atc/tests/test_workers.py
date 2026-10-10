@@ -4,7 +4,7 @@ import threading
 import time
 
 from brain import Controller
-from workers import ControllerWorker, SharedState
+from workers import ControllerWorker, SharedState, _state_changes, _state_snapshot
 
 
 def _shared(brain, spoken, log):
@@ -48,6 +48,23 @@ def test_workers_share_pilot_state(brain):
     pilot = brain.pilots["Colt 1"]
     assert pilot.entry_gate  # set by Control
     assert len(spoken) == 2
+
+
+def test_state_changes_reports_phase_transition(brain):
+    """The debug trail names the pilot and the field that changed."""
+    before = _state_snapshot(brain)
+    brain.handle("Ground, Colt 1, requesting taxi",
+                 controller=Controller.GROUND, speaker="PilotA")
+    after = _state_snapshot(brain)
+    changes = _state_changes(before, after)
+    assert any("Colt 1" in line and "phase" in line for line in changes)
+
+
+def test_state_changes_empty_when_nothing_moves(brain):
+    brain.handle("Ground, Colt 1, requesting taxi",
+                 controller=Controller.GROUND, speaker="PilotA")
+    snap = _state_snapshot(brain)
+    assert _state_changes(snap, _state_snapshot(brain)) == []
 
 
 def test_worker_survives_bad_transcription(brain):

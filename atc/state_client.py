@@ -222,3 +222,12 @@ class StateClient:
         if not reply.get("ok"):
             return None
         return reply["result"]
+
+    def message(self, text: str, player: str = "",
+                duration: float = 8.0) -> bool:
+        """Post text to the in-game chat/message log. To `player` by name when
+        given (else the whole mission). Used by --debug to mirror the ATC radio
+        exchange back to the pilot. Returns True if the bridge accepted it."""
+        reply = self.exchange("message", text=text, player=player,
+                              duration=duration)
+        return bool(reply.get("ok"))

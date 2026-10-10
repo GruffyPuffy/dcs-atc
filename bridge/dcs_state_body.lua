@@ -219,6 +219,27 @@ elseif op == 'set_task' then
     if not g then return envelope(false, 'NO_GROUP') end
     g:getController():setTask(req.task_data)
     return envelope(true, { tasked = req.group_name })
+elseif op == 'message' then
+    -- Post text to a player's in-game chat/message log (no .miz edit). Used by
+    -- the bot's --debug "comms log": it echoes every radio exchange (the pilot's
+    -- STT transcript and the ATC reply) back to the asking player, so a trainer
+    -- can read what was heard and answered. Targets one player by name when known
+    -- (net.send_chat_to), else the whole mission (trigger.action.outText).
+    local text = tostring(req.text or '')
+    if req.player and req.player ~= '' and net.get_player_list then
+        for _, pid in ipairs(net.get_player_list()) do
+            local info = net.get_player_info and net.get_player_info(pid) or {}
+            if info and info.name == req.player then
+                net.send_chat_to(text, pid)
+                return envelope(true, { sent = 'player', to = req.player })
+            end
+        end
+    end
+    if trigger and trigger.action and trigger.action.outText then
+        trigger.action.outText(text, tonumber(req.duration) or 8)
+        return envelope(true, { sent = 'all' })
+    end
+    return envelope(false, 'NO_MESSAGE_API')
 else
     return envelope(false, 'UNKNOWN_OP')
 end

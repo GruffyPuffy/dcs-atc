@@ -22,6 +22,49 @@ from brain import AtcBrain, Controller
 from ctr import AircraftTrack
 
 
+# PilotState fields worth watching for a debug state-change trail, and a short
+# display label for each.
+_STATE_FIELDS = {
+    "phase": "phase",
+    "entry_gate": "entry",
+    "exit_gate": "exit",
+    "cleared_inbound": "inbound",
+    "cleared_landing": "landing",
+    "descend_issued": "descend",
+    "formation": "formation",
+    "go_around_issued": "goaround",
+    "altitude_warned": "altwarn",
+    "incursion_warned": "incursion",
+}
+
+
+def _state_snapshot(brain: AtcBrain) -> dict[str, dict[str, object]]:
+    """A comparable snapshot of every pilot's state fields."""
+    snap: dict[str, dict[str, object]] = {}
+    for callsign, pilot in brain.pilots.items():
+        snap[callsign] = {
+            field: (pilot.phase.value if field == "phase" else getattr(pilot, field))
+            for field in _STATE_FIELDS
+        }
+    return snap
+
+
+def _state_changes(before: dict[str, dict[str, object]],
+                   after: dict[str, dict[str, object]]) -> list[str]:
+    """Human-readable 'callsign: field old->new' lines for a debug trail."""
+    out: list[str] = []
+    for callsign, now in after.items():
+        was = before.get(callsign)
+        if was is None:
+            out.append(f"{callsign} [new] phase={now['phase']}")
+            continue
+        diffs = [f"{_STATE_FIELDS[f]} {was[f]}->{now[f]}"
+                 for f in now if was.get(f) != now[f]]
+        if diffs:
+            out.append(f"{callsign}: " + ", ".join(diffs))
+    return out
+
+
 @dataclass
 class SharedState:
     """State shared by every controller worker.
@@ -78,13 +121,18 @@ class ControllerWorker:
         track = self.shared.track_for(who)
         traffic = self.shared.traffic()
         with self.shared.lock:
+            before = _state_snapshot(self.shared.brain)
             reply = self.shared.brain.handle(
                 text, track, controller=self.controller, traffic=traffic,
                 speaker=who)
             callsign = self.shared.brain.callsigns.extract(text)
             if callsign:
                 self.shared.brain.remember_speaker(who, callsign)
-            state = self.shared.brain.pilots.get(callsign or "")
+            after = _state_snapshot(self.shared.brain)
+            changes = _state_changes(before, after)
+        if changes:
+            self.shared.debug(f"[{tag}] state: " + " | ".join(changes))
+        state = self.shared.brain.pilots.get(callsign or "")
         if reply:
             self.shared.debug(
                 f"[{tag}] {who} -> {reply!r}"

@@ -426,16 +426,33 @@ def main() -> None:
             airfield, brain, state, args.map_port,
             host=args.map_host, lock=lock, log=log, tracks_file=tracks_file)
 
+    # Last speaker to transmit, so a TX mirror can be addressed to them.
+    _debug_reply_to = [""]
+
     def chatter(kind: str, freq_hz: float, who: str, text: str,
                 controller: Controller | str | None = None) -> None:
         """Push one radio event to the map's chatter log (if the map is on)."""
-        if map_service is None:
-            return
-        if isinstance(controller, Controller):
-            agency = controller.value
-        else:
-            agency = controller or ""
-        map_service.log_chatter(kind, freq_hz / 1e6, who, text, agency)
+        if map_service is not None:
+            if isinstance(controller, Controller):
+                agency = controller.value
+            else:
+                agency = controller or ""
+            map_service.log_chatter(kind, freq_hz / 1e6, who, text, agency)
+        # --debug comms mirror: echo the exchange into the pilot's in-game chat,
+        # so a trainer can read what was heard (RX) and answered (TX) without
+        # the map. Read-only side channel: it never feeds the brain.
+        if args.debug and state is not None:
+            if kind == "rx":
+                _debug_reply_to[0] = who
+                _mirror(f"RX {who}: {text}", who)
+            else:
+                _mirror(f"TX {who}: {text}", _debug_reply_to[0])
+
+    def _mirror(line: str, player: str) -> None:
+        try:
+            state.message(line, player=player)
+        except (OSError, RuntimeError):
+            pass  # bridge down / no message API; the debug log is best-effort
 
     def on_end(freq: float, who: str, pcm: bytes, duration: float) -> None:
         """SRS rx callback: enqueue to the right controller worker (never blocks)."""
