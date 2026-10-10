@@ -31,7 +31,16 @@ def test_no_callsign_returns_none(callsigns):
 
 def test_recovers_multiword_fracture(callsigns):
     # Real STT error observed live: "spring fail" for "Springfield".
-    assert callsigns.extract("Spring fail 1-1, on final") == "Springfield 1-1"
+    # The element-1 lead collapses to the flight callsign (see canonical).
+    assert callsigns.extract("Spring fail 1-1, on final") == "Springfield 1"
+
+
+def test_element_lead_collapses_to_flight_callsign(callsigns):
+    # The lead says "Springfield 1" or "Springfield 1-1" — same pilot, one key.
+    assert callsigns.extract("Springfield 1-1, ready") == "Springfield 1"
+    assert callsigns.extract("Springfield 1, ready") == "Springfield 1"
+    # A wingman (element 2+) stays distinct.
+    assert callsigns.extract("Springfield 1-2, ready") == "Springfield 1-2"
 
 
 def test_fuzzy_recovers_unknown_mishearing():
@@ -63,12 +72,12 @@ def test_speaker_resolution_prefers_known_and_resembling_pilot():
     reg = CallsignRegistry(["Springfield", "Colt"])
     brain = AtcBrain(callsigns=reg)
     brain.set_pilot_count(1)
-    brain.set_active_pilots(["Springfield 1-1"])
-    brain.remember_speaker("Caveman", "Springfield 1-1")
+    brain.set_active_pilots(["Springfield 1"])
+    brain.remember_speaker("Caveman", "Springfield 1")
     reply = brain.handle("Spring fail 1-1 on final",
                          controller=Controller.TOWER, speaker="Caveman")
     assert reply and "cleared to land" in reply.lower()
-    assert brain.pilots["Springfield 1-1"].phase.value == "Landing"
+    assert brain.pilots["Springfield 1"].phase.value == "Landing"
 
 
 def test_speaker_resolution_not_applied_to_content_opening_calls():
@@ -76,8 +85,8 @@ def test_speaker_resolution_not_applied_to_content_opening_calls():
     reg = CallsignRegistry(["Springfield", "Colt"])
     brain = AtcBrain(callsigns=reg)
     brain.set_pilot_count(1)
-    brain.set_active_pilots(["Springfield 1-1"])
-    brain.remember_speaker("Caveman", "Springfield 1-1")
+    brain.set_active_pilots(["Springfield 1"])
+    brain.remember_speaker("Caveman", "Springfield 1")
     # No callsign, no resemblance -> the solo "say again with your callsign".
     reply = brain.handle("Cleared taxi Sierra Echo and hold short runway 25",
                          controller=Controller.GROUND, speaker="Caveman")

@@ -261,6 +261,20 @@ def test_control_departure_checkin_climb(brain):
     assert "climb to Angels" in reply
 
 
+def test_control_climb_issued_once_then_readback(brain):
+    """A second level report is acknowledged, not re-cleared (no loop)."""
+    first = brain.handle("Control, Colt 1, airborne 5 miles east climbing",
+                         controller=Controller.CONTROL)
+    assert "climb to Angels" in first
+    assert brain.pilots["Colt 1"].climb_issued
+    second = brain.handle("Climbing angels 15, Colt 1",
+                          controller=Controller.CONTROL)
+    assert "climb to Angels" not in second
+    assert "readback correct" in second
+    third = brain.handle("Colt 1 at angels 16", controller=Controller.CONTROL)
+    assert "climb to Angels" not in third
+
+
 def test_control_join_readback_descends(brain):
     brain.handle("Control, Colt 1, inbound 35 miles north",
                  controller=Controller.CONTROL)

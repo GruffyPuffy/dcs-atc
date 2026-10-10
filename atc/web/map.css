@@ -21,6 +21,22 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
 .status.bad { color: #f85149; }
 .legend { margin-left: auto; color: var(--muted); display: flex; align-items: center; gap: 6px; }
 .toggle { color: var(--muted); display: flex; align-items: center; gap: 5px; cursor: pointer; }
+#debrief-select { background: var(--panel); color: var(--muted);
+  border: 1px solid var(--line); border-radius: 4px; padding: 3px 6px;
+  font: inherit; max-width: 260px; }
+
+/* Clustered comm marker: several calls at (almost) the same spot. */
+.comm-group {
+  display: flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; border-radius: 50%;
+  background: rgba(13, 17, 23, .85);
+  border: 2px solid var(--c, #3fb950);
+  color: var(--c, #3fb950);
+  font-size: 10px; font-weight: 700; line-height: 1;
+}
+
+/* A busy cluster's tooltip can list many calls: cap the height and scroll. */
+.comm-tip { max-height: 260px; overflow-y: auto; }
 .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; margin-left: 10px; }
 .dot.ground { background: var(--ground); }
 .dot.tower { background: var(--tower); }

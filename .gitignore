@@ -30,6 +30,9 @@ atc/tx_*.wav
 atc/samples/
 atc/voices/
 
+# Saved sortie snapshots (debrief replay files)
+atc/debrief/
+
 # TopGun easter egg: personal marker + dropped-in clips (never committed)
 atc/topgun.txt
 topgun.txt

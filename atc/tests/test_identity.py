@@ -27,7 +27,7 @@ def test_norm_identity_case_and_separators_but_keeps_digits():
 
 
 def test_slot_callsign_from_unit_name():
-    assert slot_callsign("Springfield11") == "Springfield 1-1"
+    assert slot_callsign("Springfield11") == "Springfield 1"
     assert slot_callsign("Colt1") == "Colt 1"
     assert slot_callsign("Springfield") == ""      # no digits
     assert slot_callsign("Pilot #130") == ""       # not a callsign shape

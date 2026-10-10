@@ -2,6 +2,7 @@
 
 import json
 import threading
+import urllib.error
 import urllib.request
 
 from brain import Controller
@@ -38,6 +39,66 @@ def test_snapshot_has_airspace_geometry(brain, airfield):
     assert set(af["gates"]) == {"East", "West", "South", "North"}
     assert "25" in af["runways"]
     assert snap["aircraft"] == []
+
+
+def test_record_captures_trail_without_a_browser(brain, airfield, tmp_path):
+    """`record` must save trails even when nothing polls the map page."""
+    tracks_file = tmp_path / "tracks.json"
+    service = MapService(airfield, brain, FakeState([]),
+                         tracks_file=tracks_file)
+    service.record([_ac(lat=42.18, lon=42.50)])
+    service.record([_ac(lat=42.20, lon=42.52)])  # moved enough to be kept
+    service.save_tracks()
+    saved = json.loads(tracks_file.read_text())
+    # Until a transmission is heard the trail is keyed by the DCS/SRS name.
+    assert "Caveman" in saved["tracks"]
+    assert len(saved["tracks"]["Caveman"]) >= 2
+
+
+def test_record_marks_active_and_retains_after_leaving(brain, airfield, tmp_path):
+    tracks_file = tmp_path / "tracks.json"
+    service = MapService(airfield, brain, FakeState([]),
+                         tracks_file=tracks_file)
+    service.record([_ac()])
+    assert service.tracks.is_active("Caveman")
+    # Aircraft leaves the mission: trail is retained (not pruned).
+    service.record([])
+    assert not service.tracks.is_active("Caveman")
+    assert "Caveman" in service.tracks.callsigns()
+
+
+def test_debrief_filename_is_timestamped_and_slugged():
+    from map_server import debrief_filename
+    name = debrief_filename("Gudauta", when=0)  # epoch = deterministic-ish
+    assert name.startswith("tracks_gudauta_") and name.endswith(".json")
+
+
+def test_replay_loads_and_freezes(brain, airfield, tmp_path):
+    """A tracks_file that already exists is loaded read-only (a replay)."""
+    tracks_file = tmp_path / "tracks.json"
+    tracks_file.write_text(json.dumps({
+        "tracks": {"Caveman": [[42.18, 42.50, 1200.0], [42.20, 42.52, 1100.0]]},
+        "comms": {"Caveman": [{"kind": "rx", "text": "hi", "lat": 42.18,
+                               "lon": 42.50}]},
+    }))
+    service = MapService(airfield, brain, FakeState([]), tracks_file=tracks_file)
+    assert service.replay is True
+    # record() must not mutate a saved replay.
+    service.record([_ac(lat=42.9, lon=42.9)])
+    assert len(service.tracks.path("Caveman")) == 2
+    # Snapshot shows the retained trail even with no live state and no data.
+    snap = service.snapshot()
+    assert snap["replay"] is True
+    assert any(a["callsign"] == "Caveman" and a["active"] is False
+               and len(a["path"]) == 2 for a in snap["aircraft"])
+
+
+def test_snapshot_retained_trail_without_live_state(brain, airfield):
+    """A MapService with no state still renders a retained trail."""
+    service = MapService(airfield, brain, None)
+    service.tracks.update("Caveman", 42.18, 42.50, 2.0, 1200.0)
+    snap = service.snapshot()
+    assert any(a["callsign"] == "Caveman" for a in snap["aircraft"])
 
 
 def test_basemap_defaults_to_dcs_config(brain, airfield):
@@ -290,6 +351,131 @@ def test_all_comms_pinned_to_path(brain, airfield):
     assert [c["kind"] for c in comms] == ["rx", "tx", "tx"]
     assert "go around" in comms[-1]["text"]
     assert all(c["lat"] == 42.18 for c in comms)  # all pinned to the position
+
+
+def test_list_load_unload_debrief(brain, airfield, tmp_path, monkeypatch):
+    """The web loader: list saved files, load one read-only, then resume live."""
+    import map_server
+    monkeypatch.setattr(map_server, "DEBRIEF_DIR", tmp_path)
+    (tmp_path / "tracks_gudauta_test.json").write_text(json.dumps({
+        "tracks": {"Springfield 1": [[43.10, 40.57, 69.0],
+                                     [43.12, 40.56, 800.0]]},
+        "comms": {"Springfield 1": [{"kind": "rx", "text": "hi",
+                                     "lat": 43.10, "lon": 40.57}]},
+    }))
+    service = MapService(airfield, brain, None)
+
+    listed = service.list_debriefs()
+    assert any(d["name"] == "tracks_gudauta_test.json" for d in listed)
+
+    assert service.load_debrief("tracks_gudauta_test.json") == {
+        "ok": True, "name": "tracks_gudauta_test.json"}
+    assert service.replay is True
+    assert service.snapshot()["replay_name"] == "tracks_gudauta_test.json"
+
+    # Path traversal / bad names are refused and change nothing.
+    assert service.load_debrief("../secrets.json")["ok"] is False
+    assert service.load_debrief("nope.json")["ok"] is False
+
+    # Unload returns to live mode and clears the trail.
+    assert service.unload_debrief()["ok"] is True
+    assert service.replay is False
+    assert service.snapshot()["aircraft"] == []
+
+
+def test_load_rejects_empty_debrief(brain, airfield, tmp_path, monkeypatch):
+    """Loading an empty debrief fails clearly instead of showing a blank map."""
+    import map_server
+    monkeypatch.setattr(map_server, "DEBRIEF_DIR", tmp_path)
+    (tmp_path / "tracks_empty.json").write_text('{"tracks": {}, "comms": {}}')
+    service = MapService(airfield, brain, None)
+    result = service.load_debrief("tracks_empty.json")
+    assert result["ok"] is False and "empty" in result["error"].lower()
+    assert service.replay is False  # nothing changed
+
+
+def test_save_skips_empty_history(brain, airfield, tmp_path):
+    """An empty history must not leave an (unusable) debrief file behind."""
+    tracks_file = tmp_path / "tracks.json"
+    service = MapService(airfield, brain, FakeState([]), tracks_file=tracks_file)
+    service.save_tracks()               # nothing recorded yet
+    assert not tracks_file.exists()
+    service.record([_ac(lat=42.18, lon=42.50)])
+    service.record([_ac(lat=42.20, lon=42.52)])
+    service.save_tracks()               # now there is a trail
+    assert tracks_file.exists()
+
+
+def test_unrecognized_pilot_call_still_on_trail(brain, airfield, tmp_path):
+    """Every spoken call is on the trail, even if no callsign was understood."""
+    service = MapService(airfield, brain, None)
+    # A trail exists keyed by the raw speaker name (not yet learned to a
+    # callsign): "Caveman".
+    service.tracks.update("Caveman", 42.18, 42.50, 2.0, 1200.0)
+    # A pilot call with no parseable callsign -> attached under the raw name.
+    service.log_chatter("rx", 250.0, "Caveman", "uhh ground mumble")
+    comms = service.tracks.comms("Caveman")
+    assert any(c["kind"] == "rx" and "mumble" in c["text"] for c in comms)
+
+
+def test_debrief_round_trips_chatter(brain, airfield, tmp_path):
+    """The radio log is saved with the debrief and restored on replay."""
+    tracks_file = tmp_path / "tracks.json"
+    service = MapService(airfield, brain, FakeState([]), tracks_file=tracks_file)
+    service.record([_ac(lat=42.18, lon=42.50)])
+    service.record([_ac(lat=42.20, lon=42.52)])
+    service.log_chatter("tx", 263.0, "Caveman", "Colt 1, cleared taxi", "tower")
+    service.save_tracks()
+
+    restored = MapService(airfield, brain, None, tracks_file=tracks_file)
+    assert restored.replay is True
+    assert any("cleared taxi" in e["text"] for e in restored.chatter())
+
+
+def test_replay_ignores_live_chatter(brain, airfield, tmp_path):
+    tracks_file = tmp_path / "tracks.json"
+    (tracks_file).write_text(json.dumps(
+        {"tracks": {"Colt 1": [[42.18, 42.50, 100.0], [42.19, 42.51, 200.0]]},
+         "comms": {}, "chatter": [{"kind": "tx", "text": "old", "who": "",
+                                   "callsign": "", "controller": "tower",
+                                   "freq": 263.0, "t": "10:00:00"}]}))
+    service = MapService(airfield, brain, None, tracks_file=tracks_file)
+    assert service.replay is True
+    before = len(service.chatter())
+    service.log_chatter("rx", 263.0, "Caveman", "live call")
+    assert len(service.chatter()) == before  # replay keeps only the saved log
+
+
+def test_debrief_endpoints_http(brain, airfield, tmp_path, monkeypatch):
+    import map_server
+    monkeypatch.setattr(map_server, "DEBRIEF_DIR", tmp_path)
+    (tmp_path / "tracks_k_test.json").write_text(json.dumps(
+        {"tracks": {"Colt 1": [[42.18, 42.50, 100.0]]}, "comms": {}}))
+    service = MapService(airfield, brain, None)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(service))
+    port = server.server_address[1]
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        listing = json.load(urllib.request.urlopen(
+            f"http://127.0.0.1:{port}/api/debriefs"))
+        assert listing["debriefs"][0]["name"] == "tracks_k_test.json"
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/debrief/load",
+            data=json.dumps({"name": "tracks_k_test.json"}).encode(),
+            headers={"Content-Type": "application/json"}, method="POST")
+        assert json.loads(urllib.request.urlopen(req).read())["ok"] is True
+        # A bad name is a 400.
+        bad = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/debrief/load",
+            data=json.dumps({"name": "../x.json"}).encode(),
+            headers={"Content-Type": "application/json"}, method="POST")
+        try:
+            urllib.request.urlopen(bad)
+            assert False, "expected HTTP 400"
+        except urllib.error.HTTPError as e:
+            assert e.code == 400
+    finally:
+        server.shutdown()
 
 
 def test_http_endpoints_serve_api_and_page(brain, airfield):

@@ -43,7 +43,7 @@ def springfield(gudauta):
         airfield=gudauta)
     gudauta.set_active_runway("33")  # wind in the log favoured 33
     brain.set_runway("33")
-    return Scenario(gudauta, brain, callsign="Springfield 1-1",
+    return Scenario(gudauta, brain, callsign="Springfield 1",
                     speaker="Caveman")
 
 
@@ -112,9 +112,9 @@ def test_replay_garbled_callsign_attributed_to_known_pilot(springfield):
     """
     gudauta = springfield.airfield
     brain = springfield.brain
-    # Live picture: the only pilot online is Springfield 1-1.
+    # Live picture: the only pilot online is Springfield 1.
     brain.set_pilot_count(1)
-    brain.set_active_pilots(["Springfield 1-1"])
+    brain.set_active_pilots(["Springfield 1"])
 
     sc = springfield.on_final("33", nm=4.0)
     r = sc.say("Spring fail, on final", Controller.TOWER)

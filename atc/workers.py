@@ -31,6 +31,7 @@ _STATE_FIELDS = {
     "cleared_inbound": "inbound",
     "cleared_landing": "landing",
     "descend_issued": "descend",
+    "climb_issued": "climb",
     "formation": "formation",
     "go_around_issued": "goaround",
     "altitude_warned": "altwarn",

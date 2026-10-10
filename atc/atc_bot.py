@@ -112,7 +112,11 @@ def main() -> None:
                         help="bind address for the map view")
     parser.add_argument("--tracks-file", default=None,
                         help="save/restore flight trails here for debrief. "
-                             "Defaults to /tmp/atc_tracks.json with --debug.")
+                             "Defaults to atc/debrief/tracks_<field>_<time>.json "
+                             "with --debug.")
+    parser.add_argument("--replay", default=None, metavar="FILE",
+                        help="review a saved debrief file on the map, read-only "
+                             "(implies loading it as the tracks file)")
     parser.add_argument("--no-announce", action="store_true",
                         help="skip the one-time 'ATC online' announcement")
     parser.add_argument("--debug", action="store_true",
@@ -239,9 +243,26 @@ def main() -> None:
         "Batumi": "bah-too-me",
     }
 
-    # Piper synthesis and the SRS tx queue are shared across controller
-    # workers, so serialise them (and the tx wav write) with a lock.
+    # Piper synthesis is CPU-heavy and shared, so serialise it. Transmission,
+    # however, is per agency: each controller frequency has its own SRS client
+    # (see `clients`), so a long ATIS on one frequency can never block a Tower
+    # reply on another — they are independent clients with independent TX queues.
     tts_lock = threading.Lock()
+
+    def client_for(controller: Controller | None, freq: int | None = None):
+        """The SRS client to transmit on for a controller role/frequency.
+
+        ATIS goes out on its own client (keyed by frequency). Everything else
+        uses the agency's client, falling back to Tower when a role has no own
+        client (e.g. it was disabled).
+        """
+        if freq is not None and atis_hz and freq == atis_hz and atis_client:
+            return atis_client
+        if controller is not None:
+            c = clients.get(controller)
+            if c is not None:
+                return c
+        return clients[Controller.TOWER]
 
     def speak(text: str, freq: int = freq_hz, voice=None,
               controller: Controller | None = None,
@@ -267,7 +288,9 @@ def main() -> None:
             rate = chunks[0].sample_rate
             pcm22k = b"".join(c.audio_int16_bytes for c in chunks)
             pcm48k = resample_to_48k(pcm22k, rate)
-            client.transmit(pcm48k, freq)
+            # Transmit outside the synthesis lock is not needed (the lock only
+            # serialises Piper); the per-agency client queues the audio.
+            client_for(controller, freq).transmit(pcm48k, freq)
             stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
             with wave.open(str(audio_dir / f"tx_{stamp}.wav"), "wb") as wav:
                 wav.setnchannels(1)
@@ -298,7 +321,7 @@ def main() -> None:
             raise ValueError(f"{path}: expected mono, got {channels} channels")
         pcm48k = frames if rate == SAMPLE_RATE else resample_to_48k(frames, rate)
         with tts_lock:
-            client.transmit(pcm48k, freq)
+            client_for(controller, freq).transmit(pcm48k, freq)
         tag = f"[{controller.value}] " if controller else ""
         log(f"{tag}ATC (tx wav): {Path(path).name}")
 
@@ -414,17 +437,22 @@ def main() -> None:
                for hz, controller in controller_by_freq.items()}
 
     # Optional live map view (Leaflet) showing aircraft + their flight phase.
-    # With --debug, fly the trails to /tmp/atc_tracks.json (or --tracks-file) so
-    # a sortie can be replayed for after-action review after the bot stops.
+    # With --debug, fly the trails to atc/debrief/tracks_<field>_<time>.json (or
+    # --tracks-file) so a sortie can be replayed for after-action review after
+    # the bot stops. --replay loads a saved file read-only.
     map_service = None
     if args.map_port:
-        from map_server import start_map_server
-        tracks_file = args.tracks_file
+        from map_server import start_map_server, DEBRIEF_DIR, debrief_filename
+        tracks_file = args.replay or args.tracks_file
         if tracks_file is None and args.debug:
-            tracks_file = "/tmp/atc_tracks.json"
+            # One named snapshot per session: atc/debrief/tracks_<field>_<time>
+            # .json, so a tester can later pick exactly this event to review.
+            DEBRIEF_DIR.mkdir(parents=True, exist_ok=True)
+            tracks_file = DEBRIEF_DIR / debrief_filename(airfield.name)
         _server, map_service = start_map_server(
             airfield, brain, state, args.map_port,
-            host=args.map_host, lock=lock, log=log, tracks_file=tracks_file)
+            host=args.map_host, lock=lock, log=log, tracks_file=tracks_file,
+            replay=bool(args.replay))
 
     # Last speaker to transmit, so a TX mirror can be addressed to them.
     _debug_reply_to = [""]
@@ -503,6 +531,10 @@ def main() -> None:
                     # a pilot whose flight name the transmission still resembles.
                     brain.set_active_pilots(
                         [brain.callsign_for_speaker(ac.player) for ac in players])
+                # Record the debrief trail whether or not the map page is open,
+                # so a completed sortie is saved even with no browser polling.
+                if map_service is not None:
+                    map_service.record(players)
                 for ac in players:
                     # Address the pilot by their flight callsign (learned from
                     # their transmissions), not the raw DCS unit name.
@@ -612,6 +644,15 @@ def main() -> None:
             refresh_weather()
             time.sleep(args.atis_interval)
 
+    # One SRS client per agency, each joined to every ATC frequency but
+    # *transmitting* on its own. Because each client has its own TX queue and
+    # pacing thread, a long ATIS (or a slow Control reply) can never block a
+    # Tower/Ground reply: they are fully independent radio positions.
+    #
+    # RX fan-in: only ONE client carries the `on_transmission_end` callback (the
+    # Tower client), so a transmission heard by several clients is delivered to
+    # the workers exactly once. `on_end` routes it to the right agency by the
+    # frequency it arrived on, so a single RX client still serves all radios.
     freqs = [freq_hz]
     if ground_hz:
         freqs.append(ground_hz)
@@ -619,10 +660,28 @@ def main() -> None:
         freqs.append(control_hz)
     if atis_hz:
         freqs.append(atis_hz)
-    client = SrsClient(args.host, args.port, name, freqs,
-                       eam_password=args.eam, coalition=2)
-    client.on_transmission_end = on_end
-    client.start()
+    clients: dict[Controller, SrsClient] = {}
+    for controller, _hz in [(Controller.TOWER, freq_hz),
+                            (Controller.GROUND, ground_hz),
+                            (Controller.CONTROL, control_hz)]:
+        if _hz is None and controller is not Controller.TOWER:
+            continue
+        clients[controller] = SrsClient(
+            args.host, args.port, f"{name} {controller.value}", freqs,
+            eam_password=args.eam, coalition=2)
+    # ATIS needs its own client only so its (long) broadcast never blocks a
+    # reply; it is re-listenable and lower priority than live traffic.
+    atis_client = None
+    if atis_hz:
+        atis_client = SrsClient(args.host, args.port, f"{name} atis",
+                                [freq_hz] + ([atis_hz] if atis_hz else []),
+                                eam_password=args.eam, coalition=2)
+    all_clients = list(clients.values()) + ([atis_client] if atis_client else [])
+    # Single RX entry point: the Tower client delivers every transmission.
+    clients[Controller.TOWER].on_transmission_end = on_end
+    client = clients[Controller.TOWER]  # SRS roster (positions) is shared
+    for c in all_clients:
+        c.start()
     for worker in workers.values():
         worker.start()
     if state is not None:
@@ -662,7 +721,8 @@ def main() -> None:
     except KeyboardInterrupt:
         pass
     finally:
-        client.stop()
+        for c in all_clients:
+            c.stop()
         print("[*] stopped")
 
 

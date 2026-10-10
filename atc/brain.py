@@ -66,6 +66,7 @@ class PilotState:
     cleared_landing: bool = False
     go_around_issued: bool = False
     descend_issued: bool = False  # Control has issued the descent to 1500 ft
+    climb_issued: bool = False  # Control has issued the departure climb
     altitude_warned: bool = False  # warned about busting the CTR ceiling
     incursion_warned: bool = False  # warned about being on the runway uncleared
     exit_gate: str = ""  # assigned departure exit point
@@ -514,6 +515,7 @@ class AtcBrain:
         pilot.cleared_landing = False
         pilot.go_around_issued = False
         pilot.descend_issued = False
+        pilot.climb_issued = False
         pilot.exit_gate = ""
         pilot.entry_gate = ""
         return self._say("state_reset", callsign,
@@ -802,10 +804,17 @@ class AtcBrain:
             return self._say("control_join", callsign, gate=gate,
                              heading=f"{heading:03.0f}")
         # Departure check-in ("airborne, 5 miles east climbing" / "at 1500 ft"):
-        # radar contact and a climb clearance.
+        # radar contact and a climb clearance. Only the *first* check-in gets the
+        # climb — a readback or a follow-up level report ("climbing angels 15",
+        # "at angels 16") is acknowledged, not re-cleared, so the pilot is not
+        # handed an endless "climb to Angels 15".
         if re.search(r"\b(airborne|climbing|departing|departed|level|"
                      r"angels|on the way|at \d+|checking in|with you)\b", low):
             pilot.phase = Phase.AIRBORNE
+            if pilot.climb_issued:
+                return self._say("readback_correct", callsign,
+                                 agency=self.control_short)
+            pilot.climb_issued = True
             return self._say("control_climb", callsign)
         # Near the field, Control hands the flight to Tower (e.g. "on final",
         # "runway in sight", "overhead break", "passing the entry point").

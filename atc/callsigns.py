@@ -19,6 +19,7 @@ from __future__ import annotations
 import re
 
 from phonetics import KNOWN_ERRORS, generate_variants
+from state_client import canonical_callsign
 
 NUMBER_WORDS = {
     "one": "1", "won": "1",
@@ -152,9 +153,8 @@ class CallsignRegistry:
                 canonical = self._canonical_name(name)
                 number = _normalise_number(match.group("num"))
                 element = match.group("elem")
-                if element:
-                    return f"{canonical} {number}-{_normalise_number(element)}"
-                return f"{canonical} {number}"
+                return canonical_callsign(canonical, number,
+                                          _normalise_number(element) if element else None)
         # Nothing matched exactly — recover a near-miss on the flight name (the
         # number is usually intelligible even when the name is not).
         return self._fuzzy_extract(text)
@@ -208,8 +208,9 @@ class CallsignRegistry:
                     and second_d - best_d >= 1:
                 canonical = best
                 if element:
-                    return (f"{canonical} {_normalise_number(number)}-"
-                            f"{_normalise_number(element)}")
+                    return canonical_callsign(canonical,
+                                              _normalise_number(number),
+                                              _normalise_number(element))
                 return f"{canonical} {_normalise_number(number)}"
         return None
 

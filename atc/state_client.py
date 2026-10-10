@@ -31,16 +31,37 @@ def slot_callsign(unit_name: str) -> str:
     """Derive a flight callsign from a DCS unit name.
 
     DCS unit names can be a flight name with an element attached, e.g.
-    "Springfield11" -> "Springfield 1-1" (flight 1, element 1). Returns "" if
-    the name has no trailing digits to split.
+    "Springfield11" -> "Springfield 1" (flight 1; the element-1 lead collapses
+    to the flight callsign — see `canonical_callsign`). Returns "" if the name
+    has no trailing digits to split.
     """
     m = re.match(r"^([A-Za-z]+)(\d+)$", unit_name or "")
     if not m:
         return ""
     name, digits = m.group(1), m.group(2)
     if len(digits) >= 2:
-        return f"{name} {digits[0]}-{digits[1]}"
-    return f"{name} {digits}"
+        return canonical_callsign(name, digits[0], digits[1])
+    return canonical_callsign(name, digits)
+
+
+def canonical_callsign(name: str, number: str, element: str | None = None) -> str:
+    """Canonical key for a callsign, collapsing the formation lead.
+
+    The first element of a formation is its lead, and the lead calls themselves
+    either way ("Springfield 1-1" or "Springfield 1") — so both must map to ONE
+    aircraft/pilot record. Any other element ("1-2", "1-3") stays distinct. This
+    is what stops a single aircraft's transmissions from landing in two
+    different state records as the pilot varies their call.
+
+    Kept here (the identity module) so the brain (`callsigns`) and the state
+    bridge (`slot_callsign`) agree on one canonical form.
+    """
+    name = (name or "").strip()
+    if element and element == "1":
+        return f"{name} {number}"
+    if element:
+        return f"{name} {number}-{element}"
+    return f"{name} {number}"
 
 
 def resolve_player_unit(units, srs_name: str, learned_callsign: str = "",

@@ -196,12 +196,12 @@ function drawPath(ac) {
   const pts = ac.path || [];
   if (pts.length < 2) return;
   const active = ac.active !== false;
-  const color = PHASE_COLOR[ac.controller] || '#8b949e';
-  // Completed (logged-off) sorties are dimmed + dashed, so they read as
-  // history rather than live traffic.
+  // A green trail reads clearly over the beige DCS chart (the controller-hued
+  // gray melted into the apron). Active flight: brighter + solid; a completed /
+  // replay sortie: slightly dimmer but still green and solid.
   const style = active
-    ? { color, weight: 2, opacity: 0.6, dashArray: null }
-    : { color, weight: 1.5, opacity: 0.3, dashArray: '3 3' };
+    ? { color: '#3fb950', weight: 3, opacity: 0.9, dashArray: null }
+    : { color: '#2ea043', weight: 2.5, opacity: 0.85, dashArray: null };
   if (paths.has(ac.callsign)) {
     paths.get(ac.callsign).setLatLngs(pts).setStyle(style);
   } else {
@@ -211,30 +211,83 @@ function drawPath(ac) {
   }
 }
 
+function commColor(kind) {
+  if (kind === 'tx') return '#3fb950';       // ATC
+  if (kind === 'state') return '#d29922';    // phase change
+  return '#58a6ff';                          // pilot
+}
+
+// One tooltip line per call inside a cluster. "state" events read as the phase.
+// The sender label is one bold token showing the agency: an ATC reply reads
+// "ATC-<agency>" (e.g. "ATC-GROUND") and a pilot call "PILOT-<agency>" (the
+// channel the pilot keyed, so a wrong-channel call is visible), else "PILOT".
+function commLine(c) {
+  let sender;
+  if (c.kind === 'tx') sender = 'ATC' + (c.controller ? '-' + c.controller : '');
+  else if (c.kind === 'state') sender = 'STATE';
+  else sender = 'PILOT' + (c.controller ? '-' + c.controller : '');
+  sender = sender.toUpperCase();
+  const body = c.kind === 'state' ? `phase → <b>${c.text}</b>` : c.text;
+  return `<b>${c.t} ${sender}</b><br>${body}`;
+}
+
 // Small dots on the path where the pilot called / the reply came / the brain
 // changed phase. Click to see the text (a debug aid: "where was I when I said
-// that?").
+// that?"). Calls at (almost) the same spot — e.g. several while holding short —
+// are merged into one numbered marker, so a busy point is not a pile of dots.
 function drawComms(ac) {
   const comms = ac.comms || [];
   const active = ac.active !== false;
   let group = commMarkers.get(ac.callsign);
   if (!group) { group = L.layerGroup().addTo(commLayer); commMarkers.set(ac.callsign, group); }
   group.clearLayers();
+
+  const EPS = 0.0007;  // ~75 m: below this, treat two calls as the same place
+  const clusters = [];
   for (const c of comms) {
-    let color, label;
-    if (c.kind === 'tx') { color = '#3fb950'; label = 'ATC'; }
-    else if (c.kind === 'state') { color = '#d29922'; label = 'STATE'; }
-    else { color = '#58a6ff'; label = 'PILOT'; }
-    const body = c.kind === 'state'
-      ? `phase → <b>${c.text}</b>`
-      : c.text;
-    L.circleMarker([c.lat, c.lon], {
-      radius: c.kind === 'state' ? 2.5 : 3, color, weight: 1,
-      fillColor: color, fillOpacity: active ? 0.9 : 0.35,
-    }).bindTooltip(
-      `<b>${c.t} ${label}</b>${c.controller ? ' · ' + c.controller : ''}<br>${body}`,
-      { direction: 'top' }
-    ).addTo(group);
+    const last = clusters[clusters.length - 1];
+    if (last && Math.abs(last.lat - c.lat) < EPS
+             && Math.abs(last.lon - c.lon) < EPS) {
+      last.items.push(c);
+    } else {
+      clusters.push({ lat: c.lat, lon: c.lon, items: [c] });
+    }
+  }
+
+  for (const cl of clusters) {
+    const last = cl.items[cl.items.length - 1];
+    const color = commColor(last.kind);
+    const tip = cl.items.length === 1
+      ? commLine(cl.items[0])
+      : `<b>${cl.items.length} calls</b><hr>`
+        + cl.items.map(commLine).join('<hr>');
+    if (cl.items.length === 1) {
+      L.circleMarker([cl.lat, cl.lon], {
+        radius: last.kind === 'state' ? 2.5 : 3, color, weight: 1,
+        fillColor: color, fillOpacity: active ? 0.9 : 0.35,
+      }).bindTooltip(tip, { direction: 'top' }).addTo(group);
+    } else {
+      // Scale the badge to the count so a busy stop stays legible (1-2 digits
+      // small, 3 digits larger; cap the label so it never overflows).
+      const n = cl.items.length;
+      const label = n > 999 ? '999+' : String(n);
+      const size = label.length <= 1 ? 18 : (label.length === 2 ? 22 : 26);
+      const html = `<div class="comm-group" style="--c:${color};`
+        + `width:${size}px;height:${size}px;`
+        + `font-size:${label.length <= 1 ? 10 : 9}px">${label}</div>`;
+      // A busy cluster can list many calls, and a Leaflet *tooltip* is neither
+      // scrollable nor clickable. Use a click-to-open popup instead, which
+      // scrolls (maxHeight) so 10-15 calls stay readable.
+      L.marker([cl.lat, cl.lon], {
+        icon: L.divIcon({ className: 'comm-group-icon', html,
+                          iconSize: [size, size],
+                          iconAnchor: [size / 2, size / 2] }),
+        opacity: active ? 1 : 0.6,
+        title: `${n} calls (click)`,
+      }).bindPopup(`<div class="comm-tip">${tip}</div>`,
+                   { maxWidth: 360, maxHeight: 320, className: 'comm-popup' }
+      ).addTo(group);
+    }
   }
 }
 
@@ -361,13 +414,93 @@ async function tick() {
     const err = document.getElementById('error');
     if (data.error) { err.hidden = false; err.textContent = `DCS: ${data.error}`; }
     else { err.hidden = true; }
-    status.textContent = data.error ? 'DCS offline' : 'live';
-    status.className = 'status ' + (data.error ? 'bad' : 'ok');
+    if (data.replay) {
+      status.textContent = 'replay';
+      status.className = 'status ok';
+    } else {
+      status.textContent = data.error ? 'DCS offline' : 'live';
+      status.className = 'status ' + (data.error ? 'bad' : 'ok');
+    }
+    if (data.replay) selectDebrief(data.replay_name || '');
   } catch (e) {
     status.textContent = 'server offline';
     status.className = 'status bad';
   }
 }
+
+// ---- debrief loader (load a saved sortie, read-only) ----
+
+function selectDebrief(name) {
+  const sel = document.getElementById('debrief-select');
+  if (!sel) return;
+  // Ensure the loaded name is present even if the dropdown predates the file.
+  if (name && ![...sel.options].some(o => o.value === name)) {
+    const o = document.createElement('option');
+    o.value = name; o.textContent = name;
+    sel.appendChild(o);
+  }
+  sel.value = name || '';
+}
+
+async function refreshDebriefs() {
+  const sel = document.getElementById('debrief-select');
+  if (!sel) return;
+  try {
+    const res = await fetch('/api/debriefs', { cache: 'no-store' });
+    const data = await res.json();
+    const current = sel.value;
+    sel.innerHTML = '';
+    const live = document.createElement('option');
+    live.value = ''; live.textContent = '— live —';
+    sel.appendChild(live);
+    for (const d of (data.debriefs || [])) {
+      const o = document.createElement('option');
+      o.value = d.name;
+      o.textContent = d.name.replace(/^tracks_/, '').replace(/\.json$/, '');
+      sel.appendChild(o);
+    }
+    sel.value = current;
+  } catch (e) { /* server offline; leave the default */ }
+}
+
+async function loadDebrief(name) {
+  const url = name ? '/api/debrief/load' : '/api/debrief/unload';
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    const result = await res.json().catch(() => ({}));
+    if (name && !result.ok) {
+      // Surface why nothing loaded (empty file, not found, …).
+      alert(`Could not load ${name}: ${result.error || 'unknown error'}`);
+      // Fall back to whatever is actually loaded now.
+      refreshDebriefs();
+      tick();
+      return;
+    }
+  } catch (e) {
+    /* tick() will surface the state */
+  }
+  // Clear client-side layers so the new (or live) picture redraws cleanly.
+  for (const m of markers.values()) aircraftLayer.removeLayer(m);
+  markers.clear();
+  for (const p of paths.values()) aircraftLayer.removeLayer(p);
+  paths.clear();
+  for (const g of commMarkers.values()) aircraftLayer.removeLayer(g);
+  commMarkers.clear();
+  tick();
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const sel = document.getElementById('debrief-select');
+  if (sel) {
+    sel.addEventListener('change', () => loadDebrief(sel.value));
+    refreshDebriefs();
+    setInterval(refreshDebriefs, 10000);
+  }
+});
 
 tick();
 setInterval(tick, 2000);
