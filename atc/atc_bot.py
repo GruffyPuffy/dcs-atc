@@ -10,7 +10,7 @@ Usage:
                       [--ground-voice en_US-ryan-medium]
                       [--control-voice en_US-lessac-medium]
                       [--atis-voice en_GB-alan-medium]
-                      [--log /tmp/atc_log.txt] [--keep 10] [--gain 1.0]
+                      [--log /tmp/atc_log.txt] [--gain 1.0] [--save-audio]
                       [--state-host 127.0.0.1] [--state-port 10309] [--no-state]
 """
 
@@ -98,7 +98,11 @@ def main() -> None:
                         help="Piper voice for ATIS (default: en_GB-alan-medium)")
     parser.add_argument("--log", default="/tmp/atc_log.txt")
     parser.add_argument("--audio-dir", default="/tmp/atc_audio")
-    parser.add_argument("--keep", type=int, default=10)
+    parser.add_argument("--save-audio", action="store_true",
+                        help="save received/transmitted audio as WAVs for "
+                             "debugging (off by default)")
+    parser.add_argument("--keep", type=int, default=10,
+                        help="how many rx WAVs to keep with --save-audio")
     parser.add_argument("--gain", type=float, default=1.0)
     parser.add_argument("--speech-rate", type=float, default=0.7,
                         help="Piper length_scale; lower = faster (0.6-1.0)")
@@ -153,7 +157,9 @@ def main() -> None:
         controller_by_freq[control_hz] = Controller.CONTROL
     log_path = Path(args.log)
     audio_dir = Path(args.audio_dir)
-    audio_dir.mkdir(parents=True, exist_ok=True)
+    save_audio = args.save_audio  # capture rx/tx WAVs for debugging (opt-in)
+    if save_audio:
+        audio_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"[*] Loading Whisper '{args.stt_model}'...")
     stt = WhisperModel(args.stt_model, device="cpu", compute_type="int8")
@@ -223,6 +229,8 @@ def main() -> None:
         return 20 * math.log10(max(peak, 1e-6))
 
     def save_wav(pcm: bytes) -> Path | None:
+        if not save_audio:
+            return None
         stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         path = audio_dir / f"rx_{stamp}.wav"
         with wave.open(str(path), "wb") as wav:
@@ -291,12 +299,13 @@ def main() -> None:
             # Transmit outside the synthesis lock is not needed (the lock only
             # serialises Piper); the per-agency client queues the audio.
             client_for(controller, freq).transmit(pcm48k, freq)
-            stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-            with wave.open(str(audio_dir / f"tx_{stamp}.wav"), "wb") as wav:
-                wav.setnchannels(1)
-                wav.setsampwidth(2)
-                wav.setframerate(SAMPLE_RATE)
-                wav.writeframes(pcm48k)
+            if save_audio:
+                stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+                with wave.open(str(audio_dir / f"tx_{stamp}.wav"), "wb") as wav:
+                    wav.setnchannels(1)
+                    wav.setsampwidth(2)
+                    wav.setframerate(SAMPLE_RATE)
+                    wav.writeframes(pcm48k)
         tag = f"[{controller.value}] " if controller else ""
         log(f"{tag}ATC (tx): \"{text}\"")
         chatter("tx", freq, agency or (controller.value if controller else "atc"),
@@ -677,6 +686,12 @@ def main() -> None:
                                 [freq_hz] + ([atis_hz] if atis_hz else []),
                                 eam_password=args.eam, coalition=2)
     all_clients = list(clients.values()) + ([atis_client] if atis_client else [])
+    # Each client must ignore the audio of every OTHER bot client, or it hears
+    # the bot's own radio (e.g. the "ATC online" / ATIS broadcasts) and answers
+    # it — a runaway echo loop. Only a real pilot's voice should reach the brain.
+    own_guids = {c.guid for c in all_clients}
+    for c in all_clients:
+        c.ignore_guids = set(own_guids)  # ignore every bot client, incl. self
     # Single RX entry point: the Tower client delivers every transmission.
     clients[Controller.TOWER].on_transmission_end = on_end
     client = clients[Controller.TOWER]  # SRS roster (positions) is shared

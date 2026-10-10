@@ -73,7 +73,9 @@ class PilotState:
     entry_gate: str = ""  # assigned arrival entry point
     formation: int = 0  # flight size (2+ = multi-ship), learned from calls
     last_reply: str = ""  # last clearance, replayed on "say again"
+    last_clearance: str = ""  # last clearance issued, for readback verification
     last_controller: str = ""  # last agency talked to (for the map view)
+    readback_fails: int = 0  # consecutive incomplete readbacks of one clearance
 
 
 class Phraseology:
@@ -349,6 +351,104 @@ class AtcBrain:
             return ""
         return self.airfield.nearest_holding_point(track.lat, track.lon) or ""
 
+    # ---------- readback training ----------
+    #
+    # A trainer that never blocks: a readback is checked against the clearance
+    # actually issued. A complete readback is confirmed; an incomplete one gets
+    # one targeted "say again your X" (teaching) and the phase still advances, so
+    # a fumbled readback never traps the pilot — they keep flying.
+
+    # Word equivalents for the digits, so a spoken readback ("two five",
+    # "one five hundred") can be compared with the numeric clearance.
+    _WORD_DIGITS = {"zero": "0", "one": "1", "two": "2", "three": "3",
+                    "four": "4", "five": "5", "six": "6", "seven": "7",
+                    "eight": "8", "nine": "9", "niner": "9"}
+
+    @classmethod
+    def _numbers(cls, text: str) -> set[str]:
+        """Every number in `text`, with spoken digits folded in.
+
+        "two niner niner two" -> {2992}; "0 7 0" -> {070}; "1500 feet" -> {1500}.
+        Used to compare a readback against the clearance without depending on
+        the filler words or the exact phrasing.
+        """
+        t = re.sub(r"[.,]", "", (text or "").lower())
+        t = re.sub(r"\b(" + "|".join(cls._WORD_DIGITS) + r")\b",
+                   lambda m: cls._WORD_DIGITS[m.group(1)], t)
+        t = re.sub(r"(?<=\d)\s+(?=\d)", "", t)  # "2 9 9 2" -> "2992"
+        return set(re.findall(r"\d+", t))
+
+    def _readback_item(self, low: str, clearance: str) -> str | None:
+        """The label of the first item the pilot failed to read back, or None.
+
+        Only the clearance's numbers (runway/QNH/altitude/heading) and gate names
+        are required — the filler wording is ignored, so a normal abbreviated
+        readback passes.
+        """
+        clearance = clearance or ""
+        spoken = self._numbers(low)
+        missing_num = [n for n in self._numbers(clearance) if n not in spoken]
+        gates = [g for g in self.gates if g.lower() in clearance.lower()]
+        missing_gate = [g for g in gates if g.lower() not in low]
+        if not missing_num and not missing_gate:
+            return None
+        return self._item_label(clearance, missing_num, missing_gate)
+
+    def _check_readback(self, callsign, pilot, low, clearance, controller,
+                        ok_key="readback_correct"):
+        """Confirm a readback, or flag it incomplete — but never block.
+
+        A complete readback is confirmed ("readback correct"). An incomplete one
+        is **not** called correct: it gets an honest "readback incomplete —
+        {item} not read back, continue." so the pilot knows what to train on, and
+        the caller still advances the phase, so a fumbled readback never traps
+        them — they keep flying and fix it next time.
+        """
+        agency = self._agency(controller)
+        item = self._readback_item(low, clearance)
+        if item is None:
+            pilot.readback_fails = 0
+            return self._say(ok_key, callsign, agency=agency)
+        pilot.readback_fails += 1
+        return self._say("readback_incomplete", callsign, agency=agency,
+                         item=item)
+
+    def _readback_coaching(self, callsign, pilot, low, clearance,
+                           controller) -> str:
+        """A readback-incomplete note for a clearance that is issued regardless.
+
+        For the takeoff clearance (always given), so the pilot still gets the
+        "incomplete — continue" feedback without the clearance being withheld.
+        """
+        item = self._readback_item(low, clearance)
+        if item is None:
+            pilot.readback_fails = 0
+            return ""
+        pilot.readback_fails += 1
+        return self._say("readback_incomplete", callsign,
+                         agency=self._agency(controller), item=item) + " "
+
+    @staticmethod
+    def _item_label(clearance: str, missing_num, missing_gate) -> str:
+        """A short label for the missing readback item ("say again your X")."""
+        low = clearance.lower()
+        if missing_gate:
+            return "exit" if "exit" in low else "entry"
+        if "qnh" in low or "q.n.h" in low:
+            return "QNH"
+        if "heading" in low:
+            return "heading"
+        if ("angels" in low or "climb" in low or "descend" in low
+                or "ft" in low or "feet" in low or "below" in low):
+            return "altitude"
+        if "runway" in low:
+            return "runway"
+        if "hold short" in low:
+            return "hold short"
+        if "taxi" in low:
+            return "taxi clearance"
+        return "readback"
+
     def _runway_busy(self, traffic: list | None, exclude: str = "") -> bool:
         """True if the active runway is occupied by other traffic (players + AI).
 
@@ -412,7 +512,6 @@ class AtcBrain:
             # ("say again") — a trainer aid for missed readbacks.
             pilot.last_reply = reply
         return reply
-
     def _dispatch(self, callsign: str, pilot: PilotState, low: str,
                   track: AircraftTrack | None,
                   controller: Controller,
@@ -482,12 +581,19 @@ class AtcBrain:
             r"in use|qnh|q\.?n\.?h\.?)\b",
             low)
         if readback and pilot.phase == Phase.LINEUP:
-            # Readback of "line up and wait" -> the takeoff clearance.
+            # Readback of "line up and wait" -> the takeoff clearance. The
+            # takeoff is issued regardless; coaching is appended if the line-up
+            # readback is incomplete, so the pilot never has to repeat it.
+            coach = self._readback_coaching(callsign, pilot, low,
+                                            pilot.last_clearance or pilot.last_reply,
+                                            controller)
             pilot.phase = Phase.DEPARTURE
-            return self._say("lineup_readback", callsign, turnout="right")
+            return coach + self._say("lineup_readback", callsign, turnout="right")
         if readback and pilot.phase in (Phase.CLEARANCE, Phase.TAXI,
                                         Phase.INBOUND):
-            return self._say("readback_correct", callsign, agency=agency)
+            return self._check_readback(callsign, pilot, low,
+                                        pilot.last_clearance or pilot.last_reply,
+                                        controller)
 
         # shared intents, valid on any frequency
         if re.search(r"\bradio check\b|\bhow (do you )?(read|copy)\b|"
@@ -518,6 +624,7 @@ class AtcBrain:
         pilot.climb_issued = False
         pilot.exit_gate = ""
         pilot.entry_gate = ""
+        pilot.readback_fails = 0
         return self._say("state_reset", callsign,
                          agency=self._agency(controller))
 
@@ -566,8 +673,11 @@ class AtcBrain:
                           low)
                 or any(re.search(rf"\b{re.escape(gate.lower())}\b", low)
                        for gate in self.gates)):
-            return self._say("readback_correct", callsign,
-                             agency=self.ground_short)
+            # Verify the readback against the clearance actually issued (kept in
+            # last_clearance), then confirm — flagging a miss, never blocking.
+            return self._check_readback(callsign, pilot, low,
+                                        pilot.last_clearance or pilot.last_reply,
+                                        Controller.GROUND)
         if re.search(r"\b(clearance|ready to copy|ifr)\b", low):
             pilot.phase = Phase.CLEARANCE
             gate = self._pick_exit_gate()
@@ -576,7 +686,9 @@ class AtcBrain:
             if self.airfield is not None:
                 turn = self.airfield.exit_turn(gate, self.runway)
             key = "departure_exit" if turn else "departure_exit_straight"
-            return self._say(key, callsign, gate=gate, turn=turn)
+            reply = self._say(key, callsign, gate=gate, turn=turn)
+            pilot.last_clearance = reply
+            return reply
         # Post-landing: taxi to parking (to a named ramp, or the nearest one).
         # Must come before the taxi readback, which also matches "taxi".
         if re.search(r"\b(taxi to parking|to parking|to the ramp|to ramp|"
@@ -599,8 +711,9 @@ class AtcBrain:
         if pilot.phase == Phase.TAXI and re.search(
                 r"\b(clear|cleared|copy|roger|via|taxi)\b", low) \
                 and not re.search(r"\bholding\b", low):
-            return self._say("readback_correct", callsign,
-                             agency=self.ground_short)
+            return self._check_readback(callsign, pilot, low,
+                                        pilot.last_clearance or pilot.last_reply,
+                                        Controller.GROUND)
         if re.search(r"\b(request(?:ing)?|asking for|like)\b.*\btaxi(?:ing)?\b"
                      r"|\btaxi(?:ing)?\b.*\b(startup|start up|start|runway)\b",
                      low):
@@ -612,7 +725,9 @@ class AtcBrain:
                 lat = track.lat if track is not None else None
                 lon = track.lon if track is not None else None
                 route = self.airfield.taxi_route(lat, lon, self.runway)
-            return self._say("taxi", callsign, taxi_route=route or "Sierra Echo")
+            reply = self._say("taxi", callsign, taxi_route=route or "Sierra Echo")
+            pilot.last_clearance = reply
+            return reply
         if re.search(r"\bhold(?:ing)? short\b", low) and pilot.phase == Phase.TAXI:
             # Cross-check the report against the live position: a pilot who
             # claims to be holding short but is still on the ramp gets

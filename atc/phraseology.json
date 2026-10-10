@@ -32,6 +32,7 @@
     "ground_info": "{callsign}, {ground}, runway {runway} in use, QNH {qnh}.",
     "ground_info_readback": "{callsign}, {ground}, readback correct, advise when ready for clearance.",
     "readback_correct": "{callsign}, {agency}, readback correct.",
+    "readback_incomplete": "{callsign}, {agency}, readback incomplete, I did not get your {item}. Continue.",
     "inbound_outside": "{callsign}, {tower}, roger, report entering the control zone, runway {runway} active.",
     "inbound_inside": "{callsign}, {tower}, radar contact {position}, cleared control zone entry, join {downwind} downwind runway {runway}.",
     "inbound_via_gate": "{callsign}, {tower}, roger, report entering the control zone via {gate}, runway {runway} active.",

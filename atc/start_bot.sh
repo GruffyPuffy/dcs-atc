@@ -28,10 +28,9 @@ fi
 cd "$atc_dir"
 mkdir -p "$atc_dir"
 
-# fresh session: clear last run's log and captured audio
+# fresh session: clear last run's log
 # (debrief trail files under atc/debrief/ are kept for later replay)
 rm -f /tmp/atc_log.txt
-rm -rf /tmp/atc_audio
 
 # Serve the live map by default, unless the caller already set --map-port.
 map_args=()

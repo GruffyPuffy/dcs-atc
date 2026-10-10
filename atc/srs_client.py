@@ -44,7 +44,8 @@ class SrsClient:
     per frequency. EAM password lets it transmit/receive without DCS running."""
 
     def __init__(self, host: str, port: int, name: str, freqs_hz: list[float],
-                 eam_password: str | None = None, coalition: int = 0):
+                 eam_password: str | None = None, coalition: int = 0,
+                 ignore_guids: set[str] | None = None):
         self.host = host
         self.port = port
         self.name = name
@@ -53,6 +54,11 @@ class SrsClient:
         self.coalition = coalition
         self.guid = new_guid()
         self.unit_id = 100000  # arbitrary non-zero, like ExternalAudioClient
+        # GUIDs whose audio this client must ignore. The bot runs several SRS
+        # clients (one per agency + ATIS); each must ignore the *others'*
+        # transmissions, or it hears the bot's own radio and answers it —
+        # a runaway echo loop.
+        self.ignore_guids: set[str] = set(ignore_guids or ())
 
         self._tcp: socket.socket | None = None
         self._udp: socket.socket | None = None
@@ -190,6 +196,10 @@ class SrsClient:
         except Exception:
             return
         if packet is None or not packet["audio_part1_bytes"]:
+            return
+        # Drop our own clients' transmissions (the other agency/ATIS clients run
+        # by this bot). Without this the bot hears its own radio and answers it.
+        if packet.get("original_client_guid") in self.ignore_guids:
             return
         try:
             opus_packet = av.Packet(packet["audio_part1_bytes"])

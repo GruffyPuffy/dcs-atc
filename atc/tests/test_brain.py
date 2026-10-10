@@ -214,7 +214,8 @@ def test_ground_clearance_readback_without_exit_word(brain):
 def test_ground_clearance_readback_correct(brain):
     brain.handle("Ground, Colt 1, ready to copy clearance",
                  controller=Controller.GROUND)
-    reply = brain.handle("After departure turn right Exit East, 1500 ft or below, Colt 1",
+    # Runway 25 assigns Exit West; a correct, complete readback is confirmed.
+    reply = brain.handle("After departure turn right Exit West, 1500 ft or below, Colt 1",
                          controller=Controller.GROUND)
     assert "readback correct" in reply
 
@@ -232,6 +233,59 @@ def test_taxi_readback_tolerates_stt_clear(brain):
     reply = brain.handle("Clear taxi, and hold short runway 25, Colt 1",
                          controller=Controller.GROUND)
     assert "readback correct" in reply
+
+
+def test_clearance_readback_missing_altitude_is_flagged_incomplete(brain):
+    """An incomplete readback is NOT called correct — it is flagged and continued."""
+    brain.handle("Ground, Colt 1, ready to copy clearance",
+                 controller=Controller.GROUND)
+    # Gate ("West") is read back but the "1500 ft" altitude is not.
+    reply = brain.handle("After departure turn right Exit West, Colt 1",
+                         controller=Controller.GROUND)
+    low = reply.lower()
+    assert "readback incomplete" in low
+    assert "altitude" in low
+    assert "continue" in low
+    assert "readback correct" not in low  # honest: it was not correct
+
+
+def test_clearance_readback_incomplete_never_says_correct(brain):
+    brain.handle("Ground, Colt 1, ready to copy clearance",
+                 controller=Controller.GROUND)
+    reply = brain.handle("After departure turn right West, Colt 1",  # miss altitude
+                         controller=Controller.GROUND)
+    assert "readback incomplete" in reply.lower()
+    assert "readback correct" not in reply.lower()
+
+
+def test_repeated_readback_attempts_are_safe(brain):
+    """A pilot who insists on readbacks must not corrupt the state machine.
+
+    The clearance readback is idempotent: repeating it keeps re-flagging the
+    miss and never advances or breaks the phase.
+    """
+    brain.handle("Ground, Colt 1, ready to copy clearance",
+                 controller=Controller.GROUND)
+    assert brain.pilots["Colt 1"].phase == Phase.CLEARANCE
+    for _ in range(3):
+        reply = brain.handle("After departure turn right West, Colt 1",
+                             controller=Controller.GROUND)
+        assert "readback incomplete" in reply.lower()
+        assert brain.pilots["Colt 1"].phase == Phase.CLEARANCE  # unchanged
+    # A correct readback then confirms and still leaves the phase at CLEARANCE
+    # (the pilot proceeds to taxi when ready).
+    reply = brain.handle("After departure turn right West, 1500 ft or below, Colt 1",
+                         controller=Controller.GROUND)
+    assert "readback correct" in reply.lower()
+    assert brain.pilots["Colt 1"].phase == Phase.CLEARANCE
+
+
+def test_readback_numbers_accept_spoken_digits():
+    from brain import AtcBrain
+    assert "25" in AtcBrain._numbers("runway two five")
+    assert "2992" in AtcBrain._numbers("qnh two niner niner two")
+    assert "1500" in AtcBrain._numbers("one five zero zero feet")
+    assert "070" in AtcBrain._numbers("heading zero seven zero")
 
 
 def test_takeoff_readback_after_clearance_gets_roger(brain):
