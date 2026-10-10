@@ -100,16 +100,30 @@ def test_speaker_resolution_prefers_known_and_resembling_pilot():
     assert brain.pilots["Springfield 1"].phase.value == "Landing"
 
 
-def test_speaker_resolution_not_applied_to_content_opening_calls():
+def test_known_speaker_attributed_even_for_content_opening_calls():
     from brain import AtcBrain, Controller
     reg = CallsignRegistry(["Springfield", "Colt"])
     brain = AtcBrain(callsigns=reg)
     brain.set_pilot_count(1)
     brain.set_active_pilots(["Springfield 1"])
     brain.remember_speaker("Caveman", "Springfield 1")
-    # No callsign, no resemblance -> the solo "say again with your callsign".
+    # A readback that opens with content and names no callsign is still
+    # attributed to the known speaker (we know who is on the radio), so the
+    # pilot is not forced to repeat just to satisfy STT.
     reply = brain.handle("Cleared taxi Sierra Echo and hold short runway 25",
                          controller=Controller.GROUND, speaker="Caveman")
+    assert reply and "Springfield 1" in reply
+
+
+def test_unknown_speaker_content_opening_call_is_not_guessed():
+    from brain import AtcBrain, Controller
+    reg = CallsignRegistry(["Springfield", "Colt"])
+    brain = AtcBrain(callsigns=reg)
+    brain.set_pilot_count(1)
+    brain.set_active_pilots(["Springfield 1"])
+    # No learned speaker and no resemblance -> the solo "say again" prompt.
+    reply = brain.handle("Cleared taxi Sierra Echo and hold short runway 25",
+                         controller=Controller.GROUND, speaker="Stranger")
     assert "say again" in reply.lower()
 
 

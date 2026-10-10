@@ -14,10 +14,16 @@ const markers = new Map();  // callsign -> L.marker
 const aiMarkers = new Map();
 const paths = new Map();    // callsign -> L.polyline
 const commMarkers = new Map();  // callsign -> L.layerGroup
+// Which comm popup the user wants open (null = none). The map redraws every
+// 2 s, so we reopen only the popup the user actually opened, and a map click
+// clears this so a dismissed popup stays dismissed.
+let commPopupKey = null;
 
 function initMap(center) {
   map = L.map('map', { preferCanvas: true }).setView(center, 11);
   window.map = map;  // handy for debugging in the browser console
+  // Clicking the map (not a marker) dismisses any open comm popup for good.
+  map.on('click', () => { commPopupKey = null; });
   // The base layer is set from the server payload (OSM or DCS tiles) on the
   // first snapshot; start with OSM so the map renders immediately.
   baseLayer = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -241,10 +247,9 @@ function drawComms(ac) {
   let group = commMarkers.get(ac.callsign);
   if (!group) { group = L.layerGroup().addTo(commLayer); commMarkers.set(ac.callsign, group); }
   // The map redraws every 2s, which would close an open popup. Remember which
-  // comm log is open (Leaflet keeps the open popup on the map) BEFORE clearing
-  // the layer, and reopen it after — so a log stays up until clicked closed.
-  const openKey = (map._popup && map._popup._source
-                   && map._popup._source._commKey) || null;
+  // comm log the user wants open BEFORE clearing the layer (clearLayers fires
+  // popupclose, which would otherwise clear the intent), and reopen it after.
+  const wantKey = commPopupKey;
   group.clearLayers();
 
   const EPS = 0.0007;  // ~75 m: below this, treat two calls as the same place
@@ -296,7 +301,14 @@ function drawComms(ac) {
       // reopen it (the redraw cleared the layer, which closed the popup).
       const key = `${cl.lat.toFixed(5)},${cl.lon.toFixed(5)}`;
       marker._commKey = key;
-      if (key === openKey) marker.openPopup();
+      // A popup that reopens on every 2 s redraw can never be dismissed by
+      // clicking the map (the redraw reopens it). Track the user's intent: a
+      // map click closes it for good; clicking the marker toggles it.
+      marker.on('popupopen', () => { commPopupKey = key; });
+      marker.on('popupclose', () => {
+        if (commPopupKey === key) commPopupKey = null;
+      });
+      if (key === wantKey) marker.openPopup();
     }
   }
 }

@@ -36,19 +36,24 @@ BUST_LINE = "Ghost Rider, you just busted my tower. The pattern is full. Knock i
 # A request to fly at/through the tower: "request to bust the tower", "buzz the
 # tower", "tower flyby", "beat up the field", "low pass the tower", "beat up the
 # pattern", or the film's own "requesting a flyby" (no field named).
+#
+# STT often mangles "bust" ("Bosto Tower", "busted", "bustin'"), so the stunt
+# verb accepts those variants too — otherwise a garbled "request to Bosto Tower"
+# is just "say again" and the gag never fires.
+_BUST = r"bust\w*|bost\w*"
 _REQUEST = re.compile(
     r"\b(?:"
     # a request verb + a stunt (the tower is optional, as in "request flyby")
     r"(?:request(?:ing)?(?:\s+(?:to|a))?|like\s+to|want\s+to|ask(?:ing)?\s+to|"
     r"cleared\s+to|may\s+i|can\s+i)\s+"
-    r"(?:bust|buzz|beat\s+up|fly\s?by|flyby|low\s?pass|low\s+approach|"
+    r"(?:" + _BUST + r"|buzz|beat\s+up|fly\s?by|flyby|low\s?pass|low\s+approach|"
     r"wave\s+the\s+wings|bomb|rock)\b"
     r"|"
     # a bare stunt aimed at the tower
-    r"(?:bust|buzz|beat\s+up|fly\s?by|flyby|low\s?pass|low\s+approach|"
+    r"(?:" + _BUST + r"|buzz|beat\s+up|fly\s?by|flyby|low\s?pass|low\s+approach|"
     r"bomb|rock)\b"
     r".*?\btower\b"
-    r"|\btower\b.*?\b(?:flyby|fly\s?by|buzz|bust)\b"
+    r"|\btower\b.*?\b(?:flyby|fly\s?by|buzz|" + _BUST + r")\b"
     r"|\bbeat\s+up\s+the\s+(?:field|pattern)\b"
     r")",
     re.IGNORECASE,

@@ -279,8 +279,14 @@ def main() -> None:
 
     def speak(text: str, freq: int = freq_hz, voice=None,
               controller: Controller | None = None,
-              agency: str | None = None) -> None:
-        """TTS the reply in the given voice and transmit it on the frequency."""
+              agency: str | None = None, log_chatter: bool = True) -> None:
+        """TTS the reply in the given voice and transmit it on the frequency.
+
+        `log_chatter=False` transmits but does not record the line in the log /
+        map chatter — used for a repeated ATIS broadcast (identical every
+        interval), so the log only shows the first broadcast and each change of
+        the information letter.
+        """
         # TopGun easter egg: if the reply is the canonical denial, play the
         # drop-in clip instead of synthesising the line (its presence is the
         # switch; see topgun.enabled()).
@@ -313,8 +319,9 @@ def main() -> None:
                     wav.writeframes(pcm48k)
         tag = f"[{controller.value}] " if controller else ""
         log(f"{tag}ATC (tx): \"{text}\"")
-        chatter("tx", freq, agency or (controller.value if controller else "atc"),
-                text, agency or controller)
+        if log_chatter:
+            chatter("tx", freq, agency or (controller.value if controller else "atc"),
+                    text, agency or controller)
 
     def freq_for(controller: Controller) -> float:
         """Frequency (Hz) for a controller role, for the chatter log."""
@@ -684,16 +691,23 @@ def main() -> None:
         return report
 
     def atis_loop() -> None:
-        """Broadcast ATIS on its own frequency at a fixed interval."""
+        """Broadcast ATIS on its own frequency at a fixed interval.
+
+        The broadcast repeats every interval, so it is only *logged* on the
+        first broadcast and whenever the information letter changes — otherwise
+        the log/chatter would be flooded with identical ATIS lines.
+        """
         last_letter = None
         while True:
             report = refresh_weather()
             if report is not None:
-                if report.information != last_letter:
+                changed = report.information != last_letter
+                if changed:
                     log(f"ATIS {report.information}: runway {report.active_runway}, "
                         f"QNH {report.qnh_inhg:.2f}")
                     last_letter = report.information
-                speak(report.broadcast(), atis_hz, atis_voice, agency="atis")
+                speak(report.broadcast(), atis_hz, atis_voice, agency="atis",
+                      log_chatter=changed)
             time.sleep(args.atis_interval)
 
     def weather_loop() -> None:

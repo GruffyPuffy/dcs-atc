@@ -516,10 +516,16 @@ class AtcBrain:
             if name and re.search(r"\b(help|assist|what do i do|what now|"
                                   r"remind me)\b", text.lower()):
                 return self._help(name, self._pilot(name))
-            # Training heuristic: attribute a garbled transmission to a known
-            # pilot when the text still resembles their callsign (e.g.
-            # "Spring fail 1-1" from the one pilot online).
-            callsign = self._resolve_speaker(text, speaker)
+            # A speaker we have already identified is trusted: use their own
+            # callsign even when this transmission did not name it. STT often
+            # drops or mangles the callsign, and we already know who is on the
+            # radio (SRS player name -> callsign), so a good experience beats
+            # testing the STT. Falls back to the resemblance heuristic.
+            own = self.callsign_for_speaker(speaker) if speaker else ""
+            if own and own != speaker:
+                callsign = own
+            else:
+                callsign = self._resolve_speaker(text, speaker)
         if not callsign:
             # Solo training: a transmission we cannot tie to a callsign gets a
             # spoken "say again" prompt, so the pilot knows they were heard but
@@ -564,7 +570,10 @@ class AtcBrain:
 
         # Hidden TopGun easter egg (env-gated). A request to bust/buzz the tower
         # gets the film's canned denial and arms the stunt; it changes no phase.
-        if topgun.enabled():
+        # Only Tower and Control handle it — a request on Ground is just "say
+        # again" (you ask the tower, not the ramp), so the gag is not too easy.
+        if topgun.enabled() and controller in (Controller.TOWER,
+                                               Controller.CONTROL):
             if topgun.spike(low):
                 self._topgun_armed.add(callsign)
                 return topgun.NEGATIVE_LINE
@@ -870,8 +879,12 @@ class AtcBrain:
             return self._say("cleared_overhead", callsign,
                              flight=self._formation_prefix(pilot))
         # Arrival check-in at the entry point: "Tower, Adder11, Entry East" ->
-        # "report runway in sight".
-        if re.search(r"\bentry\b", low):
+        # "report runway in sight". STT often drops "entry" (e.g. "Chevy 1 and
+        # 3 East"), so once the flight is inbound we also accept a bare gate
+        # direction as the entry report.
+        if re.search(r"\bentry\b", low) or (
+                pilot.phase in (Phase.INBOUND, Phase.LANDING)
+                and self._spoken_gate(low)):
             pilot.phase = Phase.INBOUND
             pilot.cleared_inbound = True
             return self._say("report_runway_in_sight", callsign)
@@ -1008,6 +1021,14 @@ class AtcBrain:
         if re.search(r"\b(airborne|climbing|departing|departed|level|"
                      r"angels|on the way|at \d+|checking in|with you)\b", low):
             pilot.phase = Phase.AIRBORNE
+            # A pilot who checks in with Control while still inside the CTR
+            # (below the ceiling) is on the wrong frequency: Tower owns the
+            # zone up to the ceiling. Real Control would not clear them up
+            # through the zone — it tells them to stay low until clear. As a
+            # trainer we guide them back rather than issue the climb.
+            if self._inside_ctr(track):
+                return self._say("control_too_early", callsign,
+                                 gate=self._departure_gate(pilot))
             if pilot.climb_issued:
                 return self._say("readback_correct", callsign,
                                  agency=self.control_short)
@@ -1051,6 +1072,21 @@ class AtcBrain:
                 return f"Exit {gate}"
         gate = self.gates[0] if self.gates else "North"
         return f"Exit {gate}"
+
+    def _inside_ctr(self, track: AircraftTrack | None) -> bool:
+        """True if the aircraft is inside the CTR footprint below the ceiling.
+
+        Used to catch a departure that checks in with Control too early: Tower
+        owns the zone up to the ceiling, so Control must not clear them up
+        through it. Without a live track we cannot tell, so we do not block.
+        """
+        if track is None or self.airfield is None:
+            return False
+        return self.airfield.ctr.contains(track.lat, track.lon, track.alt_ft)
+
+    def _departure_gate(self, pilot: PilotState) -> str:
+        """The departure exit gate to name (assigned, else the runway default)."""
+        return pilot.exit_gate or self._pick_exit_gate()
 
     def _pick_entry_gate(self, track: AircraftTrack | None,
                          low: str = "", pilot: PilotState | None = None) -> str:
@@ -1247,7 +1283,13 @@ class AtcBrain:
         if not on_runway:
             pilot.incursion_warned = False
             return None
-        if pilot.phase in (Phase.LINEUP, Phase.DEPARTURE, Phase.LANDING):
+        # A pilot in Departure or Landing is legitimately on the runway. So is
+        # one in Lineup ("line up and wait" puts them there) and one in
+        # **Airborne** — a departing aircraft climbing out over the runway
+        # corridor is not an incursion (this fired a false "vacate immediately"
+        # right after takeoff, once the pilot called "airborne").
+        if pilot.phase in (Phase.LINEUP, Phase.DEPARTURE, Phase.AIRBORNE,
+                           Phase.LANDING):
             return None
         if pilot.incursion_warned:
             return None

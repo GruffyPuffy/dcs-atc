@@ -31,8 +31,38 @@ def test_light_path_departure(airfield, brain):
     assert "cleared for takeoff" in r.lower()
     r = sc.say("Tower, Colt 1, airborne", Controller.TOWER)
     assert "contact Control" in r
+    # Clear of the CTR (the realistic point to check in with Control).
+    sc.at_gate("East").set_alt(airfield.elevation_ft + 1500)
     r = sc.say("Control, Colt 1, at 1500 ft", Controller.CONTROL)
     assert "climb to Angels" in r
+
+
+def test_control_checkin_inside_ctr_does_not_clear_climb(airfield, brain):
+    # A departure that checks in with Control while still inside the CTR (below
+    # the ceiling) is on the wrong frequency: Tower owns the zone. Control must
+    # NOT clear them up through it — it tells them to stay low until clear.
+    sc = _scenario(airfield, brain).at_threshold("25")
+    sc.say("Tower, Colt 1, ready for departure", Controller.TOWER)
+    sc.say("Line up and wait 25, Colt 1", Controller.TOWER)   # -> Departure
+    sc.say("Tower, Colt 1, airborne", Controller.TOWER)       # -> Airborne
+    # Still inside the CTR, low: check in with Control too early.
+    sc.at_runway("25", along_nm=0.5).set_alt(airfield.elevation_ft + 700)
+    r = sc.say("Control, Colt 1, at 700 feet", Controller.CONTROL)
+    assert "climb to Angels" not in r
+    assert "remain below" in r.lower()
+    assert not brain.pilots["Colt 1"].climb_issued
+
+
+def test_control_checkin_outside_ctr_clears_climb(airfield, brain):
+    # Once clear of the CTR, the normal departure check-in clears the climb.
+    sc = _scenario(airfield, brain).at_threshold("25")
+    sc.say("Tower, Colt 1, ready for departure", Controller.TOWER)
+    sc.say("Line up and wait 25, Colt 1", Controller.TOWER)
+    sc.say("Tower, Colt 1, airborne", Controller.TOWER)
+    sc.at_gate("East").set_alt(airfield.elevation_ft + 1500)  # outside the CTR
+    r = sc.say("Control, Colt 1, at 1500 ft", Controller.CONTROL)
+    assert "climb to Angels 15" in r
+    assert brain.pilots["Colt 1"].climb_issued
 
 
 def test_light_path_return_and_landing(airfield, brain):
@@ -553,7 +583,8 @@ def test_full_lifecycle_all_pages(airfield, brain):
     assert "contact Control" in r
     assert sc.phase() == Phase.AIRBORNE
 
-    # Control: departure check-in -> climb.
+    # Control: departure check-in -> climb (clear of the CTR).
+    sc.at_gate("East").set_alt(airfield.elevation_ft + 1500)
     r = sc.say("Control, Colt 1, at 1500 ft", Controller.CONTROL)
     assert "climb to Angels 15" in r
     assert sc.phase() == Phase.AIRBORNE
@@ -730,3 +761,15 @@ def test_runway_incursion_fires_once(airfield, brain):
     assert brain.check_incursion("Colt 1", on_runway=True) is None
     brain.check_incursion("Colt 1", on_runway=False)  # re-arm
     assert brain.check_incursion("Colt 1", on_runway=True) is not None
+
+
+def test_runway_incursion_silent_after_airborne_call(airfield, brain):
+    # A departing aircraft that has called "airborne" (phase Airborne) is
+    # climbing out over the runway corridor — NOT an incursion. This fired a
+    # false "vacate immediately" right after takeoff in a live test.
+    sc = _scenario(airfield, brain).at_threshold("25")
+    sc.say("Tower, Colt 1, ready for departure", Controller.TOWER)
+    sc.say("Line up and wait 25, Colt 1", Controller.TOWER)  # -> Departure
+    sc.say("Tower, Colt 1, airborne", Controller.TOWER)      # -> Airborne
+    assert brain.pilots["Colt 1"].phase == Phase.AIRBORNE
+    assert brain.check_incursion("Colt 1", on_runway=True) is None

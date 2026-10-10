@@ -56,6 +56,7 @@
     "control_contact": "{callsign}, {control}, radar contact.",
     "control_ack": "{callsign}, {control}.",
     "control_climb": "{callsign}, {control}, radar contact, climb to Angels {angels}.",
+    "control_too_early": "{callsign}, {control}, roger, remain below {altitude} until clear of the control zone via {gate}.",
     "control_descend": "{callsign}, {control}, descend to {descent_altitude}.",
     "go_around": "{callsign}, {tower}, go around, runway {runway} is occupied.",
     "altitude_bust": "{callsign}, {tower}, you are leaving the control zone, contact {control} on channel {channel}.",

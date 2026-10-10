@@ -58,11 +58,13 @@ STT mangles callsigns, so matching is tolerant:
   `Springfield`), and a **fuzzy recovery** (edit distance, capped and
   margin-checked) catches mishearings the rules miss — but only when a flight
   number is present, so a bare word never becomes a callsign.
-- **speaker attribution** (training heuristic): if a transmission carries no
-  callsign but *resembles* a known pilot's flight name, it is attributed to
-  them — the pilot who previously used that callsign, or (solo) the only pilot
-  online who matches. Readbacks that open with the content (e.g. "Cleared
-  taxi …") do **not** resemble a name, so they are never silently guessed.
+- **speaker attribution** (training heuristic): a transmission that carries no
+  callsign is attributed to the **known speaker** — once we have learned who is
+  on the radio (SRS player name → callsign), their callsign is used even when
+  STT dropped or mangled it, so the pilot is not forced to repeat just to
+  satisfy STT. A speaker we have **never** identified is not guessed at on a
+  multi-pilot server; in solo training, a call that *resembles* the only pilot
+  online is attributed to them.
 - flight numbers accept digits or spoken words, including homophones
   (`one`/`won`, `two`/`to`/`too`, `three`/`tree`, `four`/`for`, `eight`/`ate`)
 - both `Colt 1` and `Colt 1-1` (flight + element) are recognised
@@ -494,8 +496,9 @@ The altitude-bust check uses a **horizontal-only** containment test
 (`ControlZone.contains_horizontal`) so an aircraft inside the CTR footprint but
 above the ceiling is caught; pilots already talking to Control
 (`Airborne`/`Inbound`/`Landing`) are exempt, since they are cleared above the
-CTR. The incursion check exempts pilots in the `Departure`/`Landing` phases,
-who are legitimately on the runway.
+CTR. The incursion check exempts pilots in the `Lineup`/`Departure`/`Airborne`/
+`Landing` phases, who are legitimately on the runway (a departing aircraft
+climbing out over the runway corridor is not an incursion).
 
 ### Traffic sequencing (players + AI)
 
@@ -671,6 +674,11 @@ weather every `--atis-interval` seconds and updates the brain, so taxi, takeoff
 and landing clearances use the same runway the ATIS is advertising, and the
 spoken wind matches the live weather (e.g. "wind 070 at 8").
 
+The broadcast **repeats** every interval, so it is only written to the log /
+map chatter on the **first broadcast** and whenever the **information letter
+changes** — otherwise the log would be flooded with identical ATIS lines. (The
+audio still plays every interval; only the logging is throttled.)
+
 ## 11. Controllers (Ground / Tower / Control)
 
 The bot answers on **three frequencies**, each mapped to a controller role. The
@@ -756,7 +764,12 @@ never broadcast their arrival; pilots call them). Disable it with
   page 2): Control hands off right after the descend readback — there is no
   separate "passing the entry point" call, and Control never re-issues the join.
 - "airborne" / "climbing" / "at 1500 ft" / "checking in" (departure check-in) →
-  *"radar contact, climb to Angels 15"*.
+  *"radar contact, climb to Angels 15"*. If the pilot checks in while **still
+  inside the CTR** (below the ceiling), Control does **not** clear them up
+  through the zone — Tower owns it up to the ceiling — and instead guides them:
+  *"roger, remain below 1500 ft until clear of the control zone via Exit
+  West"*. (Real Control would tell the pilot they are still with Tower; as a
+  trainer we name the exit and the altitude so the pilot learns the boundary.)
 - "on final" / "runway in sight" / "overhead" → handoff to Tower:
   *"contact Tower on channel 7"*.
 

@@ -343,6 +343,23 @@ def test_tower_entry_call_reports_runway_in_sight(brain):
     assert "report runway in sight" in reply
 
 
+def test_entry_report_accepted_without_the_word_entry(brain):
+    # STT often drops "entry" ("Chevy 1 and 3 East"). Once the flight is
+    # inbound, a bare gate direction is accepted as the entry report.
+    brain.handle("Control, Colt 1, inbound 35 miles north at Angels 12",
+                 controller=Controller.CONTROL)
+    assert brain.pilots["Colt 1"].phase == Phase.INBOUND
+    reply = brain.handle("Tower, Colt 1, and 3 East", controller=Controller.TOWER)
+    assert "report runway in sight" in reply
+
+
+def test_bare_gate_direction_ignored_before_inbound(brain):
+    # A gate direction with no "entry" and no inbound phase is not an entry
+    # report (e.g. a departure readback mentioning a gate) — no false trigger.
+    reply = brain.handle("Tower, Colt 1, East", controller=Controller.TOWER)
+    assert reply is None or "report runway in sight" not in reply
+
+
 def test_ground_taxiing_variant(brain):
     # "taxiing" (not just "taxi") must match
     reply = brain.handle("Ground, Colt 1, one ship Hornets, taxiing to runway 25",
@@ -505,6 +522,25 @@ def test_comma_separated_callsign_is_attributed(brain):
                          speaker="Caveman")
     assert reply is not None and "Springfield 1" in reply
     assert "Springfield 1" in brain.pilots
+
+
+def test_known_speaker_callsign_used_when_stt_drops_it(brain):
+    # Once we know who is on the radio (SRS name -> callsign), a transmission
+    # that does not name the callsign is still attributed to them — STT often
+    # drops it, and we should not make the pilot repeat just to satisfy STT.
+    brain.remember_speaker("Caveman", "Colt 1")
+    reply = brain.handle("requesting taxi", controller=Controller.GROUND,
+                         speaker="Caveman")
+    assert reply is not None and "Colt 1" in reply
+    assert "Colt 1" in brain.pilots
+
+
+def test_unknown_speaker_still_needs_a_callsign(brain):
+    # A speaker we have never identified is not guessed at (multiplayer): the
+    # call is ignored rather than attributed to the wrong flight.
+    brain.set_pilot_count(3)
+    assert brain.handle("requesting taxi", controller=Controller.GROUND,
+                        speaker="Stranger") is None
 
 
 def test_arrival_ready_for_departure_is_guided_not_cleared(brain):

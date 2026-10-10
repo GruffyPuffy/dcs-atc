@@ -27,6 +27,19 @@ def test_spike_matches_the_stunt_requests():
         assert topgun.spike(text), text
 
 
+def test_spike_tolerates_stt_mangling_of_bust():
+    # STT often hears "bust" as "Bosto"/"Bost"/"busted" — the gag must still
+    # fire, or a garbled request is just "say again" and the egg never triggers.
+    for text in [
+        "Chevy 1, request to Bosto Tower.",
+        "Chevy One, Bust Tower.",
+        "Chevy 1, request to Bost Tower",
+        "Chevy 1, request to busted tower",
+        "Chevy 1, request to bustin' the tower",
+    ]:
+        assert topgun.spike(text), text
+
+
 def test_spike_ignores_normal_calls():
     for text in [
         "Colt 1, request taxi to runway 25",
@@ -135,6 +148,29 @@ def test_brain_normal_flow_unaffected(tmp_path, monkeypatch):
                          controller=Controller.GROUND, speaker="stefan")
     assert "taxi" in reply.lower()
     assert not brain.topgun_armed("Colt 1")
+
+
+def test_brain_ignores_spike_on_ground(tmp_path, monkeypatch):
+    # You ask the tower, not the ramp: a "bust the tower" request on Ground is
+    # just "say again" and must NOT arm the gag (it should not be too easy).
+    (tmp_path / "topgun_negative.wav").write_bytes(b"RIFF....")
+    monkeypatch.setenv("ATC_TOPGUN_AUDIO", str(tmp_path))
+    brain = AtcBrain()
+    reply = brain.handle("Chevy 1, request to Bosto Tower",
+                         controller=Controller.GROUND, speaker="stefan")
+    assert reply != topgun.NEGATIVE_LINE
+    assert not brain.topgun_armed("Chevy 1")
+
+
+def test_brain_arms_spike_on_control(tmp_path, monkeypatch):
+    # Control is a valid frequency for the request (as is Tower).
+    (tmp_path / "topgun_negative.wav").write_bytes(b"RIFF....")
+    monkeypatch.setenv("ATC_TOPGUN_AUDIO", str(tmp_path))
+    brain = AtcBrain()
+    reply = brain.handle("Chevy 1, request to Bosto Tower",
+                         controller=Controller.CONTROL, speaker="stefan")
+    assert reply == topgun.NEGATIVE_LINE
+    assert brain.topgun_armed("Chevy 1")
 
 
 # ---------- bust timer (close + low + fast, held) ----------
