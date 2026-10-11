@@ -49,7 +49,7 @@ fi
 # the SRS service name. An explicit --host on the command line still wins.
 srs_host="${ATC_SRS_HOST:-127.0.0.1}"
 
-# Whisper STT: by default the bot auto-selects (large-v3-turbo on a GPU,
+# Whisper STT: by default the bot auto-selects (large-v3 on a GPU,
 # medium.en on CPU). Override with ATC_STT_MODEL / ATC_STT_DEVICE /
 # ATC_STT_COMPUTE (e.g. ATC_STT_MODEL=small.en on a low-power host). An explicit
 # --stt-* on the command line still wins.

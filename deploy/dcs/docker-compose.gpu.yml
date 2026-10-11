@@ -4,7 +4,7 @@
 #     -f docker-compose.gpu.yml up -d atc-bot
 # (or ./scripts/dcs.sh atc-up-gpu).
 #
-# With a GPU the bot auto-selects large-v3-turbo (accurate + fast); without this
+# With a GPU the bot auto-selects large-v3 (accurate + fast); without this
 # override it runs on CPU with medium.en.
 name: dcs-atc
 
@@ -12,8 +12,10 @@ services:
   atc-bot:
     environment:
       # Install the CUDA runtime libs (cuBLAS/cuDNN) and use the GPU.
+      # Device stays "auto": it picks CUDA when the GPU is visible, but falls
+      # back to CPU instead of crashing if the CUDA libs fail to load.
       ATC_GPU: "1"
-      ATC_STT_DEVICE: "cuda"
+      ATC_STT_DEVICE: "auto"
     deploy:
       resources:
         reservations:

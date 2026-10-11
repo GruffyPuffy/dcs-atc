@@ -25,7 +25,7 @@ srs-autoconnect  Install the SRS auto-connect announcer hook (port-only by defau
   atc-up-gpu Start the ATC bot container with GPU (needs nvidia-container-toolkit)
   atc-down  Stop the ATC bot container
   atc-logs  Follow the ATC bot container logs (Ctrl+C to exit)
-  atc-update Restart the ATC bot container (pulls latest on start)
+  atc-update Recreate the ATC bot container (pulls latest on start; keeps GPU mode)
   help      Show this help
 EOF
 }
@@ -57,6 +57,27 @@ require_docker() {
     echo "Docker Engine and the Compose plugin are required. See deploy/dcs/README.md." >&2
     exit 1
   fi
+}
+
+# Preflight for GPU mode: the driver must be present and Docker must have the
+# NVIDIA runtime registered (from the NVIDIA Container Toolkit). Without this
+# the container fails with a cryptic "could not select device driver" error.
+require_gpu() {
+  if ! command -v nvidia-smi >/dev/null 2>&1; then
+    echo "No NVIDIA driver found (nvidia-smi missing). Install the driver first." >&2
+    exit 1
+  fi
+  if ! docker info 2>/dev/null | grep -qi 'nvidia'; then
+    echo "Docker has no NVIDIA runtime registered. Install the NVIDIA Container Toolkit:" >&2
+    echo "  sudo ./scripts/install-nvidia-container.sh" >&2
+    exit 1
+  fi
+}
+
+# True if the running bot container was started in GPU mode (ATC_GPU=1).
+atc_gpu_running() {
+  docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' dcs-atc-bot 2>/dev/null \
+    | grep -q '^ATC_GPU=1'
 }
 
 require_data_disk() {
@@ -209,6 +230,7 @@ case "$command" in
     ;;
   atc-up-gpu)
     require_docker
+    require_gpu
     if ss -ltn 2>/dev/null | grep -q ':8090 '; then
       echo "Port 8090 is already in use (a host bot running?). Stop it first." >&2
       exit 1
@@ -227,9 +249,16 @@ case "$command" in
     ;;
   atc-update)
     require_docker
-    # The entrypoint pulls on start, so a restart is an update.
-    compose_atc restart atc-bot
-    echo "ATC bot restarting (pulls latest ${ATC_REF:-main} on start)."
+    # The entrypoint pulls on start, so a recreate is an update. Preserve GPU
+    # mode if the running container was started with the GPU override.
+    if atc_gpu_running; then
+      require_gpu
+      compose_atc_gpu up -d --force-recreate atc-bot
+      echo "ATC bot (GPU) restarting (pulls latest ${ATC_REF:-main} on start)."
+    else
+      compose_atc up -d --force-recreate atc-bot
+      echo "ATC bot restarting (pulls latest ${ATC_REF:-main} on start)."
+    fi
     ;;
   bridge)
     deploy_state_bridge

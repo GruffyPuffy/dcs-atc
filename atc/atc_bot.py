@@ -120,7 +120,7 @@ def resolve_stt(model: str | None, device: str, compute: str) -> tuple[str, str,
     """Pick (model, device, compute_type) for Whisper.
 
     `auto` device uses CUDA when a GPU is available, else CPU. `auto` compute is
-    float16 on GPU, int8 on CPU. `auto` model is large-v3-turbo on GPU (accurate
+    float16 on GPU, int8 on CPU. `auto` model is large-v3 on GPU (accurate
     and fast there) and medium.en on CPU (accurate enough, runs on ~4 cores).
     An explicit value for any of the three always wins.
     """
@@ -155,7 +155,7 @@ def main() -> None:
                         help="SRS client name (default: airfield tower name)")
     parser.add_argument("--eam", default=None, help="External AWACS Mode password")
     parser.add_argument("--stt-model", default=None,
-                        help="Whisper model (default: auto — large-v3-turbo on "
+                        help="Whisper model (default: auto — large-v3 on "
                              "GPU, medium.en on CPU)")
     parser.add_argument("--stt-device", default="auto",
                         choices=["auto", "cpu", "cuda"],

@@ -19,7 +19,7 @@ ATC_SRS_HOST="${ATC_SRS_HOST:-srs-server}"
 ATC_STATE_HOST="${ATC_STATE_HOST:-dcs-server}"
 ATC_STATE_PORT="${ATC_STATE_PORT:-10309}"
 ATC_MAP_PORT="${ATC_MAP_PORT:-8090}"
-# STT: empty model/device/compute => the bot auto-selects (GPU: large-v3-turbo,
+# STT: empty model/device/compute => the bot auto-selects (GPU: large-v3,
 # CPU: medium.en). Set them to force a choice.
 ATC_STT_MODEL="${ATC_STT_MODEL:-}"
 ATC_STT_DEVICE="${ATC_STT_DEVICE:-}"
