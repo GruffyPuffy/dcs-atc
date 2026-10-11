@@ -209,7 +209,7 @@ case "$command" in
     require_docker
     # The entrypoint pulls on start, so a restart is an update.
     compose_atc restart atc-bot
-    echo "ATC bot restarting (pulls latest $ATC_REF on start)."
+    echo "ATC bot restarting (pulls latest ${ATC_REF:-main} on start)."
     ;;
   bridge)
     deploy_state_bridge
