@@ -19,6 +19,7 @@ ATC_SRS_HOST="${ATC_SRS_HOST:-srs-server}"
 ATC_STATE_HOST="${ATC_STATE_HOST:-dcs-server}"
 ATC_STATE_PORT="${ATC_STATE_PORT:-10309}"
 ATC_MAP_PORT="${ATC_MAP_PORT:-8090}"
+ATC_STT_MODEL="${ATC_STT_MODEL:-medium.en}"
 
 log() { echo "[atc-entrypoint] $*"; }
 
@@ -64,8 +65,8 @@ uv run python -m piper.download_voices \
 # airfield from atc/.control, so the map's Restart/Stop buttons work.
 # The SRS host comes from ATC_SRS_HOST (start_bot.sh reads it); the state host
 # is passed here. The map defaults to 8090 in start_bot.sh.
-export ATC_SRS_HOST
-log "Starting ATC bot (airfield=$ATC_AIRFIELD, debug=$ATC_DEBUG)..."
+export ATC_SRS_HOST ATC_STT_MODEL
+log "Starting ATC bot (airfield=$ATC_AIRFIELD, debug=$ATC_DEBUG, stt=$ATC_STT_MODEL)..."
 exec ./run_server.sh \
     --state-host "$ATC_STATE_HOST" --state-port "$ATC_STATE_PORT" \
     --airfield "$ATC_AIRFIELD" \

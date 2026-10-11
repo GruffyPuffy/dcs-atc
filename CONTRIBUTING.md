@@ -32,6 +32,7 @@ First run downloads the Whisper model (`small.en`); Piper voices are fetched int
     ./start_bot.sh --debug                 # richer logs + a saved debrief file
     ./start_bot.sh --tx-volume 0.6         # quieten loud ATC voices
     ./start_bot.sh --airfield Gudauta      # a different airfield
+    ATC_STT_MODEL=small.en ./start_bot.sh  # faster STT (default: medium.en)
     ./start_bot.sh --help                  # all options
 
 To restart the bot or switch airfield from the map page, use the supervisor:

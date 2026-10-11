@@ -83,6 +83,16 @@ names, and serves the map on `http://<host>:8090/` (LAN/VPN only).
 Only one bot may run at a time (it owns SRS as ATC and the map port). Stop the
 host bot before `atc-up`, and vice versa.
 
+**Speech-to-text model (CPU).** The bot transcribes pilot calls with Whisper on
+the CPU. The default is `medium.en` — accurate enough to hear callsigns reliably,
+at ~3 s per call on a modern CPU. On a **low-power host** (few cores / older
+CPU), switch to the faster, less accurate `small.en`:
+
+    ATC_STT_MODEL=small.en ./scripts/dcs.sh atc-up
+
+(Set it in `deploy/dcs/.env` to make it stick.) Rough guide: `medium.en` wants
+~4 CPU cores; `small.en` runs on ~2.
+
 With the bot running, tune your radio to the tower frequency and fly the MA
 flow: request clearance and taxi on Ground, line up and take off on Tower, then
 check in with Control. See the generated kneeboard cards (`kneeboard/`) for the

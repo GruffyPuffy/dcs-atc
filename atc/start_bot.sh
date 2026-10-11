@@ -49,6 +49,14 @@ fi
 # the SRS service name. An explicit --host on the command line still wins.
 srs_host="${ATC_SRS_HOST:-127.0.0.1}"
 
+# Whisper model: default medium.en (accurate callsigns); override with
+# ATC_STT_MODEL=small.en on a low-power host. An explicit --stt-model on the
+# command line still wins.
+stt_args=()
+if [[ " $* " != *" --stt-model "* ]]; then
+  stt_args=(--stt-model "${ATC_STT_MODEL:-medium.en}")
+fi
+
 echo "Starting ATC bot (log: /tmp/atc_log.txt) — Ctrl+C to stop."
 exec "$uv_bin" run atc_bot.py --host "$srs_host" --eam atc --log /tmp/atc_log.txt \
-  "${map_args[@]}" "$@"
+  "${map_args[@]}" "${stt_args[@]}" "$@"
