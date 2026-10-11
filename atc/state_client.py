@@ -259,6 +259,6 @@ class StateClient:
                               duration=duration)
         if not reply.get("ok"):
             return False
-        if player and reply.get("sent") != "player":
+        if player and (reply.get("result") or {}).get("sent") != "player":
             return False
         return True

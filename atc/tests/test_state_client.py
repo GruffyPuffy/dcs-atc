@@ -12,7 +12,7 @@ def test_message_sends_text_and_player(monkeypatch):
     def fake_exchange(op, **fields):
         seen["op"] = op
         seen.update(fields)
-        return {"ok": True, "sent": "player"}
+        return {"ok": True, "result": {"sent": "player"}}
 
     monkeypatch.setattr(client, "exchange", fake_exchange)
     assert client.message("RX Colt 1: request taxi", player="stefan") is True
@@ -33,11 +33,11 @@ def test_message_named_player_falls_back_to_broadcast_is_false(monkeypatch):
     # mission yet) must report False, so the join greeting retries.
     client = StateClient()
     monkeypatch.setattr(client, "exchange",
-                        lambda op, **fields: {"ok": True, "sent": "all"})
+                        lambda op, **fields: {"ok": True, "result": {"sent": "all"}})
     assert client.message("welcome", player="stefan") is False
     # A confirmed per-player delivery is True.
     monkeypatch.setattr(client, "exchange",
-                        lambda op, **fields: {"ok": True, "sent": "player"})
+                        lambda op, **fields: {"ok": True, "result": {"sent": "player"}})
     assert client.message("welcome", player="stefan") is True
 
 
