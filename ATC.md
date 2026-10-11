@@ -527,6 +527,7 @@ being asked. Each fires **once per event** and re-arms when the condition clears
 | **Go-around** | On final and the runway is occupied | "…go around, runway 25 is occupied." |
 | **Altitude bust** | Above the CTR ceiling while still under Tower/Ground control (not handed to Control) | "…you are leaving the control zone, contact Control on channel 8." |
 | **Runway incursion** | On the runway without a takeoff/landing clearance | "…you are on the runway without clearance, vacate immediately." |
+| **Departure climb** | A departure that checked in with Control while still inside the CTR has now left the zone | "…radar contact, climb to Angels 15." (Control watches on radar; no report needed) |
 
 The altitude-bust check uses a **horizontal-only** containment test
 (`ControlZone.contains_horizontal`) so an aircraft inside the CTR footprint but
@@ -825,6 +826,9 @@ never broadcast their arrival; pilots call them). Disable it with
   *"roger, remain below 1500 ft until clear of the control zone via Exit
   West"*. (Real Control would tell the pilot they are still with Tower; as a
   trainer we name the exit and the altitude so the pilot learns the boundary.)
+  Control then **watches on radar** and issues the climb itself as soon as the
+  aircraft leaves the zone (`check_departure_climb`, from the 2 s monitor) — the
+  pilot does **not** have to report again.
 - "on final" / "runway in sight" / "overhead" → handoff to Tower:
   *"contact Tower on channel 7"*.
 

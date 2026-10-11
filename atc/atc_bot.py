@@ -695,15 +695,18 @@ def main() -> None:
                         [brain.callsign_for_speaker(ac.player) for ac in players])
                 # Greet each newly-seen pilot with the radio setup, so they can
                 # tune in without reading the docs. Sent once per player (by
-                # DCS name) via the in-game message feed.
+                # DCS name) via the in-game message feed. Retry until the bridge
+                # confirms delivery: a pilot who joins while the mission is
+                # still loading is not yet in net.get_player_list, so the first
+                # attempt can silently fall back to a broadcast (or nothing).
                 for ac in players:
                     if ac.player and ac.player not in greeted:
-                        greeted.add(ac.player)
                         try:
-                            state.message("\n".join(radio_setup_lines()),
-                                          player=ac.player)
+                            if state.message("\n".join(radio_setup_lines()),
+                                             player=ac.player):
+                                greeted.add(ac.player)
                         except (OSError, RuntimeError):
-                            pass  # bridge down; best-effort
+                            pass  # bridge down; retry next tick
                 # Record the debrief trail whether or not the map page is open,
                 # so a completed sortie is saved even with no browser polling.
                 if map_service is not None:
@@ -796,6 +799,14 @@ def main() -> None:
                     if handoff:
                         log(f"LANDED: {callsign} ({ac.player}) -> Ground")
                         speak(handoff, controller=Controller.TOWER)
+                    # Departure climb: a departure that checked in with Control
+                    # while still inside the CTR is climbed once it leaves the
+                    # zone (Control watches on radar; no report needed).
+                    with lock:
+                        climb = brain.check_departure_climb(callsign, tr)
+                    if climb:
+                        log(f"CLIMB: {callsign} ({ac.player})")
+                        speak(climb, controller=Controller.CONTROL)
                     # Arrival descent: after the far-out step-down, Control
                     # issues the final "descend to 1500 feet" once the aircraft
                     # reaches the entry area.

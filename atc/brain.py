@@ -97,8 +97,12 @@ class PilotState:
     landing_handoff_announced: bool = False
     formation: int = 0  # flight size (2+ = multi-ship), learned from calls
     # Trainer aid: this pilot asked for the in-game comms mirror ("trainer,
-    # logs on"). Per-pilot, so each pilot controls their own feed.
+    # echo on"). Per-pilot, so each pilot controls their own feed.
     mirror_logs: bool = False
+    # Ground has issued the taxi-to-parking clearance. Guards against the
+    # readback ("cleared taxi to ramp north") re-matching the parking request
+    # (it contains "to ramp") and re-issuing the clearance forever.
+    parking_cleared: bool = False
     last_reply: str = ""  # last clearance, replayed on "say again"
     last_clearance: str = ""  # last clearance issued, for readback verification
     last_controller: str = ""  # last agency talked to (for the map view)
@@ -728,6 +732,7 @@ class AtcBrain:
         pilot.exit_gate = ""
         pilot.entry_gate = ""
         pilot.readback_fails = 0
+        pilot.parking_cleared = False
         pilot.awaiting_takeoff = False
         pilot.awaiting_landing = False
         pilot.takeoff_ready_announced = False
@@ -803,9 +808,14 @@ class AtcBrain:
             return reply
         # Post-landing: taxi to parking (to a named ramp, or the nearest one).
         # Must come before the taxi readback, which also matches "taxi".
-        if re.search(r"\b(taxi to parking|to parking|to the ramp|to ramp|"
-                     r"taxi to the ramp)\b", low):
+        # Guarded by `parking_cleared`: the readback ("cleared taxi to ramp
+        # north") contains "to ramp" and would otherwise re-issue the clearance
+        # forever.
+        if not pilot.parking_cleared and re.search(
+                r"\b(taxi to parking|to parking|to the ramp|to ramp|"
+                r"taxi to the ramp)\b", low):
             pilot.phase = Phase.TAXI
+            pilot.parking_cleared = True
             parking = self._spoken_parking(low)
             if parking is None and track is not None and self.airfield is not None:
                 parking = self.airfield.nearest_parking_area(track.lat, track.lon)
@@ -1303,6 +1313,24 @@ class AtcBrain:
                              altitude=f"{DESCENT_INTERMEDIATE_FT} feet")
         pilot.descend_issued = True
         return self._say("control_descend", callsign)
+
+    def check_departure_climb(self, callsign: str,
+                              track: AircraftTrack | None) -> str | None:
+        """Climb a departure once it is clear of the control zone.
+
+        A departure that checks in with Control while still inside the CTR is
+        told to remain below the ceiling (Tower owns the zone). Real Control
+        then watches on radar and issues the climb as soon as the aircraft
+        leaves the zone — the pilot does not have to report again. Fires once.
+        """
+        pilot = self._pilot(callsign)
+        if (pilot.phase != Phase.AIRBORNE or pilot.climb_issued
+                or track is None):
+            return None
+        if self._inside_ctr(track):
+            return None
+        pilot.climb_issued = True
+        return self._say("control_climb", callsign)
 
     def check_arrival_descent(self, callsign: str,
                               track: AircraftTrack | None) -> str | None:

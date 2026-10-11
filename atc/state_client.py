@@ -248,7 +248,17 @@ class StateClient:
                 duration: float = 8.0) -> bool:
         """Post text to the in-game chat/message log. To `player` by name when
         given (else the whole mission). Used by --debug to mirror the ATC radio
-        exchange back to the pilot. Returns True if the bridge accepted it."""
+        exchange back to the pilot.
+
+        Returns True only when the message was delivered to the *named* player
+        (or when no player was requested). A named send that falls back to a
+        mission-wide broadcast returns False, so a caller can retry until the
+        player is actually in the mission (e.g. the join greeting).
+        """
         reply = self.exchange("message", text=text, player=player,
                               duration=duration)
-        return bool(reply.get("ok"))
+        if not reply.get("ok"):
+            return False
+        if player and reply.get("sent") != "player":
+            return False
+        return True

@@ -65,6 +65,27 @@ def test_control_checkin_outside_ctr_clears_climb(airfield, brain):
     assert brain.pilots["Colt 1"].climb_issued
 
 
+def test_control_climbs_departure_on_radar_once_clear_of_ctr(airfield, brain):
+    # A departure that checked in too early (inside the CTR) is climbed by
+    # Control on radar once it leaves the zone — no second report needed.
+    sc = _scenario(airfield, brain).at_threshold("25")
+    sc.say("Tower, Colt 1, ready for departure", Controller.TOWER)
+    sc.say("Line up and wait 25, Colt 1", Controller.TOWER)
+    sc.say("Tower, Colt 1, airborne", Controller.TOWER)
+    sc.at_runway("25", along_nm=0.5).set_alt(airfield.elevation_ft + 700)
+    sc.say("Control, Colt 1, at 700 feet", Controller.CONTROL)  # too early
+    assert not brain.pilots["Colt 1"].climb_issued
+    # Still inside the CTR: no climb yet.
+    assert brain.check_departure_climb("Colt 1", sc._track()) is None
+    # Now clear of the CTR: Control issues the climb unprompted.
+    sc.at_gate("East").set_alt(airfield.elevation_ft + 1500)
+    call = brain.check_departure_climb("Colt 1", sc._track())
+    assert call and "climb to Angels 15" in call
+    assert brain.pilots["Colt 1"].climb_issued
+    # Fires once.
+    assert brain.check_departure_climb("Colt 1", sc._track()) is None
+
+
 def test_light_path_return_and_landing(airfield, brain):
     sc = _scenario(airfield, brain).at_gate("North")
     r = sc.say("Kutaisi Control, Colt 1, inbound 35 miles north at Angels 12",

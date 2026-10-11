@@ -446,6 +446,17 @@ def test_ground_taxi_to_parking_nearest_ramp(brain, airfield):
     assert "Ramp North" in reply
 
 
+def test_parking_readback_does_not_reissue_clearance(brain, airfield):
+    # The readback "cleared taxi to ramp north" contains "to ramp", which used
+    # to re-match the parking request and re-issue the clearance forever.
+    brain.handle("Ground, Colt 1, requesting taxi to Ramp North",
+                 controller=Controller.GROUND)
+    reply = brain.handle("Cleared taxi to ramp north via Alpha November, Colt 1",
+                         controller=Controller.GROUND)
+    assert "readback correct" in reply.lower()
+    assert "cleared taxi to" not in reply.lower()
+
+
 # ---------- Control ----------
 
 def test_control_inbound_routes_via_entry_gate(brain):
