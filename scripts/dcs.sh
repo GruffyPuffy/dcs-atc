@@ -22,6 +22,7 @@ srs-autoconnect  Install the SRS auto-connect announcer hook (port-only by defau
   srs-logs  Follow recent SRS server logs (Ctrl+C to exit)
   srs-status Show connected SRS clients (HTTP status API)
   atc-up    Start the ATC bot container (pulls latest main, syncs, runs)
+  atc-up-gpu Start the ATC bot container with GPU (needs nvidia-container-toolkit)
   atc-down  Stop the ATC bot container
   atc-logs  Follow the ATC bot container logs (Ctrl+C to exit)
   atc-update Restart the ATC bot container (pulls latest on start)
@@ -40,6 +41,15 @@ compose_atc() {
   docker compose --project-directory "$compose_dir" \
     -f "$compose_dir/docker-compose.yml" \
     -f "$compose_dir/docker-compose.atc.yml" "$@"
+}
+
+# Compose with the ATC bot + GPU override (needs nvidia-container-toolkit).
+compose_atc_gpu() {
+  prepare_env
+  docker compose --project-directory "$compose_dir" \
+    -f "$compose_dir/docker-compose.yml" \
+    -f "$compose_dir/docker-compose.atc.yml" \
+    -f "$compose_dir/docker-compose.gpu.yml" "$@"
 }
 
 require_docker() {
@@ -196,6 +206,16 @@ case "$command" in
     fi
     compose_atc up -d --build atc-bot
     echo "ATC bot starting. Follow it with: ./scripts/dcs.sh atc-logs"
+    ;;
+  atc-up-gpu)
+    require_docker
+    if ss -ltn 2>/dev/null | grep -q ':8090 '; then
+      echo "Port 8090 is already in use (a host bot running?). Stop it first." >&2
+      exit 1
+    fi
+    # Needs the NVIDIA Container Toolkit on the host (see INSTALL.md).
+    compose_atc_gpu up -d --build atc-bot
+    echo "ATC bot (GPU) starting. Follow it with: ./scripts/dcs.sh atc-logs"
     ;;
   atc-down)
     require_docker

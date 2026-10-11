@@ -81,6 +81,58 @@ def scale_pcm(pcm: bytes, factor: float) -> bytes:
     return np.clip(samples * factor, -32768, 32767).astype(np.int16).tobytes()
 
 
+def cuda_available() -> bool:
+    """True if a CUDA GPU is usable by CTranslate2 (faster-whisper's backend)."""
+    try:
+        import ctranslate2
+        return ctranslate2.get_cuda_device_count() > 0
+    except Exception:  # noqa: BLE001 - any failure means "no GPU"
+        return False
+
+
+def preload_cuda_libs() -> None:
+    """Preload cuBLAS/cuDNN from the `nvidia-*` pip packages, if present.
+
+    CTranslate2 loads these lazily at inference time; if they are only in the
+    pip package dirs (not on the loader path) the load fails with "Library
+    libcublas.so.12 is not found". Loading them here with RTLD_GLOBAL makes them
+    available. A no-op when the packages are absent (CPU-only installs).
+    """
+    import ctypes
+    import glob
+    import os
+    try:
+        import nvidia
+    except ImportError:
+        return
+    # `nvidia` is a namespace package (no __file__); use its search path(s).
+    bases = list(getattr(nvidia, "__path__", []) or [])
+    for base in bases:
+        for pattern in ("cublas/lib/libcublas*.so*", "cudnn/lib/libcudnn*.so*"):
+            for path in sorted(glob.glob(os.path.join(base, pattern))):
+                try:
+                    ctypes.CDLL(path, mode=ctypes.RTLD_GLOBAL)
+                except OSError:
+                    pass
+
+
+def resolve_stt(model: str | None, device: str, compute: str) -> tuple[str, str, str]:
+    """Pick (model, device, compute_type) for Whisper.
+
+    `auto` device uses CUDA when a GPU is available, else CPU. `auto` compute is
+    float16 on GPU, int8 on CPU. `auto` model is large-v3-turbo on GPU (accurate
+    and fast there) and medium.en on CPU (accurate enough, runs on ~4 cores).
+    An explicit value for any of the three always wins.
+    """
+    if device == "auto":
+        device = "cuda" if cuda_available() else "cpu"
+    if compute == "auto":
+        compute = "float16" if device == "cuda" else "int8"
+    if model is None:
+        model = "large-v3" if device == "cuda" else "medium.en"
+    return model, device, compute
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--airfield", default="Kutaisi",
@@ -102,7 +154,15 @@ def main() -> None:
     parser.add_argument("--name", default=None,
                         help="SRS client name (default: airfield tower name)")
     parser.add_argument("--eam", default=None, help="External AWACS Mode password")
-    parser.add_argument("--stt-model", default="small.en")
+    parser.add_argument("--stt-model", default=None,
+                        help="Whisper model (default: auto — large-v3-turbo on "
+                             "GPU, medium.en on CPU)")
+    parser.add_argument("--stt-device", default="auto",
+                        choices=["auto", "cpu", "cuda"],
+                        help="STT device (default: auto — cuda if available)")
+    parser.add_argument("--stt-compute", default="auto",
+                        help="STT compute type (default: auto — float16 on GPU, "
+                             "int8 on CPU)")
     parser.add_argument("--voice", default="en_US-amy-medium",
                         help="Piper voice for Tower (default: en_US-amy-medium)")
     parser.add_argument("--ground-voice", default="en_US-ryan-medium",
@@ -120,9 +180,9 @@ def main() -> None:
                         help="how many rx WAVs to keep with --save-audio")
     parser.add_argument("--gain", type=float, default=1.0,
                         help="input gain for received audio (STT), 1.0 = none")
-    parser.add_argument("--tx-volume", type=float, default=0.6,
+    parser.add_argument("--tx-volume", type=float, default=0.4,
                         help="output volume for the ATC voices (TTS), 1.0 = "
-                             "unchanged; e.g. 0.6 to quieten loud voices")
+                             "unchanged; e.g. 0.4 to quieten loud voices")
     parser.add_argument("--speech-rate", type=float, default=0.7,
                         help="Piper length_scale; lower = faster (0.6-1.0)")
     parser.add_argument("--state-host", default="127.0.0.1")
@@ -184,8 +244,12 @@ def main() -> None:
     if save_audio:
         audio_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"[*] Loading Whisper '{args.stt_model}'...")
-    stt = WhisperModel(args.stt_model, device="cpu", compute_type="int8")
+    stt_model, stt_device, stt_compute = resolve_stt(
+        args.stt_model, args.stt_device, args.stt_compute)
+    if stt_device == "cuda":
+        preload_cuda_libs()
+    print(f"[*] Loading Whisper '{stt_model}' on {stt_device} ({stt_compute})...")
+    stt = WhisperModel(stt_model, device=stt_device, compute_type=stt_compute)
     # A distinct voice per controller adds immersion: Tower, Ground, Control and
     # ATIS each sound like a different controller.
     voice_names = {
@@ -373,8 +437,13 @@ def main() -> None:
         segments, _ = stt.transcribe(
             resample_16k(pcm),
             language="en",
-            beam_size=1,
+            # Beam search (not greedy): on GPU we have the headroom, and a wider
+            # beam recovers more on noisy radio audio. 1 on CPU to stay fast.
+            beam_size=1 if stt_device == "cpu" else 5,
             vad_filter=True,
+            # Don't let one segment's text bias the next: on short/noisy clips
+            # this causes repeat-hallucination loops.
+            condition_on_previous_text=False,
             # Bias the decoder toward THIS mission's callsigns (the highest-value
             # tokens) plus our standard phraseology. `hotwords` is the dedicated
             # hint channel in faster-whisper; the callsigns dominate the front of
@@ -591,6 +660,7 @@ def main() -> None:
     def monitor_ctr() -> None:
         """Poll live positions: warn on unannounced CTR entry, and issue
         go-arounds when the runway is occupied on final."""
+        greeted: set[str] = set()  # players already sent the radio setup
         while True:
             time.sleep(2.0)
             if state is None:
@@ -606,6 +676,17 @@ def main() -> None:
                     # a pilot whose flight name the transmission still resembles.
                     brain.set_active_pilots(
                         [brain.callsign_for_speaker(ac.player) for ac in players])
+                # Greet each newly-seen pilot with the radio setup, so they can
+                # tune in without reading the docs. Sent once per player (by
+                # DCS name) via the in-game message feed.
+                for ac in players:
+                    if ac.player and ac.player not in greeted:
+                        greeted.add(ac.player)
+                        try:
+                            state.message("\n".join(radio_setup_lines()),
+                                          player=ac.player)
+                        except (OSError, RuntimeError):
+                            pass  # bridge down; best-effort
                 # Record the debrief trail whether or not the map page is open,
                 # so a completed sortie is saved even with no browser polling.
                 if map_service is not None:
@@ -810,12 +891,29 @@ def main() -> None:
             threading.Thread(target=weather_loop, daemon=True).start()
     log(f"ATC bot listening on {freq_mhz:.3f} MHz AM @ {args.host}:{args.port} "
         f"(log: {log_path.resolve()})")
-    for hz, controller in sorted(controller_by_freq.items()):
-        log(f"  {controller.value:8s} {hz / 1e6:.3f} MHz  voice "
-            f"{voice_names[controller]}")
-    if atis_hz:
-        log(f"ATIS broadcasting on {atis_mhz:.3f} MHz AM every "
-            f"{args.atis_interval:.0f}s  voice {args.atis_voice}")
+
+    # Radio setup summary, so a pilot can tune in without reading the docs.
+    # Channel numbers come from airspace.json `channels` (per airfield).
+    channels = airfield.channels or {}
+
+    def radio_setup_lines() -> list[str]:
+        """The radio-setup summary (also sent to pilots who join)."""
+        lines = [f"ATC trainer online at {airfield.name} — radio setup:"]
+        for hz, controller in sorted(controller_by_freq.items()):
+            ch = channels.get(controller.value, "")
+            ch_note = f"Ch {ch}  " if ch else ""
+            lines.append(f"  {controller.value.capitalize():8s} {ch_note}"
+                         f"{hz / 1e6:.3f} MHz AM")
+        if atis_hz:
+            ch = channels.get("atis", "")
+            ch_note = f"Ch {ch}  " if ch else ""
+            lines.append(f"  {'Atis':8s} {ch_note}{atis_mhz:.3f} MHz AM  "
+                         f"(every {args.atis_interval:.0f}s)")
+        lines.append('  Say "<callsign> help" on any frequency for a hint.')
+        return lines
+
+    for line in radio_setup_lines():
+        log(line)
 
     # One-time "ATC online" announcement on each controller frequency, so a
     # pilot tuning in knows the position is manned. (A trainer convention, not

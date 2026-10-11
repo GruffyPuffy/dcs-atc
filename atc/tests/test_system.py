@@ -784,6 +784,52 @@ def test_landing_clearance_readback_is_silent(airfield, brain):
     assert r == ""  # deliberate silence (no "roger", no "say again")
 
 
+# ---------- Live-test regressions (Kutaisi 2026-10-11) ----------
+
+def test_departure_readback_does_not_flip_to_inbound(airfield, brain):
+    # A departure readback ("remain below 1500 ft until clear of the control
+    # zone via Exit East") contains "control zone" and "via". It must NOT be
+    # read as an arrival check-in (the bare "control" branch) nor as a join
+    # readback — the phase must stay Airborne.
+    sc = _scenario(airfield, brain).at_gate("East").set_alt(2000)
+    sc.say("Control, Colt 1 airborne, 600 feet", Controller.CONTROL)
+    assert sc.phase() == Phase.AIRBORNE
+    r = sc.say("Remaining below 1500 feet until clear of the control zone "
+               "via exit east Colt 1", Controller.CONTROL)
+    assert sc.phase() == Phase.AIRBORNE
+    assert "say again" not in r.lower()
+    # A later exit-point report is acknowledged, still Airborne.
+    r = sc.say("Colt 1, exit east", Controller.CONTROL)
+    assert sc.phase() == Phase.AIRBORNE
+    assert "say again" not in r.lower()
+
+
+def test_touchdown_handoff_is_not_a_runway_incursion(airfield, brain):
+    # The Tower->Ground handoff fires at touchdown (phase becomes Taxi while
+    # still rolling out). That must not be flagged as an uncleared incursion.
+    sc = _scenario(airfield, brain).on_final("25").set_alt(500)
+    sc.say("Tower, Colt 1, on final", Controller.TOWER)
+    assert sc.phase() == Phase.LANDING
+    handoff = brain.check_landing_handoff("Colt 1", on_runway=True)
+    assert handoff is not None and "contact Ground" in handoff
+    assert sc.phase() == Phase.TAXI
+    assert brain.check_incursion("Colt 1", on_runway=True) is None
+
+
+def test_runway_vacated_on_ground_is_acknowledged(airfield, brain):
+    # Kneeboard RTB page: "runway 25 vacated, requesting taxi to parking" is
+    # said on GROUND (after the handoff). A bare "vacated" gets a roger; the
+    # combined call gets the taxi clearance.
+    sc = _scenario(airfield, brain).on_final("25").set_alt(500)
+    sc.say("Tower, Colt 1, on final", Controller.TOWER)
+    brain.check_landing_handoff("Colt 1", on_runway=True)
+    r = sc.say("Colt 1, runway vacated", Controller.GROUND)
+    assert "say again" not in r.lower()
+    r = sc.say("Colt 1, runway 25 vacated, requesting taxi to parking",
+               Controller.GROUND)
+    assert "cleared taxi" in r.lower()
+
+
 def test_go_around_fires_once(airfield, brain):
     # the background monitor calls check_final; it must fire once per approach
     first = brain.check_final("Colt 1", on_final=True, runway_occupied=True)

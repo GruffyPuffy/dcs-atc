@@ -75,6 +75,37 @@ OPERATIONS_HINT = [
 AGENCY_HINT = ["Tower", "Ground", "Control", "Approach", "Departure", "ATIS"]
 
 
+# Spoken forms of the flight numbers pilots actually say ("Chevy one one").
+_SPOKEN_NUMBERS = ["one", "two", "three", "four"]
+
+
+def _callsign_hints(names: list[str], *, variants_per_name: int = 3) -> list[str]:
+    """Expand flight names into the spellings Whisper is likely to hear.
+
+    For each name: the canonical spelling, its top phonetic variants (the whole
+    point of `generate_variants` — STT mishears them), and the spoken-number
+    forms ("Chevy one", "Chevy one one") since pilots say the number as words.
+    Ordered so the canonical names come first (they matter most).
+    """
+    canonical: list[str] = []
+    expanded: list[str] = []
+    for name in names:
+        name = (name or "").strip()
+        if not name:
+            continue
+        canonical.append(name)
+        low = name.lower()
+        # Top variants (skip ones that are just the name, and number words).
+        for variant in generate_variants(name)[:variants_per_name]:
+            if variant.lower() != low:
+                expanded.append(variant)
+        # Spoken-number forms: "Chevy one", "Chevy one one".
+        for num in _SPOKEN_NUMBERS:
+            expanded.append(f"{name} {num}")
+        expanded.append(f"{name} {_SPOKEN_NUMBERS[0]} {_SPOKEN_NUMBERS[0]}")
+    return canonical + expanded
+
+
 def stt_hint(callsigns: list[str] | None = None,
              airfield_names: list[str] | None = None,
              *, max_chars: int = 900) -> str:
@@ -82,10 +113,11 @@ def stt_hint(callsigns: list[str] | None = None,
 
     The **mission callsigns come first** because a misheard callsign is the one
     error the bot cannot recover from: without it the transmission is treated as
-    \"not for me\" and ignored. Agencies and generic operations follow. The
-    result is de-duplicated (case-insensitively) and length-capped, since
-    Whisper's prompt context is limited (extra tokens are truncated anyway, and
-    a huge prompt can slow decoding).
+    \"not for me\" and ignored. Each callsign is expanded into its likely
+    mishearings and spoken-number forms (see `_callsign_hints`). Agencies and
+    generic operations follow. The result is de-duplicated (case-insensitively)
+    and length-capped, since Whisper's prompt context is limited (extra tokens
+    are truncated anyway, and a huge prompt can slow decoding).
     """
     parts: list[str] = []
     seen: set[str] = set()
@@ -97,8 +129,8 @@ def stt_hint(callsigns: list[str] | None = None,
                 seen.add(word.lower())
                 parts.append(word)
 
-    add(callsigns)         # flight names — highest-value bias
-    add(airfield_names)    # e.g. "Gudauta", "Kutaisi"
+    add(_callsign_hints(callsigns or []))  # flight names + variants + numbers
+    add(airfield_names)                    # e.g. "Gudauta", "Kutaisi"
     add(AGENCY_HINT)
     add(OPERATIONS_HINT)
     return ", ".join(parts)[:max_chars]

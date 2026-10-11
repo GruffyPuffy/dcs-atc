@@ -23,9 +23,12 @@ services:
       ATC_REF: "${ATC_REF:-main}"
       ATC_AIRFIELD: "${ATC_AIRFIELD:-Kutaisi}"
       ATC_DEBUG: "${ATC_DEBUG:-0}"
-      # Whisper model: medium.en (accurate, default) or small.en (faster, for
-      # a low-power host).
-      ATC_STT_MODEL: "${ATC_STT_MODEL:-medium.en}"
+      # Whisper STT. Empty => the bot auto-selects: large-v3-turbo on a GPU,
+      # medium.en on CPU. Force with ATC_STT_MODEL / ATC_STT_DEVICE /
+      # ATC_STT_COMPUTE (e.g. ATC_STT_MODEL=small.en on a low-power host).
+      ATC_STT_MODEL: "${ATC_STT_MODEL:-}"
+      ATC_STT_DEVICE: "${ATC_STT_DEVICE:-}"
+      ATC_STT_COMPUTE: "${ATC_STT_COMPUTE:-}"
       # Service names inside the compose network.
       ATC_SRS_HOST: "srs-server"
       ATC_STATE_HOST: "dcs-server"

@@ -30,7 +30,7 @@ First run downloads the Whisper model (`small.en`); Piper voices are fetched int
 `atc/voices/` (gitignored). Useful flags:
 
     ./start_bot.sh --debug                 # richer logs + a saved debrief file
-    ./start_bot.sh --tx-volume 0.6         # quieten loud ATC voices
+    ./start_bot.sh --tx-volume 0.4         # ATC voice volume (default 0.4)
     ./start_bot.sh --airfield Gudauta      # a different airfield
     ATC_STT_MODEL=small.en ./start_bot.sh  # faster STT (default: medium.en)
     ./start_bot.sh --help                  # all options

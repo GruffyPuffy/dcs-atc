@@ -44,6 +44,9 @@ def test_stt_hint_puts_callsigns_first():
 def test_stt_hint_dedupes_and_caps():
     from phonetics import stt_hint
     hint = stt_hint(["Colt", "colt", "Colt"], ["Kutaisi", "kutaisi"])
-    assert hint.lower().count("colt") == 1
-    assert hint.lower().count("kutaisi") == 1
+    # Duplicate inputs collapse to one canonical entry (variants like "Colt one"
+    # are separate comma-separated parts, so compare whole parts).
+    parts = [p.strip().lower() for p in hint.split(",")]
+    assert parts.count("colt") == 1
+    assert parts.count("kutaisi") == 1
     assert len(stt_hint(["X" * 100] * 50, max_chars=100)) <= 100

@@ -83,15 +83,34 @@ names, and serves the map on `http://<host>:8090/` (LAN/VPN only).
 Only one bot may run at a time (it owns SRS as ATC and the map port). Stop the
 host bot before `atc-up`, and vice versa.
 
-**Speech-to-text model (CPU).** The bot transcribes pilot calls with Whisper on
-the CPU. The default is `medium.en` — accurate enough to hear callsigns reliably,
-at ~3 s per call on a modern CPU. On a **low-power host** (few cores / older
-CPU), switch to the faster, less accurate `small.en`:
+**Speech-to-text.** The bot transcribes pilot calls with Whisper. By default it
+**auto-selects**: `large-v3-turbo` on a GPU, `medium.en` on CPU. On CPU,
+`medium.en` is accurate enough to hear callsigns reliably (~3 s per call on a
+modern CPU); on a **low-power host** (few cores / older CPU) switch to the
+faster, less accurate `small.en`:
 
     ATC_STT_MODEL=small.en ./scripts/dcs.sh atc-up
 
 (Set it in `deploy/dcs/.env` to make it stick.) Rough guide: `medium.en` wants
 ~4 CPU cores; `small.en` runs on ~2.
+
+### GPU (optional, much faster + more accurate)
+
+With an NVIDIA GPU the bot runs `large-v3-turbo` — better accuracy *and*
+sub-second latency. This needs the **NVIDIA Container Toolkit** on the host:
+
+    # once per host (Ubuntu):
+    sudo ./scripts/install-nvidia-container.sh   # or follow NVIDIA's docs
+    sudo nvidia-ctk runtime configure --runtime=docker
+    sudo systemctl restart docker
+
+Then start the bot with the GPU override:
+
+    ./scripts/dcs.sh atc-up-gpu
+
+The container installs the CUDA runtime libs (cuBLAS/cuDNN) and uses the GPU.
+Without a GPU, `atc-up` (CPU) is unchanged. Force a device/model with
+`ATC_STT_DEVICE` / `ATC_STT_MODEL` if needed.
 
 With the bot running, tune your radio to the tower frequency and fly the MA
 flow: request clearance and taxi on Ground, line up and take off on Tower, then

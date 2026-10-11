@@ -178,11 +178,16 @@ class TrackHistory:
         self._tracks: dict[str, deque[tuple[float, float, float]]] = {}
         self._comms: dict[str, deque[dict]] = {}
         self._active: set[str] = set()
+        # Last known position per callsign, even when off-station (where we do
+        # not record a trail point). Used to pin a radio call to a position when
+        # the aircraft is outside the recording radius.
+        self._last_pos: dict[str, tuple[float, float]] = {}
 
     def update(self, callsign: str, lat: float, lon: float,
                distance_nm: float, alt_ft: float = 0.0) -> None:
         """Record a position for a callsign (skips off-station / tiny moves)."""
         self._active.add(callsign)
+        self._last_pos[callsign] = (lat, lon)
         if distance_nm > self.radius_nm:
             return  # off-station: stop recording
         track = self._tracks.get(callsign)
@@ -207,7 +212,11 @@ class TrackHistory:
 
     def last_position(self, callsign: str) -> tuple[float, float] | None:
         track = self._tracks.get(callsign)
-        return (track[-1][0], track[-1][1]) if track else None
+        if track:
+            return (track[-1][0], track[-1][1])
+        # Off-station (no trail point recorded): fall back to the last known
+        # position so a call is still pinned somewhere on the map.
+        return self._last_pos.get(callsign)
 
     def path(self, callsign: str) -> list[list[float]]:
         return [[lat, lon, alt] for lat, lon, alt in self._tracks.get(callsign, ())]
@@ -587,8 +596,11 @@ class MapService:
         if kind == "rx" and who:
             with self.lock:
                 callsign = self.brain.callsign_for_speaker(who)
-            if callsign == who:
-                callsign = ""  # not learned yet; don't duplicate the name
+                if callsign == who:
+                    # Not learned yet (the first call, before the worker maps
+                    # the speaker): fall back to the callsign named in the text,
+                    # so the first exchange is not split onto a ghost trail.
+                    callsign = self.brain.callsigns.extract(text) or ""
         elif kind == "tx":
             # An ATC reply always opens with the callsign; use it to pin the
             # reply to the pilot's position on the path.
@@ -622,9 +634,26 @@ class MapService:
             pos = self.tracks.last_position(key)
             if pos is None and who and who != key:
                 pos = self.tracks.last_position(who)
+            if pos is None:
+                # No recorded position yet (e.g. the very first exchange, before
+                # the trail has a point): ask the live state for it, so no call
+                # is ever dropped from the trail.
+                pos = self._live_position(who or key)
             if pos is not None:
                 self.tracks.add_comm(key, pos[0], pos[1], kind, text,
                                      controller, stamp)
+
+    def _live_position(self, who: str) -> tuple[float, float] | None:
+        """Live lat/lon for a pilot (SRS/DCS name), or None."""
+        if self.state is None or not who:
+            return None
+        try:
+            for ac in self.state.aircraft():
+                if ac.player == who or ac.callsign == who:
+                    return (ac.lat, ac.lon)
+        except (OSError, RuntimeError):
+            return None
+        return None
 
     def chatter(self) -> list[dict]:
         with self._chatter_lock:

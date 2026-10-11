@@ -17,6 +17,12 @@ dependencies = [
 dev = [
     "pytest>=8.0",
 ]
+# Optional GPU support: the CUDA runtime libs CTranslate2 needs (cuBLAS +
+# cuDNN). Install with `uv sync --group gpu` on a host with an NVIDIA GPU.
+gpu = [
+    "nvidia-cublas-cu12>=12.4",
+    "nvidia-cudnn-cu12>=9.0",
+]
 
 [tool.uv]
 package = false

@@ -1,0 +1,23 @@
+# Optional GPU override for the ATC bot. Requires the NVIDIA Container Toolkit
+# on the host (see INSTALL.md). Layer it on top of the bot override:
+#   docker compose -f docker-compose.yml -f docker-compose.atc.yml \
+#     -f docker-compose.gpu.yml up -d atc-bot
+# (or ./scripts/dcs.sh atc-up-gpu).
+#
+# With a GPU the bot auto-selects large-v3-turbo (accurate + fast); without this
+# override it runs on CPU with medium.en.
+name: dcs-atc
+
+services:
+  atc-bot:
+    environment:
+      # Install the CUDA runtime libs (cuBLAS/cuDNN) and use the GPU.
+      ATC_GPU: "1"
+      ATC_STT_DEVICE: "cuda"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

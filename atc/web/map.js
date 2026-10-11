@@ -267,49 +267,44 @@ function drawComms(ac) {
   for (const cl of clusters) {
     const last = cl.items[cl.items.length - 1];
     const color = commColor(last.kind);
-    const tip = cl.items.length === 1
+    const n = cl.items.length;
+    const tip = n === 1
       ? commLine(cl.items[0])
-      : `<b>${cl.items.length} calls</b><hr>`
+      : `<b>${n} calls</b><hr>`
         + cl.items.map(commLine).join('<hr>');
-    if (cl.items.length === 1) {
-      L.circleMarker([cl.lat, cl.lon], {
-        radius: last.kind === 'state' ? 2.5 : 3, color, weight: 1,
-        fillColor: color, fillOpacity: active ? 0.9 : 0.35,
-      }).bindTooltip(tip, { direction: 'top' }).addTo(group);
-    } else {
-      // Scale the badge to the count so a busy stop stays legible (1-2 digits
-      // small, 3 digits larger; cap the label so it never overflows).
-      const n = cl.items.length;
-      const label = n > 999 ? '999+' : String(n);
-      const size = label.length <= 1 ? 18 : (label.length === 2 ? 22 : 26);
-      const html = `<div class="comm-group" style="--c:${color};`
-        + `width:${size}px;height:${size}px;`
-        + `font-size:${label.length <= 1 ? 10 : 9}px">${label}</div>`;
-      // A busy cluster can list many calls, and a Leaflet *tooltip* is neither
-      // scrollable nor clickable. Use a click-to-open popup instead, which
-      // scrolls (maxHeight) so 10-15 calls stay readable.
-      const marker = L.marker([cl.lat, cl.lon], {
-        icon: L.divIcon({ className: 'comm-group-icon', html,
-                          iconSize: [size, size],
-                          iconAnchor: [size / 2, size / 2] }),
-        opacity: active ? 1 : 0.6,
-        title: `${n} calls (click)`,
-      }).bindPopup(`<div class="comm-tip">${tip}</div>`,
-                   { maxWidth: 360, maxHeight: 320, className: 'comm-popup' }
-      ).addTo(group);
-      // Tag the marker so the next redraw can tell which log was open, and
-      // reopen it (the redraw cleared the layer, which closed the popup).
-      const key = `${cl.lat.toFixed(5)},${cl.lon.toFixed(5)}`;
-      marker._commKey = key;
-      // A popup that reopens on every 2 s redraw can never be dismissed by
-      // clicking the map (the redraw reopens it). Track the user's intent: a
-      // map click closes it for good; clicking the marker toggles it.
-      marker.on('popupopen', () => { commPopupKey = key; });
-      marker.on('popupclose', () => {
-        if (commPopupKey === key) commPopupKey = null;
-      });
-      if (key === wantKey) marker.openPopup();
-    }
+    // Every comm is a numbered badge — a single call is just a "1". Same size,
+    // same click-to-open popup, so a lone call is as easy to spot as a cluster.
+    // Scale the badge to the count so a busy stop stays legible (1-2 digits
+    // small, 3 digits larger; cap the label so it never overflows).
+    const label = n > 999 ? '999+' : String(n);
+    const size = label.length <= 1 ? 18 : (label.length === 2 ? 22 : 26);
+    const html = `<div class="comm-group" style="--c:${color};`
+      + `width:${size}px;height:${size}px;`
+      + `font-size:${label.length <= 1 ? 10 : 9}px">${label}</div>`;
+    // A busy cluster can list many calls, and a Leaflet *tooltip* is neither
+    // scrollable nor clickable. Use a click-to-open popup instead, which
+    // scrolls (maxHeight) so 10-15 calls stay readable.
+    const marker = L.marker([cl.lat, cl.lon], {
+      icon: L.divIcon({ className: 'comm-group-icon', html,
+                        iconSize: [size, size],
+                        iconAnchor: [size / 2, size / 2] }),
+      opacity: active ? 1 : 0.6,
+      title: n === 1 ? '1 call (click)' : `${n} calls (click)`,
+    }).bindPopup(`<div class="comm-tip">${tip}</div>`,
+                 { maxWidth: 360, maxHeight: 320, className: 'comm-popup' }
+    ).addTo(group);
+    // Tag the marker so the next redraw can tell which log was open, and
+    // reopen it (the redraw cleared the layer, which closed the popup).
+    const key = `${cl.lat.toFixed(5)},${cl.lon.toFixed(5)}`;
+    marker._commKey = key;
+    // A popup that reopens on every 2 s redraw can never be dismissed by
+    // clicking the map (the redraw reopens it). Track the user's intent: a
+    // map click closes it for good; clicking the marker toggles it.
+    marker.on('popupopen', () => { commPopupKey = key; });
+    marker.on('popupclose', () => {
+      if (commPopupKey === key) commPopupKey = null;
+    });
+    if (key === wantKey) marker.openPopup();
   }
 }
 

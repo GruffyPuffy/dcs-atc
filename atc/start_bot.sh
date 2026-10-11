@@ -9,7 +9,7 @@
 #   ./start_bot.sh --freq 124.0             # override the frequency
 #   ./start_bot.sh --speech-rate 0.6        # faster TTS voice
 #   ./start_bot.sh --gain 3                 # boost quiet mic audio
-#   ./start_bot.sh --tx-volume 0.6          # quieten loud ATC voices
+#   ./start_bot.sh --tx-volume 0.4          # quieten loud ATC voices (default)
 #   ./start_bot.sh --map-port 9000          # move the map to another port
 #   ./start_bot.sh --map-port 0             # disable the map
 #   ./start_bot.sh --debug                  # + save a debrief to atc/debrief/tracks_<field>_<time>.json
@@ -49,12 +49,19 @@ fi
 # the SRS service name. An explicit --host on the command line still wins.
 srs_host="${ATC_SRS_HOST:-127.0.0.1}"
 
-# Whisper model: default medium.en (accurate callsigns); override with
-# ATC_STT_MODEL=small.en on a low-power host. An explicit --stt-model on the
-# command line still wins.
+# Whisper STT: by default the bot auto-selects (large-v3-turbo on a GPU,
+# medium.en on CPU). Override with ATC_STT_MODEL / ATC_STT_DEVICE /
+# ATC_STT_COMPUTE (e.g. ATC_STT_MODEL=small.en on a low-power host). An explicit
+# --stt-* on the command line still wins.
 stt_args=()
-if [[ " $* " != *" --stt-model "* ]]; then
-  stt_args=(--stt-model "${ATC_STT_MODEL:-medium.en}")
+if [[ " $* " != *" --stt-model "* && -n "${ATC_STT_MODEL:-}" ]]; then
+  stt_args+=(--stt-model "$ATC_STT_MODEL")
+fi
+if [[ " $* " != *" --stt-device "* && -n "${ATC_STT_DEVICE:-}" ]]; then
+  stt_args+=(--stt-device "$ATC_STT_DEVICE")
+fi
+if [[ " $* " != *" --stt-compute "* && -n "${ATC_STT_COMPUTE:-}" ]]; then
+  stt_args+=(--stt-compute "$ATC_STT_COMPUTE")
 fi
 
 echo "Starting ATC bot (log: /tmp/atc_log.txt) — Ctrl+C to stop."

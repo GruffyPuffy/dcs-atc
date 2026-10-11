@@ -19,7 +19,11 @@ ATC_SRS_HOST="${ATC_SRS_HOST:-srs-server}"
 ATC_STATE_HOST="${ATC_STATE_HOST:-dcs-server}"
 ATC_STATE_PORT="${ATC_STATE_PORT:-10309}"
 ATC_MAP_PORT="${ATC_MAP_PORT:-8090}"
-ATC_STT_MODEL="${ATC_STT_MODEL:-medium.en}"
+# STT: empty model/device/compute => the bot auto-selects (GPU: large-v3-turbo,
+# CPU: medium.en). Set them to force a choice.
+ATC_STT_MODEL="${ATC_STT_MODEL:-}"
+ATC_STT_DEVICE="${ATC_STT_DEVICE:-}"
+ATC_STT_COMPUTE="${ATC_STT_COMPUTE:-}"
 
 log() { echo "[atc-entrypoint] $*"; }
 
@@ -50,8 +54,13 @@ fi
 cd "$ATC_DIR/atc"
 
 # --- 2. Python environment --------------------------------------------------
+# ATC_GPU=1 also installs the CUDA runtime libs (cuBLAS/cuDNN) for GPU STT.
 log "Syncing Python environment (uv)..."
-uv sync --frozen
+if [[ "${ATC_GPU:-0}" == "1" ]]; then
+    uv sync --frozen --group gpu
+else
+    uv sync --frozen
+fi
 
 # --- 3. Whisper model + Piper voices (persist in the volume) ----------------
 # The model downloads into HF_HOME on first use; voices are fetched here.
@@ -65,8 +74,9 @@ uv run python -m piper.download_voices \
 # airfield from atc/.control, so the map's Restart/Stop buttons work.
 # The SRS host comes from ATC_SRS_HOST (start_bot.sh reads it); the state host
 # is passed here. The map defaults to 8090 in start_bot.sh.
-export ATC_SRS_HOST ATC_STT_MODEL
-log "Starting ATC bot (airfield=$ATC_AIRFIELD, debug=$ATC_DEBUG, stt=$ATC_STT_MODEL)..."
+export ATC_SRS_HOST ATC_STT_MODEL ATC_STT_DEVICE ATC_STT_COMPUTE
+log "Starting ATC bot (airfield=$ATC_AIRFIELD, debug=$ATC_DEBUG, " \
+    "stt=${ATC_STT_MODEL:-auto}/${ATC_STT_DEVICE:-auto})..."
 exec ./run_server.sh \
     --state-host "$ATC_STATE_HOST" --state-port "$ATC_STATE_PORT" \
     --airfield "$ATC_AIRFIELD" \

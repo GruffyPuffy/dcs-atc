@@ -817,6 +817,12 @@ class AtcBrain:
             reply = self._say("taxi", callsign, taxi_route=route or "Sierra Echo")
             pilot.last_clearance = reply
             return reply
+        # "runway vacated" reported on Ground (the Tower->Ground handoff already
+        # happened at touchdown, so the pilot is on Ground by the time they are
+        # clear). Just acknowledge — there is no Ground action for it.
+        if re.search(r"\b(vacated|clear of the runway|off the runway|"
+                     r"runway vacated|clear of runway)\b", low):
+            return self._say("roger", callsign, agency=self.ground_short)
         if re.search(r"\bhold(?:ing)? short\b", low) and pilot.phase == Phase.TAXI:
             # Cross-check the report against the live position: a pilot who
             # claims to be holding short but is still on the ramp gets
@@ -1103,6 +1109,14 @@ class AtcBrain:
                                  agency=self.control_short)
             pilot.climb_issued = True
             return self._say("control_climb", callsign)
+        # Readback of the "remain below 1500 ft until clear of the control
+        # zone" instruction (a departure still inside the CTR), or a report at
+        # the exit point -> acknowledge. Without this the readback fell through
+        # to "say again" (it names no departure keyword).
+        if pilot.phase == Phase.AIRBORNE and re.search(
+                r"\b(remain|remaining|below|1500|clear of the control zone|"
+                r"exit)\b", low):
+            return self._say("roger", callsign, agency=self.control_short)
         # Near the field, Control hands the flight to Tower (e.g. "on final",
         # "runway in sight", "overhead break", "passing the entry point").
         if re.search(r"\b(on final|final|runway in sight|visual|overhead|"
@@ -1112,7 +1126,10 @@ class AtcBrain:
         # Initial Control check-in, bare: "Kutaisi Control, Adder11" (Master Arms
         # kneeboard page 2, step 1) -> "Adder11, Control". Answer it instead of
         # "say again"; the pilot follows with the inbound call.
-        if re.search(r"\bcontrol\b", low):
+        # NOTE: exclude "control zone" — a departure readback ("remain below
+        # 1500 ft until clear of the control zone") contains "control" and was
+        # wrongly treated as an arrival check-in, flipping the phase to Inbound.
+        if re.search(r"\bcontrol\b(?!\s+zone)", low):
             pilot.phase = Phase.INBOUND
             return self._say("control_ack", callsign,
                              agency=self.control_short)
@@ -1431,8 +1448,14 @@ class AtcBrain:
         # **Airborne** — a departing aircraft climbing out over the runway
         # corridor is not an incursion (this fired a false "vacate immediately"
         # right after takeoff, once the pilot called "airborne").
+        # A pilot who was CLEARED TO LAND is also legitimate: the Tower->Ground
+        # handoff fires at touchdown (phase becomes Taxi while still rolling
+        # out), which otherwise looked like an uncleared incursion. Scoped to
+        # Landing/Taxi so it does not persist into a later departure.
         if pilot.phase in (Phase.LINEUP, Phase.DEPARTURE, Phase.AIRBORNE,
-                           Phase.LANDING):
+                           Phase.LANDING) or (
+                pilot.cleared_landing
+                and pilot.phase in (Phase.LANDING, Phase.TAXI)):
             return None
         if pilot.incursion_warned:
             return None

@@ -169,10 +169,21 @@ def test_chatter_resolves_pilot_callsign(brain, airfield):
     assert entry["callsign"] == "Colt 1"
 
 
-def test_chatter_callsign_empty_before_learned(brain, airfield):
+def test_chatter_callsign_from_text_before_learned(brain, airfield):
+    # Before the speaker mapping is learned, the callsign named in the text is
+    # used, so the first exchange is not split onto a ghost trail.
     service = MapService(airfield, brain, FakeState([]))
     service.log_chatter("rx", 250.0, "Caveman", "Ground, Colt 1", "ground")
-    assert service.chatter()[-1]["callsign"] == ""
+    assert service.chatter()[-1]["callsign"] == "Colt 1"
+
+
+def test_chatter_uses_live_position_when_no_trail(brain, airfield):
+    # The very first exchange has no trail point yet; the call must still be
+    # pinned to the pilot's live position (asked from the state client).
+    service = MapService(airfield, brain, FakeState([_ac(lat=42.19, lon=42.51)]))
+    service.log_chatter("rx", 250.0, "Caveman", "Ground, Colt 1", "ground")
+    comms = service.tracks.comms("Colt 1")
+    assert comms and comms[-1]["lat"] == 42.19 and comms[-1]["lon"] == 42.51
 
 
 def test_chatter_atc_lines_resolve_callsign(brain, airfield):
