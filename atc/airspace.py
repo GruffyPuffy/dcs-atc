@@ -243,6 +243,19 @@ class Airfield:
             return ""
         return "right" if delta > 0 else "left"
 
+    def turn_to_heading(self, current_heading: float,
+                        target_heading: float) -> str:
+        """Turn direction from the current heading to a target: "left"/"right"/"".
+
+        Empty string means the target is roughly straight ahead (within 20°), so
+        the clearance reads "fly heading 040" rather than "turn right heading
+        040" — matching real ATC (there is no "straight to" phrase).
+        """
+        delta = (target_heading - current_heading + 540) % 360 - 180
+        if abs(delta) < 20:
+            return ""
+        return "right" if delta > 0 else "left"
+
     def best_entry_gate(self, runway: str | None = None) -> str | None:
         """Entry gate that best sets up a landing on a runway.
 

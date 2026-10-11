@@ -117,13 +117,14 @@ def test_full_departure_two_ship(airfield, brain):
                               "with information Charlie", Controller.GROUND)
     r = sc.say("Colt 1, ready to copy clearance", Controller.GROUND)
     assert "after departure" in r.lower() and "1500 ft or below" in r
-    assert "readback correct" in sc.say(
-        "After departure Exit West, 1500 ft or below, Colt 1", Controller.GROUND)
+    # A correct readback with a next step (taxi) is silent.
+    assert sc.say(
+        "After departure Exit West, 1500 ft or below, Colt 1", Controller.GROUND) == ""
     r = sc.say("Colt 1, requesting taxi", Controller.GROUND)
     assert "cleared taxi" in r.lower()
-    assert "readback correct" in sc.say(
+    assert sc.say(
         "Cleared taxi Sierra Echo and hold short runway 25, Colt 1",
-        Controller.GROUND)
+        Controller.GROUND) == ""
 
     # Now at the threshold: holding short -> Tower.
     sc.at_threshold("25")
@@ -197,7 +198,7 @@ def test_parking_readback_is_checked_against_the_parking_clearance(airfield, bra
     r = sc.say("Ground, Colt 1, requesting taxi to parking", Controller.GROUND)
     assert "cleared taxi" in r.lower()
     r = sc.say("Ramp North, Alpha November, Colt 1", Controller.GROUND)
-    assert "readback correct" in r.lower()
+    assert r == ""  # correct readback, nothing follows -> silent
 
 
 # ---------- Sequencing: runway occupied ----------
@@ -307,6 +308,16 @@ def test_no_handoff_without_landing_clearance(airfield, brain):
     assert sc.phase() == Phase.LANDING
     assert brain.pilots["Colt 1"].cleared_landing is False
     assert brain.check_landing_handoff("Colt 1", on_runway=True) is None
+
+
+def test_landing_rollout_gate_holds_off_a_touch_and_go():
+    # The handoff only fires once the aircraft is on the ground AND slow enough
+    # to be a rollout; a touch-and-go (still fast) stays with Tower.
+    from atc_bot import is_landing_rollout
+    assert is_landing_rollout(on_runway=True, speed_kt=30.0) is True
+    assert is_landing_rollout(on_runway=True, speed_kt=58.0) is True   # gauge floor
+    assert is_landing_rollout(on_runway=True, speed_kt=140.0) is False  # touch-and-go
+    assert is_landing_rollout(on_runway=False, speed_kt=0.0) is False   # on approach
 
 
 # ---------- Position cross-checks (faked radar) ----------
@@ -722,15 +733,15 @@ def test_full_lifecycle_all_pages(airfield, brain):
     r = sc.say("Colt 1, ready to copy clearance", Controller.GROUND)
     assert "after departure" in r.lower()
     assert sc.phase() == Phase.CLEARANCE
-    assert "readback correct" in sc.say(
-        "After departure Exit West, 1500 ft or below, Colt 1", Controller.GROUND)
+    assert sc.say(
+        "After departure Exit West, 1500 ft or below, Colt 1", Controller.GROUND) == ""
 
     r = sc.say("Colt 1, requesting taxi", Controller.GROUND)
     assert "cleared taxi" in r.lower()
     assert sc.phase() == Phase.TAXI
-    assert "readback correct" in sc.say(
+    assert sc.say(
         "Cleared taxi Sierra Echo and hold short runway 25, Colt 1",
-        Controller.GROUND)
+        Controller.GROUND) == ""
 
     sc.at_threshold("25")
     r = sc.say("Colt 1, holding short runway 25", Controller.GROUND)

@@ -43,6 +43,20 @@ from workers import ControllerWorker, SharedState
 SAMPLE_RATE = 48000
 STT_RATE = 16000
 MIN_TRANSMISSION_SECONDS = 0.3
+# A landing handoff (Tower -> Ground) waits until the aircraft is on the ground
+# AND slow enough to be a rollout, so a touch-and-go (still fast) is not pushed
+# to Ground mid-runway. 80 kt gives margin above the DCS airspeed gauge floor
+# (~58 kt) while staying well below a touch-and-go speed (~120+ kt).
+LANDING_HANDOFF_MAX_KT = 80.0
+
+
+def is_landing_rollout(on_runway: bool, speed_kt: float) -> bool:
+    """True if the aircraft is on the runway and slow enough to be a rollout.
+
+    Used to gate the Tower->Ground handoff: a touch-and-go is still fast, so it
+    stays with Tower instead of being pushed to Ground mid-runway.
+    """
+    return bool(on_runway) and speed_kt <= LANDING_HANDOFF_MAX_KT
 
 
 def resample_16k(pcm: bytes) -> np.ndarray:
@@ -794,8 +808,13 @@ def main() -> None:
                     # report "vacated" to Tower.
                     on_rwy_self = airfield.runway_occupied(
                         [ac], exclude=None, on_runway=True)
+                    # Only hand off once the aircraft is actually rolling out
+                    # (on the ground and slow): a touch-and-go is still fast, so
+                    # it stays with Tower.
+                    landed = is_landing_rollout(
+                        on_rwy_self, getattr(ac, "speed_kt", 0.0))
                     with lock:
-                        handoff = brain.check_landing_handoff(callsign, on_rwy_self)
+                        handoff = brain.check_landing_handoff(callsign, landed)
                     if handoff:
                         log(f"LANDED: {callsign} ({ac.player}) -> Ground")
                         speak(handoff, controller=Controller.TOWER)
@@ -806,7 +825,8 @@ def main() -> None:
                         climb = brain.check_departure_climb(callsign, tr)
                     if climb:
                         log(f"CLIMB: {callsign} ({ac.player})")
-                        speak(climb, controller=Controller.CONTROL)
+                        speak(climb, freq=freq_for(Controller.CONTROL),
+                              controller=Controller.CONTROL)
                     # Arrival descent: after the far-out step-down, Control
                     # issues the final "descend to 1500 feet" once the aircraft
                     # reaches the entry area.
@@ -814,7 +834,8 @@ def main() -> None:
                         descend = brain.check_arrival_descent(callsign, tr)
                     if descend:
                         log(f"DESCEND: {callsign} ({ac.player})")
-                        speak(descend, controller=Controller.CONTROL)
+                        speak(descend, freq=freq_for(Controller.CONTROL),
+                              controller=Controller.CONTROL)
             except (OSError, RuntimeError):
                 pass  # bridge down or mission not running; retry next tick
 

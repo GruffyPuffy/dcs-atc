@@ -194,6 +194,7 @@ def test_ground_acknowledges_with_information(brain):
 def test_ground_runway_qnh_readback(brain):
     # The kneeboard line "25 in use, QNH 2992, Adder11" must be answered with
     # "readback correct, advise when ready for clearance" — not "say again".
+    # This is the ONE place MA says "readback correct": nothing follows it.
     brain.handle("Ground, Colt 1, two-ship Hornets on Ramp South",
                  controller=Controller.GROUND)
     reply = brain.handle("25 in use, QNH 2992, Colt 1",
@@ -202,29 +203,74 @@ def test_ground_runway_qnh_readback(brain):
     assert "ready for clearance" in reply
 
 
+# ---------- Readback acknowledgement rule (real/MA practice) ----------
+# A correct readback is acknowledged ONLY when the controller has nothing else
+# to say. When a next instruction follows, the controller just gives it (no
+# "readback correct"). These tests lock that rule in.
+
+def test_correct_readback_is_silent_when_a_next_step_follows(brain):
+    # Departure clearance readback -> next step is the taxi request: silent.
+    brain.handle("Ground, Colt 1, ready to copy clearance",
+                 controller=Controller.GROUND)
+    reply = brain.handle("After departure turn right Exit West, 1500 ft or below, Colt 1",
+                         controller=Controller.GROUND)
+    assert reply == ""
+
+
+def test_correct_readback_is_acknowledged_when_nothing_follows(brain):
+    # Ground runway/QNH readback -> nothing follows: explicit acknowledgement.
+    brain.handle("Ground, Colt 1, two-ship Hornets on Ramp South",
+                 controller=Controller.GROUND)
+    reply = brain.handle("25 in use, QNH 2992, Colt 1",
+                         controller=Controller.GROUND)
+    assert "readback correct" in reply
+
+
+def test_lineup_readback_gives_takeoff_without_readback_correct(brain):
+    # The line-up readback's "next instruction" IS the takeoff clearance, so it
+    # must not be prefixed with "readback correct" (MA kneeboard).
+    brain.handle("Ground, Colt 1, requesting taxi", controller=Controller.GROUND)
+    brain.handle("Tower, Colt 1, ready for departure", controller=Controller.TOWER)
+    reply = brain.handle("Line up and wait 25, Colt 1", controller=Controller.TOWER)
+    assert "cleared for takeoff" in reply
+    assert "readback correct" not in reply.lower()
+
+
+def test_incomplete_readback_still_coaches(brain):
+    # The rule only changes the *correct* case; an incomplete readback is still
+    # flagged (never silently accepted).
+    brain.handle("Ground, Colt 1, ready to copy clearance",
+                 controller=Controller.GROUND)
+    reply = brain.handle("After departure turn right Exit West, Colt 1",
+                         controller=Controller.GROUND)
+    assert "readback incomplete" in reply.lower()
+
+
 def test_ground_clearance_readback_without_exit_word(brain):
     # STT may drop the "Exit" prefix; the gate name alone must still read back.
+    # A correct readback with a next step (taxi) is SILENT (no "readback
+    # correct") — the controller just waits for the taxi request.
     brain.handle("Ground, Colt 1, ready to copy clearance",
                  controller=Controller.GROUND)
     reply = brain.handle("After departure turn right West 1500 ft or below, Colt 1",
                          controller=Controller.GROUND)
-    assert "readback correct" in reply
+    assert reply == ""
 
 
 def test_ground_clearance_readback_correct(brain):
     brain.handle("Ground, Colt 1, ready to copy clearance",
                  controller=Controller.GROUND)
-    # Runway 25 assigns Exit West; a correct, complete readback is confirmed.
+    # Runway 25 assigns Exit West; a correct, complete readback is silent.
     reply = brain.handle("After departure turn right Exit West, 1500 ft or below, Colt 1",
                          controller=Controller.GROUND)
-    assert "readback correct" in reply
+    assert reply == ""
 
 
 def test_ground_taxi_readback_correct(brain):
     brain.handle("Ground, Colt 1, requesting taxi", controller=Controller.GROUND)
     reply = brain.handle("Cleared taxi Sierra Echo and hold short runway 25, Colt 1",
                          controller=Controller.GROUND)
-    assert "readback correct" in reply
+    assert reply == ""
 
 
 def test_taxi_readback_tolerates_stt_clear(brain):
@@ -232,7 +278,7 @@ def test_taxi_readback_tolerates_stt_clear(brain):
     brain.handle("Ground, Colt 1, requesting taxi", controller=Controller.GROUND)
     reply = brain.handle("Clear taxi, and hold short runway 25, Colt 1",
                          controller=Controller.GROUND)
-    assert "readback correct" in reply
+    assert reply == ""
 
 
 def test_clearance_readback_missing_altitude_is_flagged_incomplete(brain):
@@ -272,11 +318,11 @@ def test_repeated_readback_attempts_are_safe(brain):
                              controller=Controller.GROUND)
         assert "readback incomplete" in reply.lower()
         assert brain.pilots["Colt 1"].phase == Phase.CLEARANCE  # unchanged
-    # A correct readback then confirms and still leaves the phase at CLEARANCE
+    # A correct readback is silent and still leaves the phase at CLEARANCE
     # (the pilot proceeds to taxi when ready).
     reply = brain.handle("After departure turn right West, 1500 ft or below, Colt 1",
                          controller=Controller.GROUND)
-    assert "readback correct" in reply.lower()
+    assert reply == ""
     assert brain.pilots["Colt 1"].phase == Phase.CLEARANCE
 
 
@@ -297,14 +343,14 @@ def test_readback_ignores_the_callsign_number(brain):
     reply = brain.handle(
         "After departure, turn right, exit west, 1500 feet or below, Colt 11",
         controller=Controller.GROUND)
-    assert "readback correct" in reply.lower()
+    assert reply == ""
 
 
 def test_taxi_readback_ignores_the_callsign_number(brain):
     brain.handle("Ground, Colt 1, requesting taxi", controller=Controller.GROUND)
     reply = brain.handle("Cleared taxi whiskey, hold short runway 25, Colt 11",
                          controller=Controller.GROUND)
-    assert "readback correct" in reply.lower()
+    assert reply == ""
 
 
 def test_takeoff_readback_after_clearance_gets_roger(brain):
@@ -323,8 +369,38 @@ def test_tower_lineup_readback_clears_takeoff(brain):
     brain.handle("Tower, Colt 1, ready for departure", controller=Controller.TOWER)
     reply = brain.handle("Line up and wait 25, Colt 1", controller=Controller.TOWER)
     assert "cleared for takeoff" in reply
-    assert "turnout" in reply
+    # Kutaisi 25's default exit (West) is straight ahead, so no turnout clause.
+    assert "turnout" not in reply
     assert brain.pilots["Colt 1"].phase == Phase.DEPARTURE
+
+
+def test_takeoff_turnout_follows_the_exit_gate(brain):
+    # The turnout matches the departure routing: a turning exit gives a turnout,
+    # a straight-ahead exit does not. (MA: "right turnout, cleared for take-off".)
+    from brain import PilotState
+    pilot = PilotState(callsign="Colt 1")
+    # Kutaisi 25: Exit East is a right turn, Exit West is straight.
+    pilot.exit_gate = "Exit East"
+    assert "right turnout" in brain._takeoff_clearance("Colt 1", pilot)
+    pilot.exit_gate = "Exit West"
+    assert "turnout" not in brain._takeoff_clearance("Colt 1", pilot)
+
+
+def test_takeoff_turnout_matches_the_ground_clearance_turn(brain, airfield):
+    # The Ground departure clearance and the Tower takeoff clearance must agree
+    # on the turnout, so a future change to the exit selection keeps them in
+    # sync (both derive from the same exit gate via Airfield.exit_turn).
+    brain.handle("Ground, Colt 1, ready to copy clearance",
+                 controller=Controller.GROUND)
+    pilot = brain.pilots["Colt 1"]
+    gate = pilot.exit_gate
+    assert gate  # the clearance assigned an exit
+    expected = airfield.exit_turn(gate, brain.runway)
+    takeoff = brain._takeoff_clearance("Colt 1", pilot)
+    if expected:
+        assert f"{expected} turnout" in takeoff
+    else:
+        assert "turnout" not in takeoff
 
 
 def test_control_departure_checkin_climb(brain):
@@ -343,7 +419,8 @@ def test_control_climb_issued_once_then_readback(brain):
     second = brain.handle("Climbing angels 15, Colt 1",
                           controller=Controller.CONTROL)
     assert "climb to Angels" not in second
-    assert "readback correct" in second
+    assert "readback correct" not in second.lower()
+    assert "roger" in second.lower()
     third = brain.handle("Colt 1 at angels 16", controller=Controller.CONTROL)
     assert "climb to Angels" not in third
 
@@ -453,7 +530,7 @@ def test_parking_readback_does_not_reissue_clearance(brain, airfield):
                  controller=Controller.GROUND)
     reply = brain.handle("Cleared taxi to ramp north via Alpha November, Colt 1",
                          controller=Controller.GROUND)
-    assert "readback correct" in reply.lower()
+    assert reply == ""
     assert "cleared taxi to" not in reply.lower()
 
 
@@ -1198,6 +1275,39 @@ def test_control_join_without_track_has_no_heading(brain):
                          controller=Controller.CONTROL)
     assert "join via Entry East" in reply
     assert "heading" not in reply
+
+
+def test_control_join_turn_is_computed_not_canned(brain, airfield):
+    # The join turn follows the aircraft's current heading: pointing away from
+    # the gate gives a turn, pointing at it gives "fly heading" (no turn).
+    import re
+    south = _track(airfield, airfield.ctr.center_lat - 0.3,
+                   airfield.ctr.center_lon)
+    reply = brain.handle("Control, Colt 1, inbound 35 miles south",
+                         track=south, controller=Controller.CONTROL)
+    heading = int(re.search(r"heading (\d{3})", reply).group(1))
+    # The track's heading is 0 (north); the join heading is north-east, so a
+    # right turn is expected.
+    assert "turn right heading" in reply
+    assert heading > 0
+
+
+def test_control_join_straight_when_already_pointing_at_the_gate(brain, airfield):
+    # A pilot already flying the join heading gets "fly heading X" (no turn).
+    import re
+    south = _track(airfield, airfield.ctr.center_lat - 0.3,
+                   airfield.ctr.center_lon)
+    # First learn the join heading, then re-issue with the aircraft aligned.
+    reply = brain.handle("Control, Colt 1, inbound 35 miles south",
+                         track=south, controller=Controller.CONTROL)
+    heading = int(re.search(r"heading (\d{3})", reply).group(1))
+    brain.pilots.clear()
+    aligned = _track(airfield, airfield.ctr.center_lat - 0.3,
+                     airfield.ctr.center_lon, heading=heading)
+    reply = brain.handle("Control, Colt 1, inbound 35 miles south",
+                         track=aligned, controller=Controller.CONTROL)
+    assert "fly heading" in reply
+    assert "turn" not in reply
 
 
 # ---------- Self-exclusion from runway occupancy ----------

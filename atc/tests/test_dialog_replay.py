@@ -67,11 +67,12 @@ def test_replay_ground_checkin_qnh_readback_and_clearance(springfield):
     assert "readback correct" in r.lower()
 
     # 18:09:50 clearance, 18:10:05 readback (the "exit northwest" case).
+    # A correct readback with a next step (taxi) is silent.
     r = sc.say("Springfield 1-1, ready to copy clearance", Controller.GROUND)
     assert "after departure" in r.lower()
     r = sc.say("After departure, exit northwest 1,500 feet or below, "
                "Springfield 1-1", Controller.GROUND)
-    assert "readback correct" in r.lower()
+    assert r == ""
 
 
 def test_replay_clear_taxi_slip(springfield):
@@ -89,7 +90,7 @@ def test_replay_clear_taxi_slip(springfield):
 
     r = sc.say("Clear taxi, and hold short runway 33, Springfield 1-1",
                Controller.GROUND)
-    assert "readback correct" in r.lower()
+    assert r == ""  # correct readback, nothing follows -> silent
 
 
 def test_replay_garbled_callsign_is_understood(springfield):

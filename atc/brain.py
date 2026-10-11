@@ -452,20 +452,26 @@ class AtcBrain:
         return self._item_label(clearance, missing_num, missing_gate)
 
     def _check_readback(self, callsign, pilot, low, clearance, controller,
-                        ok_key="readback_correct"):
+                        ok_key=None):
         """Confirm a readback, or flag it incomplete — but never block.
 
-        A complete readback is confirmed ("readback correct"). An incomplete one
-        is **not** called correct: it gets an honest "readback incomplete —
-        {item} not read back, continue." so the pilot knows what to train on, and
-        the caller still advances the phase, so a fumbled readback never traps
-        them — they keep flying and fix it next time.
+        A **correct** readback is acknowledged only when the controller has
+        nothing else to say (real/MA practice): if a next instruction follows,
+        the controller just gives it, so the default is **silent** (""). Pass
+        `ok_key` to force an explicit acknowledgement where nothing follows
+        (e.g. the Ground runway/QNH readback).
+
+        An incomplete readback is **not** called correct: it gets an honest
+        "readback incomplete — {item} not read back, continue." so the pilot
+        knows what to train on, and the caller still advances the phase, so a
+        fumbled readback never traps them — they keep flying and fix it next
+        time.
         """
         agency = self._agency(controller)
         item = self._readback_item(low, clearance)
         if item is None:
             pilot.readback_fails = 0
-            return self._say(ok_key, callsign, agency=agency)
+            return self._say(ok_key, callsign, agency=agency) if ok_key else ""
         pilot.readback_fails += 1
         return self._say("readback_incomplete", callsign, agency=agency,
                          item=item)
@@ -670,7 +676,7 @@ class AtcBrain:
                                             pilot.last_clearance or pilot.last_reply,
                                             controller)
             pilot.phase = Phase.DEPARTURE
-            return coach + self._say("lineup_readback", callsign, turnout="right")
+            return coach + self._takeoff_clearance(callsign, pilot)
         if readback and pilot.phase in (Phase.CLEARANCE, Phase.TAXI,
                                         Phase.INBOUND):
             return self._check_readback(callsign, pilot, low,
@@ -911,7 +917,7 @@ class AtcBrain:
             # rather than dropping the pilot back to Lineup.
             if pilot.phase == Phase.DEPARTURE:
                 pilot.awaiting_takeoff = False
-                return self._say("lineup_readback", callsign, turnout="right")
+                return self._takeoff_clearance(callsign, pilot)
             # Already lined up and waiting: this "ready" call is the natural
             # trigger for the takeoff clearance (the pilot has done the line-up
             # and is telling us they are ready to go). Without this, a pilot who
@@ -926,7 +932,7 @@ class AtcBrain:
                     return self._say("hold_short_traffic", callsign)
                 pilot.phase = Phase.DEPARTURE
                 pilot.awaiting_takeoff = False
-                return self._say("lineup_readback", callsign, turnout="right")
+                return self._takeoff_clearance(callsign, pilot)
             # Cross-check: a pilot who says "ready for departure" but is not at
             # the runway gets challenged, and is NOT cleared to line up.
             if track is not None and self.airfield is not None \
@@ -952,7 +958,7 @@ class AtcBrain:
                     return self._say("hold_short_traffic", callsign)
                 pilot.phase = Phase.DEPARTURE
                 pilot.awaiting_takeoff = False
-                return self._say("lineup_readback", callsign, turnout="right")
+                return self._takeoff_clearance(callsign, pilot)
             pilot.phase = Phase.LINEUP
             return self._say("line_up", callsign)
         # Departure handoff: once airborne, Tower hands the flight to Control.
@@ -1067,8 +1073,11 @@ class AtcBrain:
             if heading is None:
                 return self._say("control_join_requested_nohdg", callsign,
                                  gate=requested)
-            return self._say("control_join_requested", callsign, gate=requested,
-                             heading=f"{heading:03.0f}", turn="right")
+            turn = self._join_turn(track, heading)
+            key = ("control_join_requested" if turn
+                   else "control_join_requested_straight")
+            return self._say(key, callsign, gate=requested,
+                             heading=f"{heading:03.0f}", turn=turn)
         # Readback of the join clearance ("150 to join via Entry East") ->
         # Control issues the descent to 1500 ft (once). The pilot's readback of
         # *that* descent then hands the flight to Tower — matching the Master
@@ -1127,8 +1136,10 @@ class AtcBrain:
                 heading = self.airfield.join_heading(track.lat, track.lon, gate)
             if heading is None:
                 return self._say("control_join_nohdg", callsign, gate=gate)
-            return self._say("control_join", callsign, gate=gate,
-                             heading=f"{heading:03.0f}")
+            turn = self._join_turn(track, heading)
+            key = "control_join" if turn else "control_join_straight"
+            return self._say(key, callsign, gate=gate,
+                             heading=f"{heading:03.0f}", turn=turn)
         # Departure check-in ("airborne, 5 miles east climbing" / "at 1500 ft"):
         # radar contact and a climb clearance. Only the *first* check-in gets the
         # climb — a readback or a follow-up level report ("climbing angels 15",
@@ -1146,8 +1157,10 @@ class AtcBrain:
                 return self._say("control_too_early", callsign,
                                  gate=self._departure_gate(pilot))
             if pilot.climb_issued:
-                return self._say("readback_correct", callsign,
-                                 agency=self.control_short)
+                # Already climbed; this is a level report / readback with no
+                # next instruction, so acknowledge briefly (not "readback
+                # correct" — that is not MA phraseology here).
+                return self._say("roger", callsign, agency=self.control_short)
             pilot.climb_issued = True
             return self._say("control_climb", callsign)
         # Readback of the "remain below 1500 ft until clear of the control
@@ -1199,6 +1212,43 @@ class AtcBrain:
                 return f"Exit {gate}"
         gate = self.gates[0] if self.gates else "North"
         return f"Exit {gate}"
+
+    def _join_turn(self, track: AircraftTrack | None, heading: float) -> str:
+        """Turn direction for the Control join: "left"/"right"/"".
+
+        Computed from the aircraft's current heading to the join heading, so a
+        pilot already pointing at the gate gets "fly heading X" (no turn) rather
+        than a canned "turn right". Without a live heading we fall back to
+        "right" (the historical default).
+        """
+        if track is None or self.airfield is None:
+            return "right"
+        return self.airfield.turn_to_heading(track.heading, heading)
+
+    def _takeoff_turnout(self, pilot: PilotState) -> str:
+        """The turnout for the takeoff clearance: "left"/"right"/"".
+
+        Follows the departure exit gate (the same gate the Ground clearance
+        named), so the takeoff turn matches the routing: a gate roughly straight
+        ahead (within 20°) gives no turn. Falls back to "right" when the
+        geometry is unknown.
+        """
+        if self.airfield is None:
+            return "right"
+        gate = pilot.exit_gate or self._pick_exit_gate()
+        return self.airfield.exit_turn(gate, self.runway) or ""
+
+    def _takeoff_clearance(self, callsign: str, pilot: PilotState) -> str:
+        """The takeoff clearance, with the turnout following the departure exit.
+
+        Master Arms: "<callsign>, right turnout, cleared for take-off runway 25".
+        The turnout matches the departure routing (the Ground clearance's exit
+        turn); a gate roughly straight ahead gives no turnout clause.
+        """
+        turnout = self._takeoff_turnout(pilot)
+        if turnout:
+            return self._say("lineup_readback", callsign, turnout=turnout)
+        return self._say("lineup_readback_straight", callsign)
 
     def _inside_ctr(self, track: AircraftTrack | None) -> bool:
         """True if the aircraft is inside the CTR footprint below the ceiling.
@@ -1303,11 +1353,10 @@ class AtcBrain:
         distance = self._distance_to_gate(track, gate)
         if distance is not None and distance > DESCENT_FINAL_NM:
             if pilot.descend_intermediate:
-                # Already stepped down; this is the readback. Acknowledge and
-                # wait until closer for the final descent (issued by the
-                # monitor, see check_arrival_descent).
-                return self._say("readback_correct", callsign,
-                                 agency=self.control_short)
+                # Already stepped down; this is the readback. Stay silent — the
+                # next instruction (the final descent) follows once closer, so
+                # the controller does not acknowledge (see check_arrival_descent).
+                return ""
             pilot.descend_intermediate = True
             return self._say("control_descend_step", callsign,
                              altitude=f"{DESCENT_INTERMEDIATE_FT} feet")
@@ -1552,14 +1601,15 @@ class AtcBrain:
         return None
 
     def check_landing_handoff(self, callsign: str, on_runway: bool) -> str | None:
-        """Push a landed flight to Ground, unprompted, at touchdown.
+        """Push a landed flight to Ground, unprompted, once it is rolling out.
 
         Master Arms SOP (Mission Procedures §9): "after landing, tower will push
         you to the Ground channel" — the pilot does not report "vacated" to
-        Tower. The handoff happens **as the aircraft touches down** (while it is
-        still rolling out on the runway), so the pilot is already on Ground by
-        the time they are clear — not after they have vacated. Fires once per
-        landing; re-arms on the next approach (go-around / touch-and-go).
+        Tower. The handoff happens once the aircraft is **on the ground and
+        rolling out** (the caller passes `on_runway=True` only then, so a
+        touch-and-go still fast on the runway is not pushed), so the pilot is
+        already on Ground by the time they are clear. Fires once per landing;
+        re-arms on the next approach (go-around / touch-and-go).
         """
         pilot = self._pilot(callsign)
         if not on_runway:
