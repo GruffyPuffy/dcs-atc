@@ -11,6 +11,9 @@ PHRASEOLOGY = Path(__file__).resolve().parent.parent / "phraseology.json"
 
 # Every template key the brain can render. Keep in sync with brain.py.
 REQUIRED_TEMPLATES = {
+    "trainer_echo_on",
+    "trainer_echo_off",
+    "trainer_unknown",
     "taxi", "hold_short", "takeoff", "line_up", "lineup_readback",
     "hold_short_traffic", "continue_approach",
     "ground_ack", "ground_info", "ground_info_readback", "readback_correct",

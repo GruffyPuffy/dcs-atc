@@ -13,7 +13,7 @@ kneeboard during training.
 
 Page 4 is a **shortened trainer path**, not a wiki transcript: it uses the ATC
 bot's actual replies to show the fewest calls that get a single-ship airborne and
-back. Stuck at any point? Say *"<callsign> help"* on any frequency.
+back. Stuck at any point? Say *"Trainer, <callsign>, help"* on any frequency.
 
 Each other line is a request/answer exchange from the wiki (the "Adder11" two-ship
 example), colour-coded by who is talking (PILOT / GND / TWR / CTL / AWACS).

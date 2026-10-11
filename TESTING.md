@@ -97,7 +97,7 @@ check the log together.
 
 ## 6. Trainer aids (any freq, any phase)
 
-- [ ] **Help** — *"Colt 1, help"* → *"Apollo suggests: …"* hint for your phase
+- [ ] **Help** — *"Trainer, Colt 1, help"* → *"Apollo suggests: …"* hint for your phase
 - [ ] **Say again** — *"Colt 1, say again"* → replays the last clearance
 - [ ] **Cancel** — *"Colt 1, cancel"* → *"clearance cancelled"*, steps back one phase
 - [ ] **Reset** — *"Colt 1, reset"* → back to Idle, *"contact Ground on channel 6"*

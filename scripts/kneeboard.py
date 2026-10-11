@@ -211,7 +211,7 @@ PAGES = [
         "subtitle": "Single-ship — minimal calls (skip Ground & the break)",
         "note": "Shortest way through the trainer: go straight to Tower (no Ground "
                 "clearance/taxi) and report 'on final' (no overhead break). "
-                "Stuck? Say '<callsign> help' on any frequency.",
+                "Stuck? Say 'Trainer, <callsign>, help' on any frequency.",
         "sections": [
             ("Takeoff — Tower (Ch 7)", [
                 ("P", "Tower, Adder1, ready for departure"),

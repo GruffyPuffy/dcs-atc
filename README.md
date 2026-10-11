@@ -13,7 +13,8 @@ follows the Master Arms (MA) community SOP and is deliberately a *coach*:
 - **readbacks are checked** — a complete one is confirmed, an incomplete one is
   flagged ("readback incomplete, I did not get your altitude") but you are
   **never blocked**, so a fumbled call never traps you mid-flight;
-- it is forgiving: `say again`, `help`, `reset` and `cancel` always work;
+- it is forgiving: `say again`, `reset` and `cancel` always work, and
+  `Trainer, <callsign>, help` gives a state-aware hint;
 - a **live map** shows the picture, and a saved **debrief** (your trail plus
   every radio call) lets you review a sortie afterwards.
 
@@ -53,7 +54,7 @@ actual replies.
 - `03-airborne.jpg` — AWACS / package (check-in, push, attack, RTB handoff)
 - `04-light-path.jpg` — **single-ship light path**: skip Ground and the overhead break
 
-Stuck at any point? Say *"<callsign> help"* on any frequency. Regenerate with
+Stuck at any point? Say *"Trainer, <callsign>, help"* on any frequency. Regenerate with
 `cd scripts && uv run --with pillow kneeboard.py --out ../kneeboard` — see
 [`kneeboard/README.md`](kneeboard/README.md).
 

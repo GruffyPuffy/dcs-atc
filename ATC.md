@@ -159,7 +159,7 @@ step on the next controller's first call.
 | "Ground, Colt 1, rolling off runway 25, requesting taxi to parking" | **taxi to parking** | "Colt 1, Ground, cleared taxi to Ramp North via Alpha November." |
 | "Colt 1, checking in" / "with you" | **check-in** | "Colt 1, Tower, roger." |
 | "Colt 1, radio check" | **radio check** | "Colt 1, Tower, loud and clear." |
-| "Colt 1, help" | **help** | a short, state-aware hint (see §3a) |
+| "Trainer, Colt 1, help" | **help** | a short, state-aware hint (see §3a) |
 
 Intent matching is order-sensitive: the first matching rule wins. Some rules
 require a prior state (e.g. "ready for departure" only clears line-up if the
@@ -176,11 +176,11 @@ special: it is what triggers the **takeoff clearance** (see §11).
 ## 3a. Help (trainer aid)
 
 Because this is a *trainer*, a pilot who is unsure what to do can call
-**"<callsign> help"** (also "assist", "what do I do", "what now", "remind me").
-The bot replies with a short hint for the pilot's **current phase**, so it
-always tells them the *next* call to make. It works on **every controller
-frequency** (Ground, Tower, Control) and in **every phase** — you never have to
-be on the "right" channel to ask for help.
+**"Trainer, <callsign>, help"** (also "assist", "what do I do", "what now",
+"remind me"). The bot replies with a short hint for the pilot's **current
+phase**, so it always tells them the *next* call to make. It works on **every
+controller frequency** (Ground, Tower, Control) and in **every phase** — you
+never have to be on the "right" channel to ask for help.
 
 Every hint is prefixed with a clear marker — **"Apollo suggests:"** — so it is
 obvious the reply is training guidance, not a real clearance. (Apollo is the
@@ -241,6 +241,33 @@ not say "state reset", but in a trainer it is better to be unstuck than stuck.
 > so they work regardless of which frequency the pilot is on or what phase they
 > are in. `say again` is also the natural response to a missed readback, so it
 > replays the last clearance rather than the generic "say again" prompt.
+
+---
+
+## 3c. Trainer commands (any frequency)
+
+Some aids are not ATC phraseology at all, so they live behind a **`trainer`**
+keyword — a namespace that can never be confused with a clearance. Like the
+escape hatches, they work on **every controller frequency** and in **every
+phase**, and are **per pilot** (each pilot controls their own).
+
+| Pilot says | Effect | Reply |
+| --- | --- | --- |
+| **"Trainer, Colt 1, help"** | A short, state-aware hint for the current phase (see §3a) | "Colt 1, Apollo suggests: …" |
+| **"Trainer, Colt 1, echo on"** | Echo this pilot's radio exchanges (what was heard + the reply) into their **in-game DCS message feed** | "Colt 1, Tower, trainer echo on. I will echo our exchanges to your in-game message feed." |
+| **"Trainer, Colt 1, echo off"** | Stop the echo | "Colt 1, Tower, trainer echo off." |
+
+With no callsign ("Trainer, echo on") the bot uses the known speaker's callsign.
+
+This is the voice-controlled version of the operator's `--debug` mirror: instead
+of the operator restarting the bot with `--debug`, a pilot can turn the mirror on
+for themselves mid-flight. It is a **read-only side channel** — it never feeds
+the brain or changes any phase. `--debug` still forces the mirror on for
+everyone (and adds the verbose `DBG` log).
+
+> Design note: the `trainer` keyword is matched **before** everything else in
+> `_dispatch`, so a trainer command can never be mistaken for a clearance. An
+> unrecognised trainer command gets a short usage hint rather than "say again".
 
 ---
 
@@ -891,10 +918,12 @@ Tower; 8 Ground.)
 
 | Pilot says | Bot replies |
 |-----------|-------------|
-| "Colt 1, help." | "Colt 1, Apollo suggests: …" (state-aware hint, see §3a) |
+| "Trainer, Colt 1, help." | "Colt 1, Apollo suggests: …" (state-aware hint, see §3a) |
 | "Colt 1, reset." | "Colt 1, Tower, state reset. Contact Ground on channel 6 when ready." (see §3b) |
 | "Colt 1, cancel." | "Colt 1, Tower, clearance cancelled." (steps back one phase, see §3b) |
 | "Colt 1, say again." | replays the last clearance (see §3b) |
+| "Trainer, Colt 1, echo on." | "Colt 1, Tower, trainer echo on. …" (echoes comms to the in-game feed, see §3c) |
+| "Trainer, Colt 1, echo off." | "Colt 1, Tower, trainer echo off." (see §3c) |
 | "Control, Colt 1, request bearing and distance to Entry East." | "Colt 1, Control, bearing 014, distance 32 miles to Entry East." |
 | "Control, Colt 1, request azimuth to Entry East." | "Colt 1, Control, bearing 014, distance 32 miles to Entry East." (azimuth = bearing) |
 | "Control, Colt 1, request directions to the field." | "…bearing …, distance …" to the **best/cleared entry** (see §4b) |
@@ -959,7 +988,7 @@ That is ~10 calls for a full circuit, versus ~21 in §12. The Control→Tower sw
 at step 7 is pilot-initiated (as in the full walkthrough; the bot does not require
 a formal handoff there). You could shorten it further (report "on final" straight
 after runway in sight), but steps 7–9 are the natural light form. Lost at any
-point? Say **"<callsign> help"** on any frequency for a state-aware hint (§3a).
+point? Say **"Trainer, <callsign>, help"** on any frequency for a state-aware hint (§3a).
 
 > The bot does not *require* the Ground steps, the readbacks, or the overhead
 > break — they are the realistic/complete track. The light path above is fully

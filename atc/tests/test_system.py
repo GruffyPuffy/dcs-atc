@@ -514,7 +514,7 @@ def test_pilot_aligned_on_final_is_cleared(airfield, brain):
 def test_help_on_the_ground(airfield, brain, setup, controller, expect):
     sc = _scenario(airfield, brain)
     setup(sc)
-    r = sc.say("Colt 1, help", controller)
+    r = sc.say("Trainer, Colt 1, help", controller)
     assert "Apollo suggests" in r
     assert expect in r.lower()
 
@@ -522,7 +522,7 @@ def test_help_on_the_ground(airfield, brain, setup, controller, expect):
 def test_help_after_taxi_points_to_hold_short(airfield, brain):
     sc = _scenario(airfield, brain).park("Ramp South")
     sc.say("Ground, Colt 1, requesting taxi", Controller.GROUND)
-    r = sc.say("Colt 1, help", Controller.GROUND)
+    r = sc.say("Trainer, Colt 1, help", Controller.GROUND)
     assert "holding short" in r.lower()
 
 
@@ -530,27 +530,27 @@ def test_help_while_holding_points_to_tower(airfield, brain):
     sc = _scenario(airfield, brain).at_threshold("25")
     sc.say("Ground, Colt 1, requesting taxi", Controller.GROUND)
     sc.say("Colt 1, holding short runway 25", Controller.GROUND)
-    r = sc.say("Colt 1, help", Controller.GROUND)
+    r = sc.say("Trainer, Colt 1, help", Controller.GROUND)
     assert "ready for departure" in r.lower()
 
 
 def test_help_while_lined_up_mentions_readback(airfield, brain):
     sc = _scenario(airfield, brain).at_threshold("25")
     sc.say("Tower, Colt 1, ready for departure", Controller.TOWER)
-    r = sc.say("Colt 1, help", Controller.TOWER)
+    r = sc.say("Trainer, Colt 1, help", Controller.TOWER)
     assert "read back" in r.lower() or "readback" in r.lower()
 
 
 def test_help_always_mentions_escape_hatches(airfield, brain):
     sc = _scenario(airfield, brain).park("Ramp South")
-    r = sc.say("Colt 1, help", Controller.GROUND)
+    r = sc.say("Trainer, Colt 1, help", Controller.GROUND)
     assert "reset" in r.lower() and "cancel" in r.lower()
 
 
 def test_help_works_on_any_controller(airfield, brain):
     for controller in (Controller.GROUND, Controller.TOWER, Controller.CONTROL):
         sc = _scenario(airfield, brain).park("Ramp South")
-        r = sc.say("Colt 1, help", controller)
+        r = sc.say("Trainer, Colt 1, help", controller)
         assert "Apollo suggests" in r
 
 

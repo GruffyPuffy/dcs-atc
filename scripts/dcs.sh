@@ -16,6 +16,9 @@ Usage: ./scripts/dcs.sh <command>
   start     Start the container and apply Compose changes
   stop      Stop the container without deleting its data
   status    Show container status
+  health    Read-only health summary (containers, bot mode, map, bridge)
+  debriefs  List debrief files saved in the bot container
+  debrief   Download a debrief (name, or 'all') to atc/debrief/ on the host
   logs      Follow recent container logs (Ctrl+C to exit)
 srs-autoconnect  Install the SRS auto-connect announcer hook (port-only by default)
   config    Prepare configuration and validate Compose without starting
@@ -78,6 +81,45 @@ require_gpu() {
 atc_gpu_running() {
   docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' dcs-atc-bot 2>/dev/null \
     | grep -q '^ATC_GPU=1'
+}
+
+# Read-only health summary: containers, bot mode, map, SRS clients, DCS bridge.
+health() {
+  require_docker
+
+  echo "== Containers =="
+  local c state
+  for c in dcs-atc-server dcs-atc-srs dcs-atc-bot; do
+    state="$(docker inspect -f '{{.State.Status}}' "$c" 2>/dev/null || echo missing)"
+    printf '  %-16s %s\n' "$c" "$state"
+  done
+
+  echo "== ATC bot =="
+  if docker inspect dcs-atc-bot >/dev/null 2>&1; then
+    if atc_gpu_running; then
+      echo "  mode             GPU (ATC_GPU=1)"
+    else
+      echo "  mode             CPU"
+    fi
+    local stt
+    stt="$(docker logs dcs-atc-bot 2>&1 \
+      | grep -o "Loading Whisper '[^']*' on [a-z]* ([a-z0-9]*)" | tail -1)"
+    [[ -n "$stt" ]] && echo "  stt              ${stt#Loading Whisper }"
+    if curl -fsS -o /dev/null "http://127.0.0.1:8090/" 2>/dev/null; then
+      echo "  map              http://127.0.0.1:8090/  reachable"
+    else
+      echo "  map              not reachable"
+    fi
+  else
+    echo "  (not running)"
+  fi
+
+  echo "== DCS state bridge =="
+  if ss -ltn 2>/dev/null | grep -q ':10309 '; then
+    echo "  port 10309       listening"
+  else
+    echo "  port 10309       not listening"
+  fi
 }
 
 require_data_disk() {
@@ -197,7 +239,8 @@ deploy_hook() {
 }
 
 command="${1:-help}"
-if [[ "$#" -gt 1 ]]; then
+# `debrief <name>` takes one argument; every other command takes none.
+if [[ "$#" -gt 1 && "$command" != "debrief" ]]; then
   usage >&2
   exit 2
 fi
@@ -270,6 +313,33 @@ case "$command" in
   status)
     require_docker
     compose ps
+    ;;
+  health)
+    health
+    ;;
+  debriefs)
+    require_docker
+    docker exec dcs-atc-bot sh -c \
+      'ls -1 /data/atc/src/atc/debrief/*.json 2>/dev/null' \
+      | sed 's#.*/##' || true
+    ;;
+  debrief)
+    require_docker
+    name="${2:-}"
+    if [[ -z "$name" ]]; then
+      echo "Usage: ./scripts/dcs.sh debrief <name|all>" >&2
+      echo "List names with: ./scripts/dcs.sh debriefs" >&2
+      exit 2
+    fi
+    dest="$repo_dir/atc/debrief"
+    mkdir -p "$dest"
+    if [[ "$name" == "all" ]]; then
+      docker cp dcs-atc-bot:/data/atc/src/atc/debrief/. "$dest/"
+      echo "Downloaded all debriefs to $dest"
+    else
+      docker cp "dcs-atc-bot:/data/atc/src/atc/debrief/$name" "$dest/$name"
+      echo "Downloaded $name to $dest"
+    fi
     ;;
   logs)
     require_docker

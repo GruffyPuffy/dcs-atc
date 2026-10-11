@@ -511,7 +511,7 @@ def test_say_again_uses_correct_agency(brain):
 
 
 def test_help_without_flight_number(brain):
-    reply = brain.handle("Colt help", controller=Controller.CONTROL)
+    reply = brain.handle("Trainer, Colt, help", controller=Controller.CONTROL)
     assert reply and "Apollo suggests" in reply
 
 
@@ -782,21 +782,21 @@ def test_set_wind_and_runway(brain):
 # ---------- Help (trainer aid) ----------
 
 def test_help_idle_points_to_ground(brain):
-    reply = brain.handle("Colt 1 help", controller=Controller.TOWER)
+    reply = brain.handle("Trainer, Colt 1, help", controller=Controller.TOWER)
     assert "Ground" in reply
     assert "clearance" in reply.lower()
 
 
 def test_help_after_taxi_points_to_hold_short(brain):
     brain.handle("Ground, Colt 1, requesting taxi", controller=Controller.GROUND)
-    reply = brain.handle("Colt 1 help", controller=Controller.GROUND)
+    reply = brain.handle("Trainer, Colt 1, help", controller=Controller.GROUND)
     assert "holding short" in reply.lower()
 
 
 def test_help_holding_points_to_tower(brain):
     brain.handle("Ground, Colt 1, requesting taxi", controller=Controller.GROUND)
     brain.handle("Colt 1, holding short runway 25", controller=Controller.GROUND)
-    reply = brain.handle("Colt 1 help", controller=Controller.GROUND)
+    reply = brain.handle("Trainer, Colt 1, help", controller=Controller.GROUND)
     assert "Tower" in reply
     assert "ready for departure" in reply.lower()
 
@@ -804,7 +804,7 @@ def test_help_holding_points_to_tower(brain):
 def test_help_works_on_any_controller(brain):
     # help is a shared intent, valid regardless of which frequency it arrives on
     for controller in (Controller.GROUND, Controller.TOWER, Controller.CONTROL):
-        reply = brain.handle("Colt 1 help", controller=controller)
+        reply = brain.handle("Trainer, Colt 1, help", controller=controller)
         assert reply and "Colt 1" in reply
 
 
@@ -816,7 +816,7 @@ def test_escape_hatches_work_on_every_agency_and_phase(brain):
         for phase in Phase:
             brain.pilots.clear()
             brain.pilots["Colt 1"] = PilotState(callsign="Colt 1", phase=phase)
-            help_reply = brain.handle("Colt 1 help", controller=controller)
+            help_reply = brain.handle("Trainer, Colt 1, help", controller=controller)
             reset_reply = brain.handle("Colt 1 reset", controller=controller)
             cancel_reply = brain.handle("Colt 1 cancel", controller=controller)
             assert help_reply and "Apollo suggests" in help_reply, (controller, phase)
@@ -825,7 +825,53 @@ def test_escape_hatches_work_on_every_agency_and_phase(brain):
 
 
 def test_help_requires_callsign(brain):
-    assert brain.handle("help me please", controller=Controller.TOWER) is None
+    assert brain.handle("Trainer, help me please", controller=Controller.TOWER) is None
+
+
+# ---------- Trainer commands (per-pilot, any frequency) ----------
+
+def test_trainer_echo_on_off_toggles_per_pilot(brain):
+    reply = brain.handle("Trainer, Colt 1, echo on", controller=Controller.GROUND)
+    assert reply and "echo on" in reply
+    assert brain.mirror_enabled("Colt 1") is True
+    # A different pilot is unaffected (per-pilot state).
+    assert brain.mirror_enabled("Ford 2") is False
+    reply = brain.handle("Trainer, Colt 1, echo off", controller=Controller.TOWER)
+    assert reply and "echo off" in reply
+    assert brain.mirror_enabled("Colt 1") is False
+
+
+def test_trainer_echo_without_callsign_uses_speaker(brain):
+    # "Trainer, echo on" with no callsign: the known speaker is used.
+    brain.remember_speaker("Caveman", "Colt 1")
+    reply = brain.handle("Trainer, echo on", controller=Controller.TOWER,
+                         speaker="Caveman")
+    assert reply and "echo on" in reply
+    assert brain.mirror_enabled("Colt 1") is True
+
+
+def test_trainer_works_on_every_agency_and_phase(brain):
+    from brain import PilotState
+    for controller in (Controller.GROUND, Controller.TOWER, Controller.CONTROL):
+        for phase in Phase:
+            brain.pilots.clear()
+            brain.pilots["Colt 1"] = PilotState(callsign="Colt 1", phase=phase)
+            reply = brain.handle("Trainer, Colt 1, echo on", controller=controller)
+            assert reply and "echo on" in reply, (controller, phase)
+            assert brain.mirror_enabled("Colt 1") is True, (controller, phase)
+
+
+def test_trainer_unknown_command_hints(brain):
+    reply = brain.handle("Trainer, Colt 1, do something", controller=Controller.TOWER)
+    assert reply and "trainer commands" in reply
+    assert brain.mirror_enabled("Colt 1") is False
+
+
+def test_trainer_does_not_change_phase(brain):
+    brain.handle("Ground, Colt 1, requesting taxi", controller=Controller.GROUND)
+    phase = brain.pilots["Colt 1"].phase
+    brain.handle("Trainer, Colt 1, echo on", controller=Controller.GROUND)
+    assert brain.pilots["Colt 1"].phase == phase
 
 
 # ---------- Escape hatches (never get stuck in a wrong state) ----------
@@ -877,7 +923,7 @@ def test_say_again_without_history(brain):
 
 
 def test_help_mentions_escape_hatches(brain):
-    reply = brain.handle("Colt 1 help", controller=Controller.TOWER)
+    reply = brain.handle("Trainer, Colt 1, help", controller=Controller.TOWER)
     assert "reset" in reply.lower()
     assert "cancel" in reply.lower()
 
@@ -1209,7 +1255,7 @@ def test_bare_ready_while_lined_up_clears_takeoff(brain):
 
 def test_lineup_help_mentions_readback(brain):
     brain.handle("Tower, Colt 1, ready for departure", controller=Controller.TOWER)
-    reply = brain.handle("Colt 1, help", controller=Controller.TOWER)
+    reply = brain.handle("Trainer, Colt 1, help", controller=Controller.TOWER)
     assert "read back" in reply.lower() or "readback" in reply.lower()
 
 

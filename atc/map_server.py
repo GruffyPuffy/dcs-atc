@@ -331,6 +331,26 @@ class TrackHistory:
         return [c for c in (data.get("chatter") or []) if isinstance(c, dict)]
 
 
+# Keep at most this many debrief files (debriefs are saved every session now,
+# so the volume must not grow without bound). Oldest are pruned after a save.
+DEBRIEF_KEEP = 20
+
+
+def prune_debriefs(keep: int = DEBRIEF_KEEP, directory: Path | None = None) -> None:
+    """Delete the oldest debrief files, keeping the newest `keep`."""
+    directory = directory or DEBRIEF_DIR
+    try:
+        files = sorted(directory.glob("tracks_*.json"),
+                       key=lambda p: p.stat().st_mtime, reverse=True)
+    except OSError:
+        return
+    for path in files[keep:]:
+        try:
+            path.unlink()
+        except OSError:
+            pass
+
+
 def _nm_between(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """Great-circle distance in NM (small helper; avoids importing airspace)."""
     import math
@@ -523,6 +543,8 @@ class MapService:
                 with self._chatter_lock:
                     data["chatter"] = list(self._chatter)
                 self.tracks.save_json(data, self.tracks_file)
+            # Debriefs are saved every session now; keep the newest few only.
+            prune_debriefs()
 
     def _maybe_save_tracks(self) -> None:
         """Autosave the trails at most every `TRACKS_SAVE_INTERVAL` seconds."""

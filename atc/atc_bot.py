@@ -199,15 +199,20 @@ def main() -> None:
                              "atc/.control). Read by run_server.sh.")
     parser.add_argument("--tracks-file", default=None,
                         help="save/restore flight trails here for debrief. "
-                             "Defaults to atc/debrief/tracks_<field>_<time>.json "
-                             "with --debug.")
+                             "Defaults to atc/debrief/tracks_<field>_<time>.json.")
+    parser.add_argument("--no-debrief", action="store_true",
+                        help="do not save a debrief (trail + comms) for this "
+                             "session (saved by default)")
     parser.add_argument("--replay", default=None, metavar="FILE",
                         help="review a saved debrief file on the map, read-only "
                              "(implies loading it as the tracks file)")
     parser.add_argument("--no-announce", action="store_true",
                         help="skip the one-time 'ATC online' announcement")
     parser.add_argument("--debug", action="store_true",
-                        help="log routing/state detail for every transmission")
+                        help="log routing/state detail for every transmission, "
+                             "and force the in-game comms mirror on for all "
+                             "pilots (pilots can also toggle it themselves "
+                             "with 'trainer, echo on')")
     args = parser.parse_args()
 
     from faster_whisper import WhisperModel
@@ -553,9 +558,10 @@ def main() -> None:
         from map_server import (start_map_server, ControlPlane, DEBRIEF_DIR,
                                 debrief_filename, RESTART_EXIT_CODE)
         tracks_file = args.replay or args.tracks_file
-        if tracks_file is None and args.debug:
+        if tracks_file is None and not args.no_debrief:
             # One named snapshot per session: atc/debrief/tracks_<field>_<time>
             # .json, so a tester can later pick exactly this event to review.
+            # Saved by default (not only with --debug); --no-debrief opts out.
             DEBRIEF_DIR.mkdir(parents=True, exist_ok=True)
             tracks_file = DEBRIEF_DIR / debrief_filename(airfield.name)
 
@@ -600,15 +606,26 @@ def main() -> None:
             else:
                 agency = controller or ""
             map_service.log_chatter(kind, freq_hz / 1e6, who, text, agency)
-        # --debug comms mirror: echo the exchange into the pilot's in-game chat,
-        # so a trainer can read what was heard (RX) and answered (TX) without
-        # the map. Read-only side channel: it never feeds the brain.
-        if args.debug and state is not None:
+        # In-game comms mirror: echo the exchange into the pilot's DCS message
+        # feed, so a trainer can read what was heard (RX) and answered (TX)
+        # without the map. Per-pilot: enabled by the pilot saying "trainer, logs
+        # on" (any frequency), or forced on for everyone with --debug. Read-only
+        # side channel: it never feeds the brain.
+        if state is not None:
             if kind == "rx":
                 _debug_reply_to[0] = who
-                _mirror(f"RX {who}: {text}", who)
-            else:
+                if args.debug or _mirror_for(who):
+                    _mirror(f"RX {who}: {text}", who)
+            elif args.debug or _mirror_for(_debug_reply_to[0]):
                 _mirror(f"TX {who}: {text}", _debug_reply_to[0])
+
+    def _mirror_for(who: str) -> bool:
+        """True if this speaker asked for the in-game comms mirror."""
+        if not who:
+            return False
+        with lock:
+            callsign = brain.callsign_for_speaker(who)
+            return brain.mirror_enabled(callsign)
 
     def _mirror(line: str, player: str) -> None:
         # The bridge targets a player by their DCS player name, but `player` here
@@ -909,7 +926,7 @@ def main() -> None:
             ch_note = f"Ch {ch}  " if ch else ""
             lines.append(f"  {'Atis':8s} {ch_note}{atis_mhz:.3f} MHz AM  "
                          f"(every {args.atis_interval:.0f}s)")
-        lines.append('  Say "<callsign> help" on any frequency for a hint.')
+        lines.append('  Say "Trainer, <callsign>, help" on any frequency for a hint.')
         return lines
 
     for line in radio_setup_lines():

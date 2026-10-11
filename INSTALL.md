@@ -77,8 +77,11 @@ nothing is baked into the image. It reaches DCS and SRS by their compose service
 names, and serves the map on `http://<host>:8090/` (LAN/VPN only).
 
     ./scripts/dcs.sh atc-logs          # follow the bot log
-    ./scripts/dcs.sh atc-update        # restart (pulls latest on start)
+    ./scripts/dcs.sh atc-update        # recreate (pulls latest on start)
     ./scripts/dcs.sh atc-down          # stop the bot container
+    ./scripts/dcs.sh health            # read-only health summary
+    ./scripts/dcs.sh debriefs          # list saved debriefs in the container
+    ./scripts/dcs.sh debrief all       # download them to atc/debrief/
 
 Only one bot may run at a time (it owns SRS as ATC and the map port). Stop the
 host bot before `atc-up`, and vice versa.
@@ -137,7 +140,9 @@ Keep the map on your LAN or VPN — never forward it to the internet.
 ## Day-2 operation
 
 - `./scripts/dcs.sh status` / `logs` / `stop` / `start` — container lifecycle
+- `./scripts/dcs.sh health` — read-only summary (containers, bot mode, map, bridge)
 - `./scripts/dcs.sh srs-logs` / `srs-status` — SRS server log and connected clients
 - `./scripts/dcs.sh atc-up` / `atc-down` / `atc-logs` / `atc-update` — ATC bot
+- `./scripts/dcs.sh debriefs` / `debrief <name|all>` — list/download debriefs
 - `python3 scripts/state_client.py status` — live mission picture (groups,
   airbases, positions) used by the ATC logic

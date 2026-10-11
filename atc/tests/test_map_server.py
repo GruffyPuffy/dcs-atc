@@ -6,6 +6,7 @@ import time
 import urllib.error
 import urllib.request
 
+import map_server
 from brain import Controller
 from map_server import MapService, TrackHistory, make_handler, start_map_server
 from state_client import Aircraft
@@ -416,6 +417,19 @@ def test_save_skips_empty_history(brain, airfield, tmp_path):
     service.record([_ac(lat=42.20, lon=42.52)])
     service.save_tracks()               # now there is a trail
     assert tracks_file.exists()
+
+
+def test_prune_debriefs_keeps_newest(tmp_path):
+    """Debriefs are saved every session, so old ones must be pruned."""
+    import os
+    import time as _time
+    for i in range(5):
+        p = tmp_path / f"tracks_k_{i}.json"
+        p.write_text("{}")
+        os.utime(p, (1000 + i, 1000 + i))   # deterministic mtimes
+    map_server.prune_debriefs(keep=2, directory=tmp_path)
+    left = sorted(p.name for p in tmp_path.glob("tracks_*.json"))
+    assert left == ["tracks_k_3.json", "tracks_k_4.json"]
 
 
 def test_unrecognized_pilot_call_still_on_trail(brain, airfield, tmp_path):

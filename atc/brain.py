@@ -96,6 +96,9 @@ class PilotState:
     # landing; re-arms on the next approach (go-around / touch-and-go).
     landing_handoff_announced: bool = False
     formation: int = 0  # flight size (2+ = multi-ship), learned from calls
+    # Trainer aid: this pilot asked for the in-game comms mirror ("trainer,
+    # logs on"). Per-pilot, so each pilot controls their own feed.
+    mirror_logs: bool = False
     last_reply: str = ""  # last clearance, replayed on "say again"
     last_clearance: str = ""  # last clearance issued, for readback verification
     last_controller: str = ""  # last agency talked to (for the map view)
@@ -539,8 +542,9 @@ class AtcBrain:
         if not callsign:
             # Some calls may omit the flight number (e.g. "Colt help").
             name = self.callsigns.extract_name(text)
-            if name and re.search(r"\b(help|assist|what do i do|what now|"
-                                  r"remind me)\b", text.lower()):
+            if name and re.search(r"\btrainer\b", text.lower()) and re.search(
+                    r"\b(help|assist|what do i do|what now|remind me)\b",
+                    text.lower()):
                 return self._help(name, self._pilot(name))
             # A speaker we have already identified is trusted: use their own
             # callsign even when this transmission did not name it. STT often
@@ -579,9 +583,12 @@ class AtcBrain:
                   traffic: list | None = None,
                   speaker: str = "") -> str | None:
         """Route one transmission to the right intent handler."""
-        # Trainer aid: "<callsign> help" returns a short, state-aware hint.
-        if re.search(r"\b(help|assist|what do i do|what now|remind me)\b", low):
-            return self._help(callsign, pilot)
+        # Trainer commands: "trainer, help" and "trainer, echo on|off" (or
+        # "trainer, <callsign>, ..."). A namespaced trainer aid (NOT real
+        # phraseology), available on any frequency and in any phase. Handled
+        # before everything else so it can never be mistaken for a clearance.
+        if re.search(r"\btrainer\b", low):
+            return self._trainer(callsign, pilot, low, controller)
 
         # Trainer aid: "<callsign> request vectors [for runway 25]" gives an
         # approach vector ("fly heading X, vectors for runway Y"). Real ATC
@@ -683,6 +690,30 @@ class AtcBrain:
             return self._say("roger", callsign, agency=agency)
         # bare callsign / unintelligible request: ask them to say again
         return self._say("say_again", callsign, agency=agency)
+
+    def _trainer(self, callsign: str, pilot: PilotState, low: str,
+                 controller: Controller) -> str:
+        """Handle a "trainer, ..." command (trainer aid, any frequency).
+
+        Currently: "trainer, echo on|off" toggles the in-game comms mirror for
+        THIS pilot. Unknown trainer commands get a short usage hint.
+        """
+        agency = self._agency(controller)
+        if re.search(r"\b(help|assist|what do i do|what now|remind me)\b", low):
+            return self._help(callsign, pilot)
+        if re.search(r"\becho\b", low):
+            if re.search(r"\b(off|stop|disable|no)\b", low):
+                pilot.mirror_logs = False
+                return self._say("trainer_echo_off", callsign, agency=agency)
+            if re.search(r"\b(on|start|enable|yes)\b", low):
+                pilot.mirror_logs = True
+                return self._say("trainer_echo_on", callsign, agency=agency)
+        return self._say("trainer_unknown", callsign, agency=agency)
+
+    def mirror_enabled(self, callsign: str) -> bool:
+        """True if this pilot asked for the in-game comms mirror."""
+        pilot = self.pilots.get(callsign)
+        return bool(pilot and pilot.mirror_logs)
 
     def _reset(self, callsign: str, pilot: PilotState,
                controller: Controller) -> str:

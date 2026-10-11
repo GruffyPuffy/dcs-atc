@@ -12,7 +12,8 @@
 #   ./start_bot.sh --tx-volume 0.4          # quieten loud ATC voices (default)
 #   ./start_bot.sh --map-port 9000          # move the map to another port
 #   ./start_bot.sh --map-port 0             # disable the map
-#   ./start_bot.sh --debug                  # + save a debrief to atc/debrief/tracks_<field>_<time>.json
+#   ./start_bot.sh --debug                  # + verbose DBG log + in-game comms mirror
+#   ./start_bot.sh --no-debrief             # skip the debrief file (saved by default)
 #   ./start_bot.sh --replay debrief/tracks_gudauta_20261010-114445.json  # review a saved sortie
 set -euo pipefail
 
