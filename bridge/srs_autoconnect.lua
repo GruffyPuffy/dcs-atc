@@ -2,14 +2,29 @@
 -- Tells joining players where the SRS server is; an SRS client with
 -- "Auto Connect" enabled parses the chat line and connects by itself.
 -- Voice never touches DCS: this hook only sends one chat message per join.
--- __SRS_HOST__ is replaced by `scripts/dcs.sh srs-autoconnect` at deploy time
--- with the detected LAN IP (e.g. 192.168.1.230).
+--
+-- Two announcement formats are understood by the SRS client:
+--   "SRS Running on <port>"        -> the client uses the SAME host it used to
+--                                     reach DCS (net.get_server_host()), so it
+--                                     works for LAN *and* internet clients with
+--                                     no config. This is the default.
+--   "SRS Running @ <host>:<port>"  -> an explicit address. Set SRS_HOST (via
+--                                     `SRS_HOST=... ./scripts/dcs.sh
+--                                     srs-autoconnect`) to force this, e.g. a
+--                                     public hostname.
+-- __SRS_HOST__ is replaced at deploy time (empty by default = port-only form).
 local SRS_HOST = "__SRS_HOST__"
 local SRS_PORT = "5002"
 
 local function announce(player_id)
     if not player_id or player_id == 1 then return end -- 1 = the server host
-    net.send_chat_to("SRS Running @ " .. SRS_HOST .. ":" .. SRS_PORT, player_id)
+    local message
+    if SRS_HOST ~= "" then
+        message = "SRS Running @ " .. SRS_HOST .. ":" .. SRS_PORT
+    else
+        message = "SRS Running on " .. SRS_PORT
+    end
+    net.send_chat_to(message, player_id)
 end
 
 -- setUserCallbacks may replace the callback table, so chain whatever another
@@ -28,4 +43,6 @@ callbacks.onPlayerChangeSlot = function(id)
 end
 
 DCS.setUserCallbacks(callbacks)
-log.write('SRS-AutoConnect', log.INFO, 'Announcing SRS at ' .. SRS_HOST .. ':' .. SRS_PORT)
+local where = (SRS_HOST ~= "") and (SRS_HOST .. ':' .. SRS_PORT)
+    or ('port ' .. SRS_PORT .. ' (client reuses the DCS host)')
+log.write('SRS-AutoConnect', log.INFO, 'Announcing SRS at ' .. where)

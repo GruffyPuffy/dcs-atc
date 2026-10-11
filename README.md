@@ -21,8 +21,10 @@ It runs headless beside a DCS dedicated server with **no `.miz` edits and no
 mission-scripting changes**: it reads live state through a Saved Games hook and
 talks over SRS.
 
-- **Getting it running:** [`INSTALL.md`](INSTALL.md) — Docker, DCS + SRS
-  containers, hooks, mission, bot.
+- **Getting it running:** [`INSTALL.md`](INSTALL.md) — Docker, DCS + SRS + ATC
+  containers, hooks, mission.
+- **Developing the bot:** [`CONTRIBUTING.md`](CONTRIBUTING.md) — run on the host,
+  tests, host/container switching.
 - **Behaviour reference:** [`ATC.md`](ATC.md) — callsigns, phraseology, the
   per-pilot state machine, controllers, CTR and runway logic.
 - **First test scenario:** [`TESTING.md`](TESTING.md).
@@ -70,30 +72,38 @@ Layout
     **system tests** (`test_system.py` + `scenario.py`) that fly full MA dialogs
     through the brain with faked radar/traffic (runway occupied, position
     cross-checks, single/2/4-ship)
-- `deploy/dcs/` — docker-compose for the DCS dedicated server and SRS server
-- `scripts/dcs.sh` — manage the containers (install/start/stop/logs/srs-*)
+- `deploy/dcs/` — docker-compose for the DCS dedicated server, SRS server and
+  the ATC bot (`docker-compose.atc.yml`)
+- `atc/Dockerfile` + `atc/docker/entrypoint.sh` — the bot container (thin image;
+  clones/updates the repo into a volume on start)
+- `scripts/dcs.sh` — manage the containers (install/start/stop/logs/srs-*/atc-*)
 - `scripts/state_client.py` — CLI for the DCS state API (JSON socket bridge, port
   10309): `status`, `diag`, `eval`, `move`, `move-geo`, `hold`
 - `scripts/kneeboard.py` — generate DCS kneeboard JPGs from the MA SOP dialogs
 - `kneeboard/` — generated phraseology cards (see above)
 - `bridge/` — Saved Games hooks: `dcs_state_hook.lua` (state API socket +
   mission-env injection), `dcs_state_body.lua` (mission-side state logic, read
-  fresh per request), `srs_autoconnect.lua` (SRS announce)
+  fresh per request), `srs_autoconnect.lua` (SRS announce; port-only by default
+  so LAN *and* internet clients auto-connect)
 - `ATC.md` — ATC behaviour reference · `TESTING.md` — first live test scenario
+- `INSTALL.md` — operator setup · `CONTRIBUTING.md` — develop the bot
 
 Install
 -------
-Step-by-step setup (Docker, DCS + SRS containers, Saved Games hooks, mission,
-bot) is in **[`INSTALL.md`](INSTALL.md)**. Short version:
+Three containers, one per service (DCS, SRS, ATC), in one Compose project.
+Step-by-step setup is in **[`INSTALL.md`](INSTALL.md)**. Short version:
 
     sudo ./scripts/install-docker-ubuntu.sh   # once per host
     ./scripts/dcs.sh install                  # DCS + SRS containers
     ./scripts/dcs.sh bridge                   # state-API hook (port 10309)
-    cd atc && uv sync && ./start_bot.sh       # join SRS on 263.000 AM
+    ./scripts/dcs.sh atc-up                   # ATC bot container
 
 Day-2 operation is also in [`INSTALL.md`](INSTALL.md): `./scripts/dcs.sh
-status|logs|stop|start`, `srs-logs`, and `python3 scripts/state_client.py
-status`.
+status|logs|stop|start`, `srs-logs`, `atc-logs`, and `python3
+scripts/state_client.py status`.
+
+Developing the bot (run it on the host, edit code, run tests) is in
+**[`CONTRIBUTING.md`](CONTRIBUTING.md)**.
 
 State API
 ---------

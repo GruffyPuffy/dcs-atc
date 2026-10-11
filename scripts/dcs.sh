@@ -17,10 +17,14 @@ Usage: ./scripts/dcs.sh <command>
   stop      Stop the container without deleting its data
   status    Show container status
   logs      Follow recent container logs (Ctrl+C to exit)
-srs-autoconnect  Install the SRS auto-connect announcer hook (LAN IP auto-detected)
+srs-autoconnect  Install the SRS auto-connect announcer hook (port-only by default)
   config    Prepare configuration and validate Compose without starting
   srs-logs  Follow recent SRS server logs (Ctrl+C to exit)
   srs-status Show connected SRS clients (HTTP status API)
+  atc-up    Start the ATC bot container (pulls latest main, syncs, runs)
+  atc-down  Stop the ATC bot container
+  atc-logs  Follow the ATC bot container logs (Ctrl+C to exit)
+  atc-update Restart the ATC bot container (pulls latest on start)
   help      Show this help
 EOF
 }
@@ -28,6 +32,14 @@ EOF
 compose() {
   prepare_env
   docker compose --project-directory "$compose_dir" -f "$compose_dir/docker-compose.yml" "$@"
+}
+
+# Compose with the ATC bot service added (docker-compose.atc.yml override).
+compose_atc() {
+  prepare_env
+  docker compose --project-directory "$compose_dir" \
+    -f "$compose_dir/docker-compose.yml" \
+    -f "$compose_dir/docker-compose.atc.yml" "$@"
 }
 
 require_docker() {
@@ -116,19 +128,21 @@ deploy_state_bridge() {
 
 deploy_srs_autoconnect() {
   require_data_disk
-  # The SRS client's auto-connect parses "SRS Running @ <ip>:<port>" from chat,
-  # so the hook must announce a routable LAN address, not localhost.
-  local lan_ip
-  lan_ip="$(ip -4 route get 1.1.1.1 2>/dev/null | grep -oP 'src \K[0-9.]+' | head -n1)"
-  if [[ -z "$lan_ip" ]]; then
-    echo "Could not detect the LAN IP for the SRS announcer." >&2
-    exit 1
-  fi
+  # By default the hook announces the PORT ONLY ("SRS Running on 5002"); the SRS
+  # client then reuses the host it used to reach DCS, so it works for LAN *and*
+  # internet clients with no config. Set SRS_HOST to force an explicit address
+  # (e.g. a public hostname): SRS_HOST=srs.example.com ./scripts/dcs.sh srs-autoconnect
+  local srs_host="${SRS_HOST:-}"
   local rendered
   rendered="$(mktemp)"
-  sed "s/__SRS_HOST__/$lan_ip/" "$repo_dir/bridge/srs_autoconnect.lua" > "$rendered"
+  sed "s/__SRS_HOST__/$srs_host/" "$repo_dir/bridge/srs_autoconnect.lua" > "$rendered"
   deploy_hook "$rendered" "srs_autoconnect.lua"
   rm -f "$rendered"
+  if [[ -n "$srs_host" ]]; then
+    echo "SRS announcer: explicit host $srs_host:5002"
+  else
+    echo "SRS announcer: port-only (clients reuse the DCS host; LAN + internet)"
+  fi
 }
 
 deploy_hook() {
@@ -172,6 +186,30 @@ case "$command" in
     ;;
   srs-autoconnect)
     deploy_srs_autoconnect
+    ;;
+  atc-up)
+    require_docker
+    # Refuse if a host bot is already using the map port (only one bot at a time).
+    if ss -ltn 2>/dev/null | grep -q ':8090 '; then
+      echo "Port 8090 is already in use (a host bot running?). Stop it first." >&2
+      exit 1
+    fi
+    compose_atc up -d --build atc-bot
+    echo "ATC bot starting. Follow it with: ./scripts/dcs.sh atc-logs"
+    ;;
+  atc-down)
+    require_docker
+    compose_atc stop atc-bot
+    ;;
+  atc-logs)
+    require_docker
+    compose_atc logs -f --tail=100 atc-bot
+    ;;
+  atc-update)
+    require_docker
+    # The entrypoint pulls on start, so a restart is an update.
+    compose_atc restart atc-bot
+    echo "ATC bot restarting (pulls latest $ATC_REF on start)."
     ;;
   bridge)
     deploy_state_bridge

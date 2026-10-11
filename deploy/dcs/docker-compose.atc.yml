@@ -1,0 +1,43 @@
+# ATC bot service. Additive override for docker-compose.yml:
+#   docker compose -f docker-compose.yml -f docker-compose.atc.yml up -d atc-bot
+# (or use ./scripts/dcs.sh atc-up).
+#
+# The image is a thin runtime; the entrypoint clones/updates the repo into the
+# `atc-data` volume on start, so a restart always runs the latest `main`. The
+# bot reaches DCS and SRS by their compose service names.
+name: dcs-atc
+
+services:
+  atc-bot:
+    build:
+      context: ../../atc
+      dockerfile: Dockerfile
+    image: dcs-atc-bot:latest
+    container_name: dcs-atc-bot
+    depends_on:
+      - dcs-server
+      - srs-server
+    environment:
+      # Repo + ref to install/update on start (public repo, no auth needed).
+      ATC_REPO: "${ATC_REPO:-https://github.com/GruffyPuffy/dcs-atc.git}"
+      ATC_REF: "${ATC_REF:-main}"
+      ATC_AIRFIELD: "${ATC_AIRFIELD:-Kutaisi}"
+      ATC_DEBUG: "${ATC_DEBUG:-0}"
+      # Service names inside the compose network.
+      ATC_SRS_HOST: "srs-server"
+      ATC_STATE_HOST: "dcs-server"
+      ATC_STATE_PORT: "10309"
+      ATC_MAP_PORT: "8090"
+      # Match the host user so volume files are not root-owned.
+      PUID: "${PUID:?Set PUID in .env}"
+      PGID: "${PGID:?Set PGID in .env}"
+    ports:
+      # Map view: LAN/VPN only — never forward this to the internet.
+      - "8090:8090/tcp"
+    volumes:
+      # Code, venv, Whisper model cache and voices all persist here.
+      - atc-data:/data/atc
+    restart: unless-stopped
+
+volumes:
+  atc-data:

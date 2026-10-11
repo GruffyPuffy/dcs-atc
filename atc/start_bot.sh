@@ -18,10 +18,16 @@ set -euo pipefail
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 atc_dir="$repo_dir/atc"
-uv_bin="$HOME/.local/bin/uv"
 
-if [[ ! -x "$uv_bin" ]]; then
-  echo "uv not found at $uv_bin — install it first:" >&2
+# Prefer uv on PATH (e.g. inside the container image); fall back to the usual
+# per-user install location.
+uv_bin="$(command -v uv || true)"
+if [[ -z "$uv_bin" && -x "$HOME/.local/bin/uv" ]]; then
+  uv_bin="$HOME/.local/bin/uv"
+fi
+
+if [[ -z "$uv_bin" ]]; then
+  echo "uv not found — install it first:" >&2
   echo "  curl -LsSf https://astral.sh/uv/install.sh | sh" >&2
   exit 1
 fi
@@ -39,6 +45,10 @@ if [[ " $* " != *" --map-port "* ]]; then
   map_args=(--map-port 8090)
 fi
 
+# SRS host: default to localhost (host dev); the container sets ATC_SRS_HOST to
+# the SRS service name. An explicit --host on the command line still wins.
+srs_host="${ATC_SRS_HOST:-127.0.0.1}"
+
 echo "Starting ATC bot (log: /tmp/atc_log.txt) — Ctrl+C to stop."
-exec "$uv_bin" run atc_bot.py --host 127.0.0.1 --eam atc --log /tmp/atc_log.txt \
+exec "$uv_bin" run atc_bot.py --host "$srs_host" --eam atc --log /tmp/atc_log.txt \
   "${map_args[@]}" "$@"
