@@ -23,14 +23,15 @@
   "templates": {
     "taxi": "{callsign}, {ground}, cleared taxi {taxi_route} and hold short runway {runway}.",
     "hold_short": "{callsign}, {tower}, hold short runway {runway}.",
-    "takeoff": "{callsign}, {tower}, wind {wind}, runway {runway}, {turnout} turnout, cleared for takeoff.",
+    "takeoff": "{callsign}, {tower}, cleared for takeoff runway {runway}.",
     "line_up": "{callsign}, {tower}, line up and wait runway {runway}.",
     "hold_short_traffic": "{callsign}, {tower}, hold short, runway {runway} is occupied.",
     "continue_approach": "{callsign}, {tower}, continue approach, traffic on the runway.",
-    "lineup_readback": "{callsign}, {tower}, wind {wind}, runway {runway}, {turnout} turnout, cleared for takeoff.",
-    "lineup_readback_straight": "{callsign}, {tower}, wind {wind}, runway {runway}, cleared for takeoff.",
+    "lineup_readback": "{callsign}, {tower}, {turnout} turnout, cleared for takeoff runway {runway}.",
+    "lineup_readback_straight": "{callsign}, {tower}, cleared for takeoff runway {runway}.",
     "ground_ack": "{callsign}, {ground}.",
     "ground_info": "{callsign}, {ground}, runway {runway} in use, QNH {qnh}.",
+    "ground_info_weather": "{callsign}, {ground}, weather is {weather}. Wind {wind}, runway {runway} in use, QNH {qnh}.",
     "ground_info_readback": "{callsign}, {ground}, readback correct, advise when ready for clearance.",
     "readback_correct": "{callsign}, {agency}, readback correct.",
     "readback_incomplete": "{callsign}, {agency}, readback incomplete, I did not get your {item}. Continue.",
@@ -39,7 +40,7 @@
     "inbound_via_gate": "{callsign}, {tower}, roger, report entering the control zone via {gate}, runway {runway} active.",
     "arrival_wrong_call": "{callsign}, {tower}, negative, report runway in sight for landing.",
     "report_runway_in_sight": "{callsign}, {tower}, report runway in sight.",
-    "cleared_land": "{flight}{callsign}, {tower}, runway {runway}, wind {wind}, cleared to land.",
+    "cleared_land": "{flight}{callsign}, {tower}, wind {wind}, runway {runway}, cleared to land.",
     "cleared_overhead": "{flight}{callsign}, {tower}, wind {wind}, cleared for {downwind} overhead break runway {runway}.",
     "break_ack": "{callsign}, {tower}, roger, report on final.",
     "departure_exit": "{callsign}, {ground}, after departure turn {turn} {gate}, {altitude} or below.",
@@ -89,6 +90,7 @@
     "help_escape": "Say reset to start over, or cancel to undo a clearance.",
     "trainer_echo_on": "{callsign}, {agency}, trainer echo on. I will echo our exchanges to your in-game message feed.",
     "trainer_echo_off": "{callsign}, {agency}, trainer echo off.",
-    "trainer_unknown": "{callsign}, {agency}, trainer commands: echo on, echo off."
+    "trainer_volume": "{callsign}, {agency}, trainer volume set to {volume}.",
+    "trainer_unknown": "{callsign}, {agency}, trainer commands: echo on, echo off, volume 0.3."
   }
 }

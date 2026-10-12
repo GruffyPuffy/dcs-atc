@@ -1,6 +1,6 @@
 """Spoken-number normalisation for TTS (aviation digit-by-digit)."""
 
-from speech import digit_words, spell_atc_numbers
+from speech import digit_words, is_probably_non_speech, spell_atc_numbers
 
 
 def test_digit_words_uses_niner():
@@ -56,3 +56,42 @@ def test_full_atc_line():
         "cleared for takeoff.")
     assert out == ("Colt 1 1, Tower, readback correct, wind two seven zero at 5, "
                    "runway two five, cleared for takeoff.")
+
+
+class _Seg:
+    """Minimal stand-in for a faster-whisper Segment (only the fields we read)."""
+
+    def __init__(self, text: str, no_speech_prob: float, avg_logprob: float = 0.0):
+        self.text = text
+        self.no_speech_prob = no_speech_prob
+        self.avg_logprob = avg_logprob
+
+
+def test_non_speech_guard_drops_a_hallucinated_click():
+    # A PTT click / breath: the model emits a phrase but flags it non-speech
+    # with a low confidence.
+    assert is_probably_non_speech(
+        [_Seg("Call signs and standard phraseology.", 0.9, avg_logprob=-1.5)])
+
+
+def test_non_speech_guard_keeps_a_confident_short_call():
+    # High no_speech_prob but a confident decode: a real short transmission.
+    assert not is_probably_non_speech(
+        [_Seg("Tower, Colt 1", 0.9, avg_logprob=-0.2)])
+
+
+def test_non_speech_guard_keeps_real_speech():
+    assert not is_probably_non_speech(
+        [_Seg("Tower, Colt 1, ready for departure", 0.05, avg_logprob=-0.3)])
+
+
+def test_non_speech_guard_keeps_a_mixed_transmission():
+    # One confident segment is enough to keep the whole transcript.
+    segs = [_Seg("Tower, Colt 1", 0.9, avg_logprob=-1.5),
+            _Seg("ready for departure", 0.1, avg_logprob=-0.3)]
+    assert not is_probably_non_speech(segs)
+
+
+def test_non_speech_guard_ignores_an_empty_transcript():
+    # No segments means "nothing decoded", not "non-speech".
+    assert not is_probably_non_speech([])

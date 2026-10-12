@@ -31,7 +31,7 @@ First run downloads the Whisper model (`small.en`); Piper voices are fetched int
 
     ./start_bot.sh --debug                 # richer logs + in-game comms mirror
     ./start_bot.sh --no-debrief            # skip the debrief file (saved by default)
-    ./start_bot.sh --tx-volume 0.4         # ATC voice volume (default 0.4)
+    ./start_bot.sh --tx-volume 0.6         # ATC voice volume (default 0.6)
     ./start_bot.sh --airfield Gudauta      # a different airfield
     ATC_STT_MODEL=small.en ./start_bot.sh  # faster STT (default: medium.en)
     ./start_bot.sh --help                  # all options
@@ -39,7 +39,8 @@ First run downloads the Whisper model (`small.en`); Piper voices are fetched int
 A debrief (trail + comms) is saved for **every** session to
 `atc/debrief/tracks_<field>_<time>.json` (the newest 20 are kept). A pilot can
 also turn on an in-game comms mirror for themselves mid-flight by saying
-**"Trainer, <callsign>, echo on"** on any frequency.
+**"Trainer, <callsign>, echo on"** on any frequency. A pilot can also set the
+ATC voice volume mid-flight with **"Trainer, <callsign>, volume 0.3"** (0–1).
 
 To restart the bot or switch airfield from the map page, use the supervisor:
 

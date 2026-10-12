@@ -177,18 +177,23 @@ def test_ground_checkin_acknowledged(brain):
 
 
 def test_ground_gives_runway_and_qnh_without_atis(brain):
-    # no "with information X" -> Ground passes runway + QNH
+    # MA SOP: without "with information X" Ground also reads out the weather.
     reply = brain.handle("Ground, Colt 1, two-ship Hornets on Ramp South",
                          controller=Controller.GROUND)
+    assert "weather is" in reply
     assert "runway 25 in use" in reply
     assert "QNH" in reply
 
 
 def test_ground_acknowledges_with_information(brain):
+    # MA SOP: with the information letter the call is just runway/QNH (the
+    # pilot already has the weather from ATIS).
     reply = brain.handle(
         "Ground, Colt 1, two-ship Hornets on Ramp South with information Charlie",
         controller=Controller.GROUND)
-    assert reply == "Colt 1, Ground."
+    assert "weather is" not in reply
+    assert "runway 25 in use" in reply
+    assert "QNH" in reply
 
 
 def test_ground_runway_qnh_readback(brain):
@@ -506,6 +511,25 @@ def test_tower_vacated_hands_off_to_ground(brain):
     assert "Ground" in reply
     assert "channel 6" in reply
     assert brain.pilots["Colt 1"].phase == Phase.TAXI
+
+
+def test_tower_rolling_off_hands_off_to_ground(brain):
+    # MA's "rolling off runway 25" is a landing report, not a departure call:
+    # it must hand off to Ground, not to Control.
+    reply = brain.handle("Tower, Colt 1, rolling off runway 25",
+                         controller=Controller.TOWER)
+    assert "Ground" in reply
+    assert "Control" not in reply
+    assert brain.pilots["Colt 1"].phase == Phase.TAXI
+
+
+def test_ground_accepts_rolling_off_and_vacated(brain):
+    # Both MA's "rolling off" and the standard "vacated" are accepted on Ground.
+    for phrase in ("Ground, Colt 1, rolling off runway 25, requesting taxi to parking",
+                   "Ground, Colt 1, runway 25 vacated, requesting taxi to parking"):
+        brain.pilots.clear()
+        reply = brain.handle(phrase, controller=Controller.GROUND)
+        assert reply and "cleared taxi" in reply, phrase
 
 
 def test_ground_taxi_to_parking_named_ramp(brain, airfield):
@@ -860,7 +884,7 @@ def test_control_checking_in_is_departure(brain):
 
 def test_set_wind_and_runway(brain):
     brain.set_wind(270, 5)
-    assert brain.wind == "270 at 5"
+    assert brain.wind == "270, 5 knots"  # MA SOP form
     brain.set_wind(0, 0)
     assert brain.wind == "calm"
     brain.set_runway("07")
@@ -953,6 +977,24 @@ def test_trainer_unknown_command_hints(brain):
     reply = brain.handle("Trainer, Colt 1, do something", controller=Controller.TOWER)
     assert reply and "trainer commands" in reply
     assert brain.mirror_enabled("Colt 1") is False
+
+
+def test_trainer_volume_sets_and_clamps(brain):
+    assert brain.tx_volume is None  # default: use --tx-volume
+    reply = brain.handle("Trainer, Colt 1, volume 0.3", controller=Controller.TOWER)
+    assert reply and "0.30" in reply
+    assert brain.tx_volume == 0.3
+    # Out-of-range values are clamped to 0..1.
+    brain.handle("Trainer, Colt 1, volume 2", controller=Controller.TOWER)
+    assert brain.tx_volume == 1.0
+    brain.handle("Trainer, Colt 1, volume 0", controller=Controller.TOWER)
+    assert brain.tx_volume == 0.0
+
+
+def test_trainer_volume_without_a_number_hints(brain):
+    reply = brain.handle("Trainer, Colt 1, volume", controller=Controller.TOWER)
+    assert reply and "trainer commands" in reply
+    assert brain.tx_volume is None
 
 
 def test_trainer_does_not_change_phase(brain):

@@ -14,8 +14,12 @@ local function unit_json(u)
     local lat, lon, alt = coord.LOtoLL(p.p)
     -- p.x is the unit's forward vector; DCS world is x=north, z=east, y=up.
     local heading = math.deg(math.atan2(p.x.z, p.x.x)) % 360
-    -- Ground speed (m/s) from the velocity vector, for the low-and-fast check.
-    local v = p.v or { x = 0, y = 0, z = 0 }
+    -- Ground speed (m/s) from the velocity vector, for the low-and-fast check
+    -- and the landing-rollout gate. getPosition() has no velocity field, so
+    -- read it from getVelocity() (falls back to 0 if unavailable).
+    local v = { x = 0, y = 0, z = 0 }
+    local ok, vel = pcall(u.getVelocity, u)
+    if ok and vel then v = vel end
     local speed = math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z)
     return {
         name = u:getName(),

@@ -56,6 +56,29 @@ def _qnh_digits(raw: str) -> str:
     return raw.replace(".", "")
 
 
+# A segment the model itself flags as probably non-speech. A near-silent clip
+# (a PTT click or a breath) can still decode to a short phrase — often a
+# hallucination — but carries a high no_speech probability *and* a low average
+# log probability. Both must hold, mirroring faster-whisper's own silence test,
+# so a confident short transmission is never dropped.
+NO_SPEECH_PROB = 0.6
+NO_SPEECH_LOGPROB = -1.0
+
+
+def is_probably_non_speech(segments) -> bool:
+    """True if every segment looks like non-speech (a PTT click / breath).
+
+    Used to drop a hallucinated transcript: Whisper can emit a short phrase for
+    a near-silent clip, but flags it with a high `no_speech_prob` and a low
+    `avg_logprob`. Requiring both keeps a confident short call. An empty segment
+    list is *not* non-speech (there is simply nothing to judge).
+    """
+    return bool(segments) and all(
+        getattr(s, "no_speech_prob", 0.0) > NO_SPEECH_PROB
+        and getattr(s, "avg_logprob", 0.0) < NO_SPEECH_LOGPROB
+        for s in segments)
+
+
 def spell_atc_numbers(text: str) -> str:
     """Rewrite ATC numbers in `text` to their spoken, digit-by-digit form."""
     text = _HEADING.sub(

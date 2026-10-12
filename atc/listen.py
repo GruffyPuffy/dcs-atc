@@ -18,6 +18,7 @@ import numpy as np
 
 from srs_client import SrsClient
 from phonetics import stt_hint
+from speech import is_probably_non_speech
 
 SAMPLE_RATE = 48000
 STT_RATE = 16000  # faster-whisper expects 16 kHz numpy arrays
@@ -123,10 +124,13 @@ def main() -> None:
             beam_size=1,
             vad_filter=True,
             hotwords=stt_hint(),
-            initial_prompt="ATC radio calls. Call signs and standard "
-                           "phraseology.",
         )
+        segments = list(segments)  # materialise: the guard below re-reads them
         text = " ".join(s.text.strip() for s in segments).strip()
+        # Drop a transcript the model itself flagged as non-speech (a PTT click
+        # or breath can decode to a hallucinated phrase).
+        if is_probably_non_speech(segments):
+            text = ""
         latency = (time.monotonic() - started) * 1000
         wav_note = f", wav {wav_path.name}" if wav_path else ""
         if text:

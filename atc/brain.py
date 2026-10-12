@@ -95,6 +95,9 @@ class PilotState:
     # landing, tower will push you to the Ground channel"). Fires once per
     # landing; re-arms on the next approach (go-around / touch-and-go).
     landing_handoff_announced: bool = False
+    # Tower has pushed a departure to Control (MA SOP: "expect instructions to
+    # switch to control" once airborne). Fires once per departure.
+    departure_handoff_announced: bool = False
     formation: int = 0  # flight size (2+ = multi-ship), learned from calls
     # Trainer aid: this pilot asked for the in-game comms mirror ("trainer,
     # echo on"). Per-pilot, so each pilot controls their own feed.
@@ -156,6 +159,13 @@ class AtcBrain:
         self.pilots: dict[str, PilotState] = {}
         self.wind = "calm"  # updated from live weather
         self.qnh = "2992"  # updated from live weather (inHg, 4 digits)
+        # Weather phrase ("CAVOK" / visibility + clouds), from live weather.
+        # Ground reads it out when a pilot checks in WITHOUT "with information X"
+        # (MA SOP: "weather is CAVOK. Wind 270, 2 knots, Runway 25 in use, ...").
+        self.weather = ""
+        # TTS output volume, adjustable at runtime with "trainer, volume 0.3".
+        # None = use the --tx-volume default.
+        self.tx_volume: float | None = None
         # SRS speaker name -> flight callsign, learned from transmissions, so
         # automatic calls (CTR warning, go-around) can address the pilot by
         # callsign instead of the raw DCS unit name.
@@ -341,16 +351,21 @@ class AtcBrain:
             self.runway = runway
 
     def set_wind(self, direction: float, speed: float) -> None:
-        """Update the spoken wind (e.g. '270 at 5')."""
+        """Update the spoken wind (MA SOP: "270, 2 knots"; calm below 1 kt)."""
         if speed < 0.5:
             self.wind = "calm"
         else:
-            self.wind = f"{direction:03.0f} at {speed:.0f}"
+            self.wind = f"{direction:03.0f}, {speed:.0f} knots"
 
     def set_qnh(self, qnh_inhg: float) -> None:
         """Update the spoken QNH (Master Arms read it as 4 digits, e.g. 2992)."""
         if qnh_inhg:
             self.qnh = f"{round(qnh_inhg * 100):04d}"
+
+    def set_weather(self, summary: str) -> None:
+        """Update the weather phrase ("CAVOK" / visibility + clouds)."""
+        if summary:
+            self.weather = summary
 
     def _say(self, key: str, callsign: str, agency: str | None = None,
              **fields: object) -> str:
@@ -368,7 +383,8 @@ class AtcBrain:
             key, callsign=callsign, tower=self.tower_short,
             agency=agency or self.tower_short,
             runway=self.runway, wind=self.wind, ground=self.ground_short,
-            control=self.control_short, qnh=self.qnh, **overrides, **fields)
+            control=self.control_short, qnh=self.qnh, weather=self.weather,
+            **overrides, **fields)
 
     def _agency(self, controller: Controller) -> str:
         """Short name of the agency handling a controller role."""
@@ -718,6 +734,12 @@ class AtcBrain:
             if re.search(r"\b(on|start|enable|yes)\b", low):
                 pilot.mirror_logs = True
                 return self._say("trainer_echo_on", callsign, agency=agency)
+        if re.search(r"\bvolume\b", low):
+            match = re.search(r"\bvolume\b\s*(?:to\s*)?(\d+(?:\.\d+)?)", low)
+            if match:
+                self.tx_volume = max(0.0, min(1.0, float(match.group(1))))
+                return self._say("trainer_volume", callsign, agency=agency,
+                                 volume=f"{self.tx_volume:.2f}")
         return self._say("trainer_unknown", callsign, agency=agency)
 
     def mirror_enabled(self, callsign: str) -> bool:
@@ -864,11 +886,14 @@ class AtcBrain:
             reply = self._say("taxi", callsign, taxi_route=route or "Sierra Echo")
             pilot.last_clearance = reply
             return reply
-        # "runway vacated" reported on Ground (the Tower->Ground handoff already
-        # happened at touchdown, so the pilot is on Ground by the time they are
-        # clear). Just acknowledge — there is no Ground action for it.
+        # "runway vacated" / "rolling off runway 25" reported on Ground (the
+        # Tower->Ground handoff already happened at touchdown, so the pilot is
+        # on Ground by the time they are clear). Just acknowledge — there is no
+        # Ground action for it. Both MA's "rolling off" and the standard
+        # "vacated" are accepted.
         if re.search(r"\b(vacated|clear of the runway|off the runway|"
-                     r"runway vacated|clear of runway)\b", low):
+                     r"runway vacated|clear of runway|rolling off|"
+                     r"rolling out)\b", low):
             return self._say("roger", callsign, agency=self.ground_short)
         if re.search(r"\bhold(?:ing)? short\b", low) and pilot.phase == Phase.TAXI:
             # Cross-check the report against the live position: a pilot who
@@ -884,14 +909,17 @@ class AtcBrain:
             # challenged), but it is not named in the reply — the kneeboard
             # dialog does not name it.
             return self._say("contact_tower", callsign)
-        # Initial check-in: "Ground, Adder11" -> "Adder11, Ground". If the pilot
-        # gives a position/formation ("two-ship Hornets on Ramp South") without
-        # "with information X", Ground also passes the runway/QNH.
+        # Initial check-in: "Ground, Adder11" -> "Adder11, Ground". A position/
+        # formation report ("two-ship Hornets on Ramp South") gets the runway and
+        # QNH. MA SOP: if the pilot did NOT listen to ATIS (no "with information
+        # X"), Ground also reads out the weather ("weather is CAVOK. Wind 270,
+        # 2 knots, Runway 25 in use, QNH 2992."); with the information letter the
+        # call is just runway/QNH.
         if re.search(r"\b(ramp|apron|parking|taxiway|ship|hornets?|vipers?|"
                      r"information)\b", low):
             if re.search(r"\binformation\b", low):
-                return self._say("ground_ack", callsign)
-            return self._say("ground_info", callsign)
+                return self._say("ground_info", callsign)
+            return self._say("ground_info_weather", callsign)
         if re.search(r"\bground\b", low):
             return self._say("ground_ack", callsign)
         return None
@@ -962,8 +990,10 @@ class AtcBrain:
             pilot.phase = Phase.LINEUP
             return self._say("line_up", callsign)
         # Departure handoff: once airborne, Tower hands the flight to Control.
+        # "rolling" alone is NOT a departure call — a landing pilot says
+        # "rolling off runway 25" (handled below), so require a departure word.
         if re.search(r"\b(airborne|departing|leaving|departed|on the way out|"
-                     r"taking off|rolling|rolling out)\b", low):
+                     r"taking off)\b", low):
             pilot.phase = Phase.AIRBORNE
             return self._say("contact_control", callsign)
         # Readback of "report runway in sight" ("Report runway in sight, Adder11")
@@ -1005,10 +1035,12 @@ class AtcBrain:
         # After landing, Tower hands the flight to Ground. Normally the bot
         # pushes the pilot to Ground *unprompted* once they roll off the runway
         # (check_landing_handoff); this branch covers a pilot who reports
-        # "vacated" first. Idempotent: if the handoff was already given, just
-        # acknowledge rather than repeating "contact Ground".
+        # "vacated" (or MA's "rolling off runway 25") first. Idempotent: if the
+        # handoff was already given, just acknowledge rather than repeating
+        # "contact Ground".
         if re.search(r"\b(vacated|clear of the runway|off the runway|"
-                     r"runway vacated|clear of runway)\b", low):
+                     r"runway vacated|clear of runway|rolling off|"
+                     r"rolling out)\b", low):
             if pilot.landing_handoff_announced:
                 return self._say("roger", callsign, agency=self.tower_short)
             pilot.landing_handoff_announced = True
@@ -1362,6 +1394,25 @@ class AtcBrain:
                              altitude=f"{DESCENT_INTERMEDIATE_FT} feet")
         pilot.descend_issued = True
         return self._say("control_descend", callsign)
+
+    def check_departure_handoff(self, callsign: str,
+                                track: AircraftTrack | None) -> str | None:
+        """Push a departure to Control once it is clear of the runway zone.
+
+        Master Arms SOP: after takeoff, "expect instructions to switch to
+        control" — Tower initiates the handoff, the pilot does not have to
+        report "airborne". The handoff waits until the aircraft is past the
+        runway (a little time to settle after liftoff), then fires once.
+        """
+        pilot = self._pilot(callsign)
+        if (pilot.phase != Phase.DEPARTURE or pilot.departure_handoff_announced
+                or track is None or self.airfield is None):
+            return None
+        if self.airfield.is_over_runway(track.lat, track.lon):
+            return None
+        pilot.departure_handoff_announced = True
+        pilot.phase = Phase.AIRBORNE
+        return self._say("contact_control", callsign)
 
     def check_departure_climb(self, callsign: str,
                               track: AircraftTrack | None) -> str | None:

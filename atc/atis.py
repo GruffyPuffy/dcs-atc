@@ -63,18 +63,24 @@ class AtisReport:
     clouds_base_m: float
     cavok: bool
 
+    def weather_summary(self) -> str:
+        """The weather phrase ("CAVOK" / visibility + clouds).
+
+        Used both in the ATIS broadcast and in Ground's check-in reply when the
+        pilot did not listen to ATIS (MA SOP: "weather is CAVOK. Wind 270, ...").
+        """
+        if self.cavok:
+            return "CAVOK"
+        return (f"visibility {self.visibility_m / 1000:.0f} kilometers, "
+                f"clouds {self.clouds_base_m:.0f} meters")
+
     def broadcast(self) -> str:
         """The spoken ATIS text (single pass)."""
         wind = (f"wind {self.wind_dir:03.0f} degrees, {self.wind_speed:.0f} "
                 f"meters per second" if self.wind_speed > 0.5 else "wind calm")
-        if self.cavok:
-            weather = "CAVOK"
-        else:
-            weather = (f"visibility {self.visibility_m / 1000:.0f} kilometers, "
-                       f"clouds {self.clouds_base_m:.0f} meters")
         return (f"{self.airfield} information {self.information}. "
                 f"{self.active_runway} in use. {wind}. "
-                f"QNH {self.qnh_inhg:.2f}. {weather}. "
+                f"QNH {self.qnh_inhg:.2f}. {self.weather_summary()}. "
                 f"Temperature {self.temperature_c:.0f}. "
                 f"Advise on initial contact you have information {self.information}.")
 

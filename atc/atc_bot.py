@@ -35,7 +35,7 @@ from callsigns import CallsignRegistry
 from ctr import CtrEvent, CtrTracker
 from phonetics import stt_hint
 from srs_client import SrsClient
-from speech import spell_atc_numbers
+from speech import is_probably_non_speech, spell_atc_numbers
 from state_client import StateClient, norm_identity, resolve_player_unit
 import topgun
 from workers import ControllerWorker, SharedState
@@ -194,9 +194,9 @@ def main() -> None:
                         help="how many rx WAVs to keep with --save-audio")
     parser.add_argument("--gain", type=float, default=1.0,
                         help="input gain for received audio (STT), 1.0 = none")
-    parser.add_argument("--tx-volume", type=float, default=0.4,
+    parser.add_argument("--tx-volume", type=float, default=0.6,
                         help="output volume for the ATC voices (TTS), 1.0 = "
-                             "unchanged; e.g. 0.4 to quieten loud voices")
+                             "unchanged; e.g. 0.6 to quieten loud voices")
     parser.add_argument("--speech-rate", type=float, default=0.7,
                         help="Piper length_scale; lower = faster (0.6-1.0)")
     parser.add_argument("--state-host", default="127.0.0.1")
@@ -304,9 +304,10 @@ def main() -> None:
                      gates=list(airfield.gates), gate_locator=airfield.nearest_gate,
                      airfield=airfield)
     tracker = CtrTracker(airfield)
+    # No runway in this banner: the active runway is only known after the first
+    # weather refresh, which logs "Active runway … (wind …)" below.
     print(f"[*] Airfield {airfield.name}: {airfield.tower}, {freq_mhz:.3f} MHz, "
-          f"runway {airfield.active_runway}, CTR ceiling "
-          f"{airfield.ctr.ceiling_ft_agl:.0f} ft AGL")
+          f"CTR ceiling {airfield.ctr.ceiling_ft_agl:.0f} ft AGL")
     print("[*] Ready.")
 
     def log(line: str) -> None:
@@ -398,16 +399,22 @@ def main() -> None:
         # the callsign dash ("Colt 1-1" -> "Colt one one"). Synthesis-only: the
         # log/chatter below still show the real text.
         spoken = spell_atc_numbers(spoken)
-        voice = voice or voice_for[Controller.TOWER]
+        # Default to the voice of the controller we are speaking as, so a call
+        # that passes `controller=` but no explicit `voice=` still uses the
+        # right voice (e.g. Control's radar climb/descent, not Tower's).
+        if voice is None:
+            voice = voice_for.get(controller, voice_for[Controller.TOWER])
         with tts_lock:
             syn_config = SynthesisConfig(length_scale=args.speech_rate)
             chunks = list(voice.synthesize(spoken, syn_config=syn_config))
             rate = chunks[0].sample_rate
             pcm22k = b"".join(c.audio_int16_bytes for c in chunks)
             pcm48k = resample_to_48k(pcm22k, rate)
-            # Apply the output volume (--tx-volume) so loud Piper voices can be
-            # quietened without touching the voice files.
-            pcm48k = scale_pcm(pcm48k, args.tx_volume)
+            # Apply the output volume (--tx-volume, or the runtime "trainer,
+            # volume X" override) so loud Piper voices can be quietened without
+            # touching the voice files.
+            volume = brain.tx_volume if brain.tx_volume is not None else args.tx_volume
+            pcm48k = scale_pcm(pcm48k, volume)
             # Transmit outside the synthesis lock is not needed (the lock only
             # serialises Piper); the per-agency client queues the audio.
             client_for(controller, freq).transmit(pcm48k, freq)
@@ -467,12 +474,20 @@ def main() -> None:
             # tokens) plus our standard phraseology. `hotwords` is the dedicated
             # hint channel in faster-whisper; the callsigns dominate the front of
             # the string.
+            #
+            # No `initial_prompt`: it becomes the decoder *prefix*, so on a
+            # near-silent clip (a PTT click or breath) Whisper echoes it back
+            # verbatim as if the pilot had said it. `hotwords` biases the same
+            # vocabulary without that failure mode.
             hotwords=stt_hint(callsign_names,
                               [airfield.name, airfield.tower]),
-            initial_prompt="ATC radio calls. Call signs and standard "
-                           "phraseology.",
         )
+        segments = list(segments)  # materialise: the guard below re-reads them
         text = " ".join(s.text.strip() for s in segments).strip()
+        # Drop a transcript the model itself flagged as non-speech (a PTT click
+        # or breath can decode to a hallucinated phrase).
+        if is_probably_non_speech(segments):
+            text = ""
         latency = (time.monotonic() - started) * 1000
         wav_note = f", wav {wav_path.name}" if wav_path else ""
         if not text:
@@ -818,6 +833,14 @@ def main() -> None:
                     if handoff:
                         log(f"LANDED: {callsign} ({ac.player}) -> Ground")
                         speak(handoff, controller=Controller.TOWER)
+                    # Departure handoff: Tower pushes a departure to Control once it is
+                    # past the runway (MA SOP: "expect instructions to switch
+                    # to control"). The pilot does not have to report "airborne".
+                    with lock:
+                        dep_handoff = brain.check_departure_handoff(callsign, tr)
+                    if dep_handoff:
+                        log(f"AIRBORNE: {callsign} ({ac.player}) -> Control")
+                        speak(dep_handoff, controller=Controller.TOWER)
                     # Departure climb: a departure that checked in with Control
                     # while still inside the CTR is climbed once it leaves the
                     # zone (Control watches on radar; no report needed).
@@ -854,6 +877,7 @@ def main() -> None:
         airfield.set_active_runway(report.active_runway)
         brain.set_wind(report.wind_dir, report.wind_speed)
         brain.set_qnh(report.qnh_inhg)
+        brain.set_weather(report.weather_summary())
         return report
 
     def atis_loop() -> None:

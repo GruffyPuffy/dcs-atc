@@ -430,6 +430,35 @@ class Airfield:
             return False
         return _haversine_nm(lat, lon, thr[0], thr[1]) <= max_nm
 
+    def is_over_runway(self, lat: float, lon: float,
+                       runway: str | None = None,
+                       margin_nm: float = 0.25) -> bool:
+        """True if the position is over the runway corridor (either direction).
+
+        Used to hold the Tower->Control departure handoff until the aircraft is
+        past the runway. Checks both runway ends, so it works whichever way the
+        active runway points.
+        """
+        for rwy in (runway or self.active_runway, self._opposite_runway(
+                runway or self.active_runway)):
+            if rwy is None:
+                continue
+            thr = self.runway_threshold(rwy)
+            hdg = self.runway_heading(rwy)
+            if thr is None or hdg is None:
+                continue
+            length = self.runway_length_nm(rwy) or 1.6
+            along_dir = math.radians(hdg)
+            ax, ay = math.sin(along_dir), math.cos(along_dir)
+            ex, ny = _project(lat, lon, thr[0], thr[1])
+            along = ex * ax + ny * ay
+            across = ex * ay - ny * ax
+            if (-margin_nm * M_PER_NM <= along
+                    <= (length + margin_nm) * M_PER_NM
+                    and abs(across) <= 0.1 * M_PER_NM):
+                return True
+        return False
+
     def is_holding_short(self, lat: float, lon: float,
                          runway: str | None = None,
                          point_nm: float = 0.2, thr_nm: float = 0.6) -> bool:

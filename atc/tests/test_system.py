@@ -65,6 +65,25 @@ def test_control_checkin_outside_ctr_clears_climb(airfield, brain):
     assert brain.pilots["Colt 1"].climb_issued
 
 
+def test_tower_hands_departure_to_control_past_the_runway(airfield, brain):
+    # MA SOP: Tower pushes a departure to Control once airborne ("expect
+    # instructions to switch to control") — the pilot need not report "airborne".
+    sc = _scenario(airfield, brain).at_threshold("25")
+    sc.say("Tower, Colt 1, ready for departure", Controller.TOWER)
+    sc.say("Line up and wait 25, Colt 1", Controller.TOWER)
+    assert brain.pilots["Colt 1"].phase == Phase.DEPARTURE
+    # Still over the runway: no handoff yet (a little time to settle).
+    sc.at_runway("25", along_nm=0.5).set_alt(airfield.elevation_ft + 300)
+    assert brain.check_departure_handoff("Colt 1", sc._track()) is None
+    # Past the runway end: Tower hands off, unprompted.
+    sc.at_runway("25", along_nm=2.0).set_alt(airfield.elevation_ft + 800)
+    call = brain.check_departure_handoff("Colt 1", sc._track())
+    assert call and "contact Control" in call
+    assert brain.pilots["Colt 1"].phase == Phase.AIRBORNE
+    # Fires once.
+    assert brain.check_departure_handoff("Colt 1", sc._track()) is None
+
+
 def test_control_climbs_departure_on_radar_once_clear_of_ctr(airfield, brain):
     # A departure that checked in too early (inside the CTR) is climbed by
     # Control on radar once it leaves the zone — no second report needed.
