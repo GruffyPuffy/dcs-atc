@@ -10,7 +10,7 @@ Usage:
                       [--ground-voice en_US-ryan-medium]
                       [--control-voice en_US-lessac-medium]
                       [--atis-voice en_GB-alan-medium]
-                      [--log /tmp/atc_log.txt] [--gain 1.0] [--tx-volume 1.0]
+                      [--log /tmp/atc_log.txt] [--gain 1.0] [--tx-volume 0.6]
                       [--save-audio]
                       [--state-host 127.0.0.1] [--state-port 10309] [--no-state]
 """
