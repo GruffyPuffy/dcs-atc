@@ -339,6 +339,15 @@ def test_landing_rollout_gate_holds_off_a_touch_and_go():
     assert is_landing_rollout(on_runway=False, speed_kt=0.0) is False   # on approach
 
 
+def test_landing_rollout_gate_requires_being_on_the_ground():
+    # `runway_occupied` accepts anything below 500 ft AGL, so a low, slow
+    # aircraft crossing the threshold was pushed to Ground while still airborne.
+    from atc_bot import is_landing_rollout
+    assert is_landing_rollout(on_runway=True, speed_kt=60.0, agl_ft=6.0) is True
+    assert is_landing_rollout(on_runway=True, speed_kt=60.0, agl_ft=300.0) is False
+    assert is_landing_rollout(on_runway=True, speed_kt=60.0, agl_ft=18.0) is True
+
+
 # ---------- Position cross-checks (faked radar) ----------
 
 def test_ready_for_departure_challenged_on_ramp(airfield, brain):

@@ -22,7 +22,7 @@ check the log together.
 
 | Radio | Freq | Controller |
 |-------|------|------------|
-| 1 | 263.000 | Tower |
+| 1 | 270.000 | Tower |
 | 2 | 250.000 | Ground |
 | 3 | 257.000 | Control |
 | 4 | 270.500 | ATIS |
@@ -59,11 +59,13 @@ check the log together.
 
 ---
 
-## 3. Tower — departure (Radio 1, 263.000)
+## 3. Tower — departure (Radio 1, 270.000)
 
 - [ ] **Ready for departure** → *"line up and wait runway 25"*
-- [ ] **Line-up readback** → *"readback correct, wind …, runway 25, right
-      turnout, cleared for takeoff"*
+- [ ] **Line-up readback** → *"cleared for takeoff runway 25"* (a **right**
+      turnout is spoken — *"right turnout, cleared for takeoff"*; a left turnout
+      is the default and is not; a straight-out departure gets *"fly runway
+      heading"*)
 - [ ] **Occupied runway** (optional) — park something on the runway, then ask
       → *"hold short, runway 25 is occupied"*
 
@@ -83,7 +85,7 @@ check the log together.
 
 ---
 
-## 5. Tower — arrival (Radio 1, 263.000)
+## 5. Tower — arrival (Radio 1, 270.000)
 
 - [ ] **Entry** — *"Tower, Colt 1, Entry North"* → *"report runway in sight"*
 - [ ] **Runway in sight** → *"cleared for left overhead break runway 25"*

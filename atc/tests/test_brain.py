@@ -309,6 +309,27 @@ def test_clearance_readback_incomplete_never_says_correct(brain):
     assert "readback correct" not in reply.lower()
 
 
+def test_readback_tolerates_callsign_glued_to_the_runway(brain):
+    """STT runs the callsign's digits into the last number ("two five" +
+    "Colt 1" -> "251"); the runway must still count as read back."""
+    brain.handle("Ground, Colt 1, one-ship Hornet on Ramp South",
+                 controller=Controller.GROUND)
+    brain.handle("Ground, Colt 1, requesting taxi", controller=Controller.GROUND)
+    reply = brain.handle(
+        "clear taxi, sierra echo, and hold short runway two five one, Colt 1.",
+        controller=Controller.GROUND)
+    assert "readback incomplete" not in reply.lower()
+
+
+def test_mentioning_in_use_is_not_a_readback_before_ground_issues_it(brain):
+    """A transmission that merely says "in use" must not be called a correct
+    readback of runway/QNH info Ground never gave."""
+    reply = brain.handle(
+        "Ground, Colt 1, I was expecting the runway 25 in use call here",
+        controller=Controller.GROUND)
+    assert "readback correct" not in (reply or "").lower()
+
+
 def test_repeated_readback_attempts_are_safe(brain):
     """A pilot who insists on readbacks must not corrupt the state machine.
 
@@ -380,15 +401,29 @@ def test_tower_lineup_readback_clears_takeoff(brain):
 
 
 def test_takeoff_turnout_follows_the_exit_gate(brain):
-    # The turnout matches the departure routing: a turning exit gives a turnout,
-    # a straight-ahead exit does not. (MA: "right turnout, cleared for take-off".)
+    # Only a RIGHT turnout is spoken (MA: a left turnout is the default and is
+    # not called). A straight-out departure is told "fly runway heading".
     from brain import PilotState
     pilot = PilotState(callsign="Colt 1")
     # Kutaisi 25: Exit East is a right turn, Exit West is straight.
     pilot.exit_gate = "Exit East"
     assert "right turnout" in brain._takeoff_clearance("Colt 1", pilot)
     pilot.exit_gate = "Exit West"
-    assert "turnout" not in brain._takeoff_clearance("Colt 1", pilot)
+    reply = brain._takeoff_clearance("Colt 1", pilot)
+    assert "fly runway heading" in reply
+    assert "turnout" not in reply
+
+
+def test_left_turnout_is_not_spoken(brain):
+    """A left turnout is the default, so it is never called (MA practice)."""
+    from brain import PilotState
+    pilot = PilotState(callsign="Colt 1")
+    # Kutaisi 25: Exit South is a left turn.
+    pilot.exit_gate = "Exit South"
+    reply = brain._takeoff_clearance("Colt 1", pilot)
+    assert "turnout" not in reply
+    assert "fly runway heading" not in reply
+    assert "cleared for takeoff" in reply
 
 
 def test_takeoff_turnout_matches_the_ground_clearance_turn(brain, airfield):
@@ -402,10 +437,13 @@ def test_takeoff_turnout_matches_the_ground_clearance_turn(brain, airfield):
     assert gate  # the clearance assigned an exit
     expected = airfield.exit_turn(gate, brain.runway)
     takeoff = brain._takeoff_clearance("Colt 1", pilot)
-    if expected:
-        assert f"{expected} turnout" in takeoff
-    else:
+    if expected == "right":
+        assert "right turnout" in takeoff
+    elif expected == "left":
         assert "turnout" not in takeoff
+        assert "fly runway heading" not in takeoff
+    else:
+        assert "fly runway heading" in takeoff
 
 
 def test_control_departure_checkin_climb(brain):
@@ -413,6 +451,33 @@ def test_control_departure_checkin_climb(brain):
                          controller=Controller.CONTROL)
     assert "radar contact" in reply
     assert "climb to Angels" in reply
+
+
+def test_departure_exit_rotates_between_flights(brain):
+    """With no traffic, successive clearances rotate through the exits, so a
+    pilot practises different ones instead of always the straight-out gate."""
+    seen = []
+    for _ in range(3):
+        brain.pilots.clear()
+        brain.handle("Ground, Colt 1, one-ship Hornet on Ramp South",
+                     controller=Controller.GROUND)
+        reply = brain.handle("Ground, Colt 1, ready to copy clearance",
+                             controller=Controller.GROUND)
+        seen.append(brain.pilots["Colt 1"].exit_gate)
+    assert len(set(seen)) == 3  # three distinct exits
+
+
+def test_departure_exit_prefers_the_freest_gate(brain, airfield):
+    """With traffic, the exit with the fewest aircraft near it is chosen."""
+    from tests.scenario import Unit
+    # Park traffic on the straight-out gate (West for runway 25) so it is busy.
+    west = airfield.gates["West"]
+    traffic = [Unit("AI-1", west[0], west[1], airfield.elevation_ft + 1000)]
+    brain.handle("Ground, Colt 1, one-ship Hornet on Ramp South",
+                 controller=Controller.GROUND)
+    brain.handle("Ground, Colt 1, ready to copy clearance",
+                 controller=Controller.GROUND, traffic=traffic)
+    assert brain.pilots["Colt 1"].exit_gate != "West"
 
 
 def test_control_climb_issued_once_then_readback(brain):
@@ -437,6 +502,25 @@ def test_control_join_readback_descends(brain):
                          controller=Controller.CONTROL)
     assert "descend to 1500 feet" in reply
     assert brain.pilots["Colt 1"].descend_issued
+
+
+def test_control_descent_readback_uses_the_noun(brain):
+    """A readback phrased "descent of 1,500 feet" must hand off to Tower.
+
+    The pilot reads the clearance back with the *noun* ("descent"), not the
+    verb ("descend"). The readback regexes only matched "descend", so the
+    brain answered "say again" and the arrival stalled (seen in the
+    2026-10-12 sortie).
+    """
+    brain.handle("Control, Colt 1, inbound 35 miles north",
+                 controller=Controller.CONTROL)
+    brain.handle("150 to join via Entry East, Colt 1",
+                 controller=Controller.CONTROL)
+    reply = brain.handle("descent of 1,500 feet, Colt 1",
+                         controller=Controller.CONTROL)
+    assert "say again" not in (reply or "").lower()
+    assert "contact Tower" in reply
+    assert brain.pilots["Colt 1"].phase == Phase.LANDING
 
 
 def test_tower_entry_call_reports_runway_in_sight(brain):

@@ -226,6 +226,30 @@ class Airfield:
 
         return min(self.gates, key=offset)
 
+    def departure_gates(self, runway: str | None = None) -> list[str]:
+        """Exit gates usable for a departure from `runway`, best-first.
+
+        The gate on the **approach side** is excluded: you join the CTR from
+        there to land, so it is not a departure exit (for Kutaisi 07 the entry
+        is West, so departures use East/North/South). Ordered by how closely the
+        gate matches the runway heading, so the straight-out gate comes first.
+        """
+        if not self.gates:
+            return []
+        entry = self.best_entry_gate(runway)
+        candidates = [g for g in self.gates if g != entry] or list(self.gates)
+        rwy_hdg = self.runway_heading(runway)
+        if rwy_hdg is None:
+            return candidates
+        lat0, lon0 = self.ctr.center_lat, self.ctr.center_lon
+
+        def offset(name: str) -> float:
+            g = self.gates[name]
+            bearing = _bearing(lat0, lon0, g[0], g[1])
+            return abs((bearing - rwy_hdg + 180) % 360 - 180)
+
+        return sorted(candidates, key=offset)
+
     def exit_turn(self, gate: str, runway: str | None = None) -> str:
         """Turn from the runway heading to an exit gate: "left"/"right"/"".
 
@@ -298,6 +322,24 @@ class Airfield:
         for name, (hlat, hlon) in self.holding_points.items():
             zones.append({"center": [hlat, hlon], "radius_nm": point_nm,
                           "label": name})
+        return zones
+
+    def exit_zone_geometry(self, runway: str | None = None,
+                           radius_nm: float = 1.5) -> list[dict]:
+        """The 'good exit' circles for a departure, as map circles.
+
+        Mirrors `_exit_deviation_note`: a departure is considered to have used
+        its assigned exit when it is within `radius_nm` of that gate. Returns
+        [{center, radius_nm, label, gate}, ...] for the departure gates of the
+        active runway (the arrival entry is excluded).
+        """
+        zones: list[dict] = []
+        for gate in self.departure_gates(runway):
+            pos = self.gates.get(gate)
+            if pos is None:
+                continue
+            zones.append({"center": [pos[0], pos[1]], "radius_nm": radius_nm,
+                          "label": f"Exit {gate}", "gate": gate})
         return zones
 
     def final_zone_geometry(self, runway: str | None = None,

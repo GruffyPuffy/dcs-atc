@@ -9,7 +9,7 @@ from airspace import Airspace
 
 def test_loads_kutaisi(airfield):
     assert airfield.name == "Kutaisi"
-    assert airfield.frequency_mhz == 263.0
+    assert airfield.frequency_mhz == 270.0
     assert airfield.ground_frequency_mhz == 250.0
     assert airfield.control_frequency_mhz == 257.0
     assert airfield.active_runway == "25"
@@ -60,6 +60,22 @@ def test_exit_turn_direction(airfield):
     assert airfield.exit_turn("Exit North", "25") == "right"
     # 25 to Exit South (bearing 152) is a left turn
     assert airfield.exit_turn("Exit South", "25") == "left"
+
+
+def test_departure_gates_exclude_the_arrival_entry(airfield):
+    # You join the CTR from the approach side, so that gate is not a departure
+    # exit: for 07 the entry is West, so departures use East/North/South.
+    assert airfield.best_entry_gate("07") == "West"
+    assert "West" not in airfield.departure_gates("07")
+    assert set(airfield.departure_gates("07")) == {"East", "North", "South"}
+    assert airfield.best_entry_gate("25") == "East"
+    assert "East" not in airfield.departure_gates("25")
+
+
+def test_departure_gates_are_ordered_straight_out_first(airfield):
+    # The gate closest to the runway heading comes first (the straight-out one).
+    assert airfield.departure_gates("07")[0] == "East"
+    assert airfield.departure_gates("25")[0] == "West"
 
 
 def test_distance_to_threshold(airfield):
@@ -198,6 +214,17 @@ def test_holding_zone_geometry_covers_points(airfield):
     assert set(airfield.holding_points) <= labels
 
 
+def test_exit_zone_geometry_covers_departure_gates(airfield):
+    zones = airfield.exit_zone_geometry()
+    gates = {z["gate"] for z in zones}
+    # One circle per departure gate, and the arrival entry is excluded.
+    assert gates == set(airfield.departure_gates())
+    assert airfield.best_entry_gate() not in gates
+    for z in zones:
+        assert z["radius_nm"] == 1.5
+        assert z["center"] == list(airfield.gates[z["gate"]])
+
+
 def test_final_zone_geometry_is_a_wedge(airfield):
     wedge = airfield.final_zone_geometry()
     assert wedge is not None
@@ -221,7 +248,7 @@ def test_gudauta_loads_with_circular_ctr():
     af = Airspace.load().get("Gudauta")
     assert af is not None
     assert af.active_runway == "15"
-    assert af.frequency_mhz == 259.0  # DCS terrain UHF (Radio.lua)
+    assert af.frequency_mhz == 270.0  # MA common UHF Ch 7
     # circular CTR: the reference point is inside, a far point is outside
     assert af.ctr.contains(af.ctr.center_lat, af.ctr.center_lon, 1000)
     assert not af.ctr.contains(af.ctr.center_lat + 0.5, af.ctr.center_lon, 1000)

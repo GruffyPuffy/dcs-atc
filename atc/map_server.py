@@ -29,7 +29,7 @@ from typing import Callable
 from urllib.parse import urlsplit
 
 from airspace import Airfield
-from brain import AtcBrain
+from brain import AtcBrain, EXIT_REPORT_RADIUS_NM
 from state_client import StateClient
 
 # Debrief saving is best-effort, but a *silent* failure is what let a whole
@@ -425,6 +425,7 @@ def _airspace_payload(airfield: Airfield, basemap: str | None = None) -> dict:
             "holding": airfield.holding_zone_geometry(),
             "final": airfield.final_zone_geometry(),
             "runway": airfield.runway_corridor_geometry(),
+            "exit": airfield.exit_zone_geometry(radius_nm=EXIT_REPORT_RADIUS_NM),
         },
         "overlay": _overlay_payload(airfield),
         # Base map layer (OSM or DCS tiles) chosen by config/CLI.

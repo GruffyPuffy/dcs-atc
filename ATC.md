@@ -16,7 +16,7 @@ traffic-aware.
 
 | Item | Value |
 | --- | --- |
-| Tower frequency | 263.000 MHz AM (Kutaisi) — configurable with `--freq` |
+| Tower frequency | 270.000 MHz AM (Kutaisi) — configurable with `--freq` |
 | ATIS frequency | 270.500 MHz AM (Kutaisi) — configurable with `--atis-freq` |
 | SRS | Bot joins as an External AWACS Mode client (password `atc`) |
 | Coalition | Blue (2) |
@@ -147,7 +147,7 @@ step on the next controller's first call.
 | "Colt 1, holding short runway 25" | **hold short** (after taxi) | "Colt 1, Ground, contact Tower on channel 7." |
 | "Tower, Colt 1, at runway 25, ready for departure" | **departure** (after taxi/holding) | "Colt 1, Tower, line up and wait runway 25." |
 | "Tower, Colt 1, ready for departure" (**while an arrival**) | **wrong call** | "Colt 1, Tower, negative, report runway in sight for landing." (never clears a takeoff for a pilot who is inbound/landing) |
-| "Line up and wait 25, Colt 1" | **readback** | "Colt 1, Tower, cleared for takeoff runway 25." (the takeoff clearance *is* the acknowledgement; a turnout clause appears only when the departure exit is off the runway heading) |
+| "Line up and wait 25, Colt 1" | **readback** | "Colt 1, Tower, cleared for takeoff runway 25." (the takeoff clearance *is* the acknowledgement; a right turnout is spoken, a left turnout is the default and is not, and a straight-out departure gets "fly runway heading") |
 | "Control, Colt 1, at 1500 ft" | **departure check-in** | "Colt 1, Control, radar contact, climb to Angels 15." |
 | "Kutaisi Control, Colt 1, inbound 35 miles north at Angels 12" | **inbound** | "Colt 1, Control, radar contact, turn right heading 150 to join via Entry East." (heading **and turn** computed from the live position; a pilot already pointing at the gate gets "fly heading 150" instead; entry is the best/straight-in gate for runway 25) |
 | "150 to join via Entry East, Colt 1" | **readback** | "Colt 1, Control, descend and maintain 5000 feet." (far out) / "…descend to 1500 feet." (within 15 NM of the entry) — the descent is **stepped by distance** |
@@ -625,7 +625,7 @@ back "cleared to land" — no "roger".
   "airfields": {
     "Kutaisi": {
       "tower": "Kutaisi Tower",
-      "frequency_mhz": 263.0,
+      "frequency_mhz": 270.0,
       "active_runway": "25",
       "ctr": { "ceiling_ft_agl": 1500, "polygon": [[lat, lon], ...] },
       "runways": { "25": { "threshold": [lat, lon] } },
@@ -656,7 +656,9 @@ airfield needs only config, not code.
 and prints an `airspace.json` stub: runway thresholds (derived from the DCS
 runway centre + length), parking areas (clustered from DCS parking spots), a
 circular CTR, default gates, and the **tower frequency** (from the terrain
-`Radio.lua` UHF value — the Master Arms convention, cf. Kutaisi 263.000). DCS
+`Radio.lua` UHF value; the shipped configs instead use the Master Arms common
+UHF channel plan — Ch 7 Tower 270.000 — so every airfield shares one radio
+setup). DCS
 exposes **no taxiway names or holding positions**, so those are marked `TODO`
 and must be filled from the aerodrome chart. Use `--merge` to write it into
 `airspace.json`.
@@ -762,7 +764,7 @@ talk to Ground, then Tower, then Control without any manual switching.
 | Controller | Frequency (Kutaisi) | Handles |
 |------------|--------------------|---------|
 | **Ground** | 250.000 MHz (`ground_frequency_mhz`) | Clearance delivery, taxi, hold-short |
-| **Tower** | 263.000 MHz (`frequency_mhz`) | Line-up, takeoff, overhead break, landing |
+| **Tower** | 270.000 MHz (`frequency_mhz`) | Line-up, takeoff, overhead break, landing |
 | **Control** | 257.000 MHz (`control_frequency_mhz`) | CTR entry, inbound routing via entry point |
 
 Frequencies and controller names come from `airspace.json`; CLI flags
@@ -796,10 +798,11 @@ Frequencies and controller names come from `airspace.json`; CLI flags
   The pilot's readback (*"line up and wait 25"*) triggers the takeoff clearance:
   *"cleared for takeoff runway 25"* (the clearance itself is the
   acknowledgement — no "readback correct"). The **turnout** follows the
-  departure exit gate (the same gate the Ground clearance named): a gate off the
-  runway heading gives *"right/left turnout"*, a gate roughly straight ahead
-  (within 20°) gives none. At Kutaisi the default exits are straight ahead, so
-  the turnout clause is normally absent.
+  departure exit gate (the same gate the Ground clearance named): a **right**
+  turnout is spoken (*"right turnout, cleared for takeoff runway 25"*), a
+  **left** turnout is the default and is not spoken, and a straight-out
+  departure is told *"fly runway heading"*. The exit is chosen once, at "ready
+  to copy clearance", so Ground's exit and Tower's turnout always agree.
 - "runway in sight" / "overhead break" / "initial" → overhead-break clearance.
 - "in the break" → acknowledged: *"roger, report on final"*.
 - "Entry East" (arrival check-in at the entry point) → *"report runway in
@@ -916,7 +919,7 @@ Voices live in `atc/voices/` and are fetched with
 
 A full example of a flight from cold start to shutdown, showing every pilot call
 and the bot's reply. Frequencies (AM): **ATIS 270.500**, **Ground 250.000**,
-**Tower 263.000**, **Control 257.000**. Callsign **Colt 1** (use your own).
+**Tower 270.000**, **Control 257.000**. Callsign **Colt 1** (use your own).
 
 ### Departure
 

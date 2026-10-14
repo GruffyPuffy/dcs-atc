@@ -117,6 +117,15 @@ function drawAirspace(af) {
       dashArray: '4 4', fillColor: '#d29922', fillOpacity: 0.05,
     }).bindTooltip(`Holding check: ${zone.label}`).addTo(staticLayer);
   }
+  // Departure "good exit" circles: a departure within this radius of its
+  // assigned gate counts as having used the exit (mirrors the brain's check).
+  for (const zone of checks.exit || []) {
+    L.circle(zone.center, {
+      radius: zone.radius_nm * 1852, color: '#3fb950', weight: 1,
+      dashArray: '6 4', fillColor: '#3fb950', fillOpacity: 0.05,
+    }).bindTooltip(`Good exit: ${zone.label} (within ${zone.radius_nm} NM)`)
+      .addTo(staticLayer);
+  }
   if (checks.final) {
     // A filled sector (wedge) from the threshold out to the check radius,
     // spanning ±30° of the approach — exactly the area is_on_final accepts.
@@ -246,11 +255,6 @@ function drawComms(ac) {
   const active = ac.active !== false;
   let group = commMarkers.get(ac.callsign);
   if (!group) { group = L.layerGroup().addTo(commLayer); commMarkers.set(ac.callsign, group); }
-  // The map redraws every 2s, which would close an open popup. Remember which
-  // comm log the user wants open BEFORE clearing the layer (clearLayers fires
-  // popupclose, which would otherwise clear the intent), and reopen it after.
-  const wantKey = commPopupKey;
-  group.clearLayers();
 
   const EPS = 0.0007;  // ~75 m: below this, treat two calls as the same place
   const clusters = [];
@@ -264,6 +268,10 @@ function drawComms(ac) {
     }
   }
 
+  // Reuse the existing markers instead of clearing and recreating them: a
+  // popup lives on its marker, so recreating it every 2 s closed the popup and
+  // reset its scroll position (you could never scroll a long call list).
+  const seen = new Set();
   for (const cl of clusters) {
     const last = cl.items[cl.items.length - 1];
     const color = commColor(last.kind);
@@ -281,10 +289,34 @@ function drawComms(ac) {
     const html = `<div class="comm-group" style="--c:${color};`
       + `width:${size}px;height:${size}px;`
       + `font-size:${label.length <= 1 ? 10 : 9}px">${label}</div>`;
+    const key = `${cl.lat.toFixed(5)},${cl.lon.toFixed(5)}`;
+    seen.add(key);
+    let marker = group.getLayers().find((m) => m._commKey === key);
+    if (marker) {
+      // Same spot: update the badge and the popup body in place. Both
+      // `setIcon` and `setPopupContent` rebuild DOM (Leaflet's setIcon even
+      // re-binds the popup), which resets the scroll position of a long call
+      // list — so only touch them when the content actually changed.
+      if (marker._commHtml !== html) {
+        marker._commHtml = html;
+        const el = marker.getElement();
+        const badge = el && el.querySelector('.comm-group');
+        if (badge) badge.outerHTML = html;
+        else marker.setIcon(L.divIcon({ className: 'comm-group-icon', html,
+                                        iconSize: [size, size],
+                                        iconAnchor: [size / 2, size / 2] }));
+      }
+      marker.setOpacity(active ? 1 : 0.6);
+      if (marker._commTip !== tip) {
+        marker._commTip = tip;
+        marker.setPopupContent(`<div class="comm-tip">${tip}</div>`);
+      }
+      continue;
+    }
     // A busy cluster can list many calls, and a Leaflet *tooltip* is neither
     // scrollable nor clickable. Use a click-to-open popup instead, which
     // scrolls (maxHeight) so 10-15 calls stay readable.
-    const marker = L.marker([cl.lat, cl.lon], {
+    marker = L.marker([cl.lat, cl.lon], {
       icon: L.divIcon({ className: 'comm-group-icon', html,
                         iconSize: [size, size],
                         iconAnchor: [size / 2, size / 2] }),
@@ -293,10 +325,9 @@ function drawComms(ac) {
     }).bindPopup(`<div class="comm-tip">${tip}</div>`,
                  { maxWidth: 360, maxHeight: 320, className: 'comm-popup' }
     ).addTo(group);
-    // Tag the marker so the next redraw can tell which log was open, and
-    // reopen it (the redraw cleared the layer, which closed the popup).
-    const key = `${cl.lat.toFixed(5)},${cl.lon.toFixed(5)}`;
     marker._commKey = key;
+    marker._commTip = tip;
+    marker._commHtml = html;
     // A popup that reopens on every 2 s redraw can never be dismissed by
     // clicking the map (the redraw reopens it). Track the user's intent: a
     // map click closes it for good; clicking the marker toggles it.
@@ -304,7 +335,10 @@ function drawComms(ac) {
     marker.on('popupclose', () => {
       if (commPopupKey === key) commPopupKey = null;
     });
-    if (key === wantKey) marker.openPopup();
+  }
+  // Drop markers whose cluster is gone (e.g. after a debrief reload).
+  for (const m of group.getLayers().slice()) {
+    if (!seen.has(m._commKey)) group.removeLayer(m);
   }
 }
 
@@ -544,6 +578,27 @@ async function refreshDebriefs() {
   } catch (e) { /* server offline; leave the default */ }
 }
 
+// Drop every client-side layer and cached list, so a newly loaded debrief (or
+// a switch back to live) redraws from scratch. Without this the previous
+// sortie's trails, comm markers and chatter stayed on screen — the layers were
+// removed from the wrong layer group, so they were never actually cleared.
+function resetClientState() {
+  for (const m of markers.values()) aircraftLayer.removeLayer(m);
+  markers.clear();
+  for (const p of paths.values()) pathLayer.removeLayer(p);
+  paths.clear();
+  for (const g of commMarkers.values()) commLayer.removeLayer(g);
+  commMarkers.clear();
+  for (const m of aiMarkers.values()) aiLayer.removeLayer(m);
+  aiMarkers.clear();
+  commPopupKey = null;
+  lastChatter = [];
+  chatterAgenciesSeen = new Set();
+  document.querySelector('#traffic tbody').innerHTML = '';
+  document.getElementById('chatter-log').innerHTML = '';
+  document.getElementById('chatter-filters').innerHTML = '';
+}
+
 async function loadDebrief(name) {
   const url = name ? '/api/debrief/load' : '/api/debrief/unload';
   try {
@@ -564,13 +619,7 @@ async function loadDebrief(name) {
   } catch (e) {
     /* tick() will surface the state */
   }
-  // Clear client-side layers so the new (or live) picture redraws cleanly.
-  for (const m of markers.values()) aircraftLayer.removeLayer(m);
-  markers.clear();
-  for (const p of paths.values()) aircraftLayer.removeLayer(p);
-  paths.clear();
-  for (const g of commMarkers.values()) aircraftLayer.removeLayer(g);
-  commMarkers.clear();
+  resetClientState();
   tick();
 }
 

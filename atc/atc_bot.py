@@ -5,7 +5,7 @@ CLI flags override them.
 
 Usage:
     uv run atc_bot.py [--airfield Kutaisi] [--airspace airspace.json]
-                      [--host IP] [--port 5002] [--freq 263.0] [--name ATC]
+                      [--host IP] [--port 5002] [--freq 270.0] [--name ATC]
                       [--eam atc] [--stt-model small.en] [--voice en_US-amy-medium]
                       [--ground-voice en_US-ryan-medium]
                       [--control-voice en_US-lessac-medium]
@@ -48,15 +48,21 @@ MIN_TRANSMISSION_SECONDS = 0.3
 # to Ground mid-runway. 80 kt gives margin above the DCS airspeed gauge floor
 # (~58 kt) while staying well below a touch-and-go speed (~120+ kt).
 LANDING_HANDOFF_MAX_KT = 80.0
+# ...and low enough to actually be on the ground. `runway_occupied` accepts
+# anything below 500 ft AGL, so without this a low, slow aircraft crossing the
+# threshold was pushed to Ground while still airborne.
+LANDING_HANDOFF_MAX_AGL_FT = 50.0
 
 
-def is_landing_rollout(on_runway: bool, speed_kt: float) -> bool:
+def is_landing_rollout(on_runway: bool, speed_kt: float,
+                       agl_ft: float = 0.0) -> bool:
     """True if the aircraft is on the runway and slow enough to be a rollout.
 
     Used to gate the Tower->Ground handoff: a touch-and-go is still fast, so it
     stays with Tower instead of being pushed to Ground mid-runway.
     """
-    return bool(on_runway) and speed_kt <= LANDING_HANDOFF_MAX_KT
+    return (bool(on_runway) and speed_kt <= LANDING_HANDOFF_MAX_KT
+            and agl_ft <= LANDING_HANDOFF_MAX_AGL_FT)
 
 
 def resample_16k(pcm: bytes) -> np.ndarray:
@@ -827,7 +833,8 @@ def main() -> None:
                     # (on the ground and slow): a touch-and-go is still fast, so
                     # it stays with Tower.
                     landed = is_landing_rollout(
-                        on_rwy_self, getattr(ac, "speed_kt", 0.0))
+                        on_rwy_self, getattr(ac, "speed_kt", 0.0),
+                        ac.alt_ft - airfield.elevation_ft)
                     with lock:
                         handoff = brain.check_landing_handoff(callsign, landed)
                     if handoff:
@@ -972,7 +979,14 @@ def main() -> None:
     def radio_setup_lines() -> list[str]:
         """The radio-setup summary (also sent to pilots who join)."""
         lines = [f"ATC trainer online at {airfield.name} — radio setup:"]
-        for hz, controller in sorted(controller_by_freq.items()):
+        # Order by channel number (Ground 6, Tower 7, Control 8), not by
+        # frequency, so the list reads in the order a pilot tunes them.
+        def channel_of(controller) -> int:
+            ch = channels.get(controller.value, "")
+            return int(ch) if str(ch).isdigit() else 99
+
+        for hz, controller in sorted(controller_by_freq.items(),
+                                     key=lambda item: channel_of(item[1])):
             ch = channels.get(controller.value, "")
             ch_note = f"Ch {ch}  " if ch else ""
             lines.append(f"  {controller.value.capitalize():8s} {ch_note}"

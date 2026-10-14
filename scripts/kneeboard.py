@@ -246,6 +246,46 @@ PAGES = [
             ]),
         ],
     },
+    {
+        "file": "05-comms",
+        "title": "COMMS",
+        "subtitle": "Master Arms UHF channel plan (Com1 / PRI)",
+        "note": "The default comms plan for missions. Mission-specific channels "
+                "(Ch 13) fit the scenario and are listed in the mission event "
+                "page. * = only in certain aircraft. ** = set per flight and "
+                "starting airfield.",
+        "table": [
+            ("Ch", "Function", "Freq"),
+            ("1", "Carrier Tower", "305.00"),
+            ("2", "Carrier Tower (AI)", "264.00"),
+            ("3", "Tactical", "265.00"),
+            ("4", "Carrier Red Crown", "256.00"),
+            ("5", "CAP A", "254.00"),
+            ("6", "Ground", "250.00"),
+            ("7", "Tower", "270.00"),
+            ("8", "Control", "257.00"),
+            ("9", "AWACS Check In", "255.00"),
+            ("10", "CAP B", "262.00"),
+            ("11", "Air Force Secondary Tanker (AI)", "259.00"),
+            ("12", "Navy Secondary Tanker (AI)", "268.00"),
+            ("13", "Mission Specific", "269.00"),
+            ("14", "Navy Primary Tanker (AI)", "260.00"),
+            ("15", "Carrier Approach A", "263.00"),
+            ("16", "Carrier Marshal", "261.00"),
+            ("17", "Carrier Approach B", "267.00"),
+            ("18", "AWACS (AI)", "251.00"),
+            ("19", "Carrier Overhead Tankers (AI)", "253.00"),
+            ("20", "Air Force Primary Tanker (AI)", "266.00"),
+            ("21*", "ATIS", "270.x0**"),
+            ("22*", "Intraflight (Flight 1)", "xxx.xx**"),
+            ("23*", "Intraflight (Flight 2)", "xxx.xx**"),
+            ("24*", "Intraflight (Flight 3)", "xxx.xx**"),
+            ("25*", "Tower (AI)", "xxx.xx**"),
+        ],
+        "highlight": {"6", "7", "8", "21*"},
+        "footer": "This trainer uses Ch 6 Ground 250.00, Ch 7 Tower 270.00, "
+                  "Ch 8 Control 257.00 and Ch 21 ATIS 270.50 at every airfield.",
+    },
 ]
 
 
@@ -266,6 +306,38 @@ def _wrap(draw: ImageDraw.ImageDraw, text: str, font, max_w: int) -> list[str]:
     return lines or [""]
 
 
+def _draw_table(d: ImageDraw.ImageDraw, page: dict, width: int, y: int,
+                scale: float) -> int:
+    """Draw a channel table (Ch | Function | Freq) and return the new y.
+
+    Rows whose channel is in `page["highlight"]` are drawn in the accent colour
+    and bold, so the channels this trainer actually uses stand out.
+    """
+    rows = page["table"]
+    f_head = _font("DejaVuSans-Bold.ttf", max(10, int(19 * scale)))
+    f_row = _font("DejaVuSans.ttf", max(10, int(18 * scale)))
+    f_row_b = _font("DejaVuSans-Bold.ttf", max(10, int(18 * scale)))
+    row_h = int(26 * scale)
+    highlight = page.get("highlight") or set()
+
+    # Column x positions: channel, function, frequency (right-aligned).
+    x_ch = MARGIN
+    x_fn = MARGIN + int(70 * scale)
+    x_fr = width - MARGIN
+
+    for i, (ch, fn, freq) in enumerate(rows):
+        hot = ch in highlight
+        font = f_head if i == 0 else (f_row_b if hot else f_row)
+        color = ACCENT if (i == 0 or hot) else FG
+        d.text((x_ch, y), ch, font=font, fill=color)
+        d.text((x_fn, y), fn, font=font, fill=color)
+        d.text((x_fr, y), freq, font=font, fill=color, anchor="ra")
+        y += row_h
+        if i == 0:
+            d.line([(MARGIN, y - 4), (width - MARGIN, y - 4)], fill=RULE, width=1)
+    return y + 12
+
+
 def _measure(draw: ImageDraw.ImageDraw, page: dict, width: int,
              scale: float) -> int:
     """Total pixel height the page needs at a given scale (for auto-fit)."""
@@ -280,13 +352,16 @@ def _measure(draw: ImageDraw.ImageDraw, page: dict, width: int,
     y = MARGIN + 50 + 30 + 16  # title + subtitle + rule
     if page.get("note"):
         y += len(_wrap(draw, page["note"], f_note, width - 2 * MARGIN)) * 22 + 6
-    for heading, lines in page["sections"]:
+    if page.get("table"):
+        y += len(page["table"]) * int(26 * scale) + 12
+    for heading, lines in page.get("sections", []):
         y += int(30 * scale)
         for _role, text in lines:
             y += len(_wrap(draw, text, f_text, text_w)) * line_h + 2
         y += int(12 * scale)
     # reserve room for the footer at the bottom
-    y += len(_wrap(draw, FOOTER, f_foot, width - 2 * MARGIN)) * 20 + 24
+    footer = page.get("footer", FOOTER)
+    y += len(_wrap(draw, footer, f_foot, width - 2 * MARGIN)) * 20 + 24
     return y
 
 
@@ -325,7 +400,10 @@ def render_page(page: dict, width: int, height: int) -> Image.Image:
     text_x = MARGIN + role_w
     text_w = width - MARGIN - text_x
 
-    for heading, lines in page["sections"]:
+    if page.get("table"):
+        y = _draw_table(d, page, width, y, scale)
+
+    for heading, lines in page.get("sections", []):
         d.text((MARGIN, y), heading, font=f_head, fill=ACCENT)
         y += int(30 * scale)
         for role, text in lines:
@@ -340,7 +418,7 @@ def render_page(page: dict, width: int, height: int) -> Image.Image:
 
     # Footer: the radio-discipline rule, pinned to the bottom.
     f_foot = _font("DejaVuSans-Oblique.ttf", 15)
-    foot_lines = _wrap(d, FOOTER, f_foot, width - 2 * MARGIN)
+    foot_lines = _wrap(d, page.get("footer", FOOTER), f_foot, width - 2 * MARGIN)
     fy = height - MARGIN - len(foot_lines) * 20
     d.line([(MARGIN, fy - 10), (width - MARGIN, fy - 10)], fill=RULE, width=1)
     for line in foot_lines:

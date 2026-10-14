@@ -4,7 +4,7 @@
 # The live map view is served by default on port 8090 (open http://<host>:8090/).
 # Usage: ./start_bot.sh [extra atc_bot.py args...]
 # Examples:
-#   ./start_bot.sh                          # defaults: airfield Kutaisi (263.000 AM), map on :8090
+#   ./start_bot.sh                          # defaults: airfield Kutaisi (270.000 AM), map on :8090
 #   ./start_bot.sh --airfield Batumi        # a different airfield from airspace.json
 #   ./start_bot.sh --freq 124.0             # override the frequency
 #   ./start_bot.sh --speech-rate 0.6        # faster TTS voice

@@ -38,6 +38,11 @@ DEFAULT_PHRASEOLOGY = Path(__file__).with_name("phraseology.json")
 # handing the flight to Tower (a pilot who is not actually at the entry point
 # should not be handed off).
 ENTRY_REPORT_RADIUS_NM = 5.0
+# How close a departure must be to its assigned exit gate when Tower hands it to
+# Control; further away gets a trainer note (the handoff still happens). Kept
+# small: the gate is a point on the CTR boundary, so a wide radius would accept
+# almost any departure direction.
+EXIT_REPORT_RADIUS_NM = 1.5
 
 # Arrival descent is stepped by distance to the entry gate, like a real
 # controller (not a single canned "descend to 1500" at 35 miles). Within
@@ -110,6 +115,10 @@ class PilotState:
     last_clearance: str = ""  # last clearance issued, for readback verification
     last_controller: str = ""  # last agency talked to (for the map view)
     readback_fails: int = 0  # consecutive incomplete readbacks of one clearance
+    # Ground has read out the runway/QNH (or weather) info, so a later call
+    # naming "in use"/QNH is a readback of it. Without this, any transmission
+    # that merely mentions "in use" was answered "readback correct".
+    info_issued: bool = False
 
 
 class Phraseology:
@@ -166,6 +175,9 @@ class AtcBrain:
         # TTS output volume, adjustable at runtime with "trainer, volume 0.3".
         # None = use the --tx-volume default.
         self.tx_volume: float | None = None
+        # Rotates the departure exit gate between flights (no traffic), so a
+        # pilot practises different exits instead of always the straight-out one.
+        self._exit_rotation = 0
         # SRS speaker name -> flight callsign, learned from transmissions, so
         # automatic calls (CTR warning, go-around) can address the pilot by
         # callsign instead of the raw DCS unit name.
@@ -442,6 +454,19 @@ class AtcBrain:
         t = re.sub(r"(?<=\d)\s+(?=\d)", "", t)  # "2 9 9 2" -> "2992"
         return set(re.findall(r"\d+", t))
 
+    @staticmethod
+    def _number_read_back(number: str, spoken: set[str]) -> bool:
+        """True if `number` was read back, tolerating STT gluing the callsign on.
+
+        STT often runs the callsign's digits into the last clearance number
+        ("...hold short runway zero seven" + "Ford one" -> "0741"), so an exact
+        set match would wrongly report the runway as missing. Accept a spoken
+        number that *starts with* the clearance number.
+        """
+        return any(s == number
+                   or (len(s) > len(number) and s.startswith(number))
+                   for s in spoken)
+
     def _readback_item(self, low: str, clearance: str) -> str | None:
         """The label of the first item the pilot failed to read back, or None.
 
@@ -455,7 +480,8 @@ class AtcBrain:
         clearance = self.callsigns.strip(clearance or "")
         low = self.callsigns.strip(low or "")
         spoken = self._numbers(low)
-        missing_num = [n for n in self._numbers(clearance) if n not in spoken]
+        missing_num = [n for n in self._numbers(clearance)
+                       if not self._number_read_back(n, spoken)]
         # Only a gate named as "Exit X" / "Entry X" counts. A bare gate word
         # collides with parking-area names ("Ramp South" contains "South"), so
         # matching the word alone would demand a gate the clearance never gave.
@@ -664,7 +690,7 @@ class AtcBrain:
                 "say_again", callsign, agency=self._agency(controller))
 
         if controller == Controller.GROUND:
-            reply = self._handle_ground(callsign, pilot, low, track)
+            reply = self._handle_ground(callsign, pilot, low, track, traffic)
         elif controller == Controller.CONTROL:
             reply = self._handle_control(callsign, pilot, low, track)
         else:
@@ -681,8 +707,8 @@ class AtcBrain:
         # Only expected in phases where a readback is actually due.
         readback = re.search(
             r"\b(readback|read back|copy|roger|wilco|cleared|hold short|line up|"
-            r"lined up|waiting|turn|heading|descend|climb|angels|exit|via|"
-            r"in use|qnh|q\.?n\.?h\.?)\b",
+            r"lined up|waiting|turn|heading|descend|descent|climb|angels|exit|"
+            r"via|in use|qnh|q\.?n\.?h\.?)\b",
             low)
         if readback and pilot.phase == Phase.LINEUP:
             # Readback of "line up and wait" -> the takeoff clearance. The
@@ -801,13 +827,15 @@ class AtcBrain:
     # ---------- Ground ----------
 
     def _handle_ground(self, callsign: str, pilot: PilotState,
-                       low: str, track: AircraftTrack | None) -> str | None:
+                       low: str, track: AircraftTrack | None,
+                       traffic: list | None = None) -> str | None:
         # Readback of the runway-in-use/QNH info ("25 in use, QNH 2992") ->
         # "readback correct, advise when ready for clearance". Without this the
         # line has no trigger (none of {information, taxi, clearance}) and the
         # pilot gets "say again", stalling the flow at the very first exchange.
-        if pilot.phase == Phase.IDLE and re.search(
+        if pilot.phase == Phase.IDLE and pilot.info_issued and re.search(
                 r"\b(in use|qnh|q\.?n\.?h\.?)\b", low):
+            pilot.info_issued = False
             return self._say("ground_info_readback", callsign)
         # Readback of the departure clearance ("after departure turn right Exit
         # North, 1500 ft or below") -> "readback correct". The pilot may read
@@ -825,13 +853,14 @@ class AtcBrain:
                                         Controller.GROUND)
         if re.search(r"\b(clearance|ready to copy|ifr)\b", low):
             pilot.phase = Phase.CLEARANCE
-            gate = self._pick_exit_gate()
+            gate = self._pick_exit_gate(traffic)
             pilot.exit_gate = gate
             turn = "right"
             if self.airfield is not None:
                 turn = self.airfield.exit_turn(gate, self.runway)
             key = "departure_exit" if turn else "departure_exit_straight"
-            reply = self._say(key, callsign, gate=gate, turn=turn)
+            reply = self._say(key, callsign, gate=self._exit_label(gate),
+                              turn=turn)
             pilot.last_clearance = reply
             return reply
         # Post-landing: taxi to parking (to a named ramp, or the nearest one).
@@ -917,6 +946,7 @@ class AtcBrain:
         # call is just runway/QNH.
         if re.search(r"\b(ramp|apron|parking|taxiway|ship|hornets?|vipers?|"
                      r"information)\b", low):
+            pilot.info_issued = True
             if re.search(r"\binformation\b", low):
                 return self._say("ground_info", callsign)
             return self._say("ground_info_weather", callsign)
@@ -1121,7 +1151,7 @@ class AtcBrain:
         # this readback branch. Only a genuine readback ("150 to join via Entry
         # East") gets here.
         if pilot.phase == Phase.INBOUND and re.search(
-                r"\b(join|via|heading|turn|descend|1500?)\b", low):
+                r"\b(join|via|heading|turn|descend|descent|1500?)\b", low):
             if not pilot.descend_issued:
                 # Step the descent by distance: far out -> an intermediate
                 # altitude; close to the entry -> the final 1500 ft. The
@@ -1231,19 +1261,47 @@ class AtcBrain:
         gate = pilot.entry_gate or self._pick_entry_gate(track, low)
         return self._say("inbound_via_gate", callsign, gate=gate)
 
-    def _pick_exit_gate(self) -> str:
+    def _pick_exit_gate(self, traffic: list | None = None) -> str:
         """Departure exit point.
 
-        The gate that best matches the departure direction for the active runway
-        (you fly the runway heading after takeoff), falling back to the first
-        configured gate. A pilot-named exit is a future addition.
+        Candidates are the gates that are not the arrival entry (see
+        `Airfield.departure_gates`). With other traffic, take the one that is
+        most free (fewest aircraft near it); otherwise rotate through them, so a
+        pilot practises different exits instead of always flying the straight-out
+        one. Falls back to the first configured gate.
         """
         if self.airfield is not None:
-            gate = self.airfield.default_exit_gate(self.runway)
-            if gate:
-                return f"Exit {gate}"
+            candidates = self.airfield.departure_gates(self.runway)
+            if candidates:
+                if traffic:
+                    return min(candidates,
+                               key=lambda g: self._traffic_near_gate(g, traffic))
+                gate = candidates[self._exit_rotation % len(candidates)]
+                self._exit_rotation += 1
+                return gate
         gate = self.gates[0] if self.gates else "North"
-        return f"Exit {gate}"
+        return gate
+
+    @staticmethod
+    def _exit_label(gate: str) -> str:
+        """Gate name as spoken in a clearance: "West" -> "Exit West"."""
+        return gate if gate.lower().startswith("exit ") else f"Exit {gate}"
+
+    def _traffic_near_gate(self, gate: str, traffic: list,
+                           radius_nm: float = 5.0) -> int:
+        """How many live units are within `radius_nm` of `gate` (lower = freer)."""
+        if self.airfield is None:
+            return 0
+        target = self.airfield.gates.get(gate.split()[-1])
+        if target is None:
+            return 0
+        count = 0
+        for unit in traffic:
+            _, distance = bearing_distance(unit.lat, unit.lon,
+                                           target[0], target[1])
+            if distance <= radius_nm:
+                count += 1
+        return count
 
     def _join_turn(self, track: AircraftTrack | None, heading: float) -> str:
         """Turn direction for the Control join: "left"/"right"/"".
@@ -1258,29 +1316,35 @@ class AtcBrain:
         return self.airfield.turn_to_heading(track.heading, heading)
 
     def _takeoff_turnout(self, pilot: PilotState) -> str:
-        """The turnout for the takeoff clearance: "left"/"right"/"".
+        """The turnout clause for the takeoff clearance: "left"/"right"/"straight".
 
-        Follows the departure exit gate (the same gate the Ground clearance
-        named), so the takeoff turn matches the routing: a gate roughly straight
-        ahead (within 20°) gives no turn. Falls back to "right" when the
-        geometry is unknown.
+        Real ATC (per MA): a **left** turnout is the default and is not spoken;
+        a **right** turnout is called. A departure that flies the runway heading
+        to its exit is told "fly runway heading".
         """
         if self.airfield is None:
-            return "right"
+            return "straight"
         gate = pilot.exit_gate or self._pick_exit_gate()
-        return self.airfield.exit_turn(gate, self.runway) or ""
+        turn = self.airfield.exit_turn(gate, self.runway)
+        if turn == "right":
+            return "right"
+        if turn == "left":
+            return "left"
+        return "straight"
 
     def _takeoff_clearance(self, callsign: str, pilot: PilotState) -> str:
         """The takeoff clearance, with the turnout following the departure exit.
 
         Master Arms: "<callsign>, right turnout, cleared for take-off runway 25".
-        The turnout matches the departure routing (the Ground clearance's exit
-        turn); a gate roughly straight ahead gives no turnout clause.
+        Only a right turnout is spoken — a left turnout is the default and gets
+        no clause; a straight-out departure is told "fly runway heading".
         """
         turnout = self._takeoff_turnout(pilot)
-        if turnout:
+        if turnout == "right":
             return self._say("lineup_readback", callsign, turnout=turnout)
-        return self._say("lineup_readback_straight", callsign)
+        if turnout == "straight":
+            return self._say("lineup_readback_straight", callsign)
+        return self._say("lineup_readback_left", callsign)
 
     def _inside_ctr(self, track: AircraftTrack | None) -> bool:
         """True if the aircraft is inside the CTR footprint below the ceiling.
@@ -1412,7 +1476,24 @@ class AtcBrain:
             return None
         pilot.departure_handoff_announced = True
         pilot.phase = Phase.AIRBORNE
-        return self._say("contact_control", callsign)
+        # Hand off regardless, but coach if the pilot did not leave via the
+        # assigned exit (a trainer note, not a block).
+        note = self._exit_deviation_note(pilot, track)
+        return note + self._say("contact_control", callsign)
+
+    def _exit_deviation_note(self, pilot: PilotState,
+                             track: AircraftTrack | None) -> str:
+        """A trainer note if the departure is not near its assigned exit gate.
+
+        Empty when the pilot is close to the assigned gate (or we cannot tell).
+        """
+        if track is None or self.airfield is None or not pilot.exit_gate:
+            return ""
+        distance = self._distance_to_gate(track, pilot.exit_gate)
+        if distance is None or distance <= EXIT_REPORT_RADIUS_NM:
+            return ""
+        return self._say("exit_deviation", pilot.callsign,
+                         gate=self._exit_label(pilot.exit_gate)) + " "
 
     def check_departure_climb(self, callsign: str,
                               track: AircraftTrack | None) -> str | None:

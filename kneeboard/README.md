@@ -2,7 +2,8 @@
 
 Glanceable phraseology cards generated from the **exact** Master Arms SOP dialogs
 (https://wiki.masterarms.se/index.php/Mission_Procedures), for use in the DCS
-kneeboard during training.
+kneeboard during training. Page 5 is the Master Arms **comms board** (the UHF
+channel plan from https://wiki.masterarms.se/index.php/Comms).
 
 | Page | Covers |
 | --- | --- |
@@ -10,10 +11,15 @@ kneeboard during training.
 | `02-rtb-landing.jpg` | Control (Ch 8) + Tower (Ch 7) + Ground (Ch 6): inbound, join, descent, entry, break, landing, taxi to parking |
 | `03-airborne.jpg` | AWACS / package (not flown in the sim): check-in, push, attack, RTB handoff |
 | `04-light-path.jpg` | **Single-ship light path**: skip Ground (straight to Tower) and the overhead break (report "on final"); Tower → Control → land |
+| `05-comms.jpg` | **Comms board**: the Master Arms UHF channel plan (Ch 1–25), with the channels this trainer uses highlighted |
 
 Page 4 is a **shortened trainer path**, not a wiki transcript: it uses the ATC
 bot's actual replies to show the fewest calls that get a single-ship airborne and
 back. Stuck at any point? Say *"Trainer, <callsign>, help"* on any frequency.
+
+Page 5 is the **comms board** — the Master Arms UHF channel plan, verbatim from
+the wiki's Comms page. The channels this trainer uses (Ch 6 Ground, Ch 7 Tower,
+Ch 8 Control, Ch 21 ATIS) are highlighted in orange.
 
 Each other line is a request/answer exchange from the wiki (the "Adder11" two-ship
 example), colour-coded by who is talking (PILOT / GND / TWR / CTL / AWACS).
