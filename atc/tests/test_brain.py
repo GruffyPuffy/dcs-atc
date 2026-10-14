@@ -718,6 +718,35 @@ def test_speaker_callsign_mapping(brain):
     assert brain.callsign_for_speaker("Unknown") == "Unknown"
 
 
+def test_sync_speakers_seeds_from_the_live_unit_list(brain):
+    """DCS reports the unit's real callsign next to the player flying it.
+
+    Seeding from that list means a pilot is known *before* they transmit, and
+    the raw unit name ("Chevy 11") is canonicalised to the brain's key
+    ("Chevy 1").
+    """
+    brain.sync_speakers([("Caveman", "Chevy 11")])
+    assert brain.callsign_for_speaker("Caveman") == "Chevy 1"
+
+
+def test_sync_speakers_keeps_duplicate_callsigns_distinct(brain):
+    """Two players in identically-named slots must not share one state.
+
+    The map is keyed by player name, so each pilot resolves to their own
+    callsign even when the flight names collide.
+    """
+    brain.sync_speakers([("Caveman", "Chevy 11"), ("Maverick", "Chevy 12")])
+    assert brain.callsign_for_speaker("Caveman") == "Chevy 1"
+    assert brain.callsign_for_speaker("Maverick") == "Chevy 1-2"
+
+
+def test_sync_speakers_drops_departed_players(brain):
+    brain.sync_speakers([("Caveman", "Chevy 11"), ("Maverick", "Chevy 12")])
+    brain.sync_speakers([("Maverick", "Chevy 12")])  # Caveman left
+    assert brain.callsign_for_speaker("Caveman") == "Caveman"
+    assert brain.callsign_for_speaker("Maverick") == "Chevy 1-2"
+
+
 def test_content_flight_name_does_not_hijack_transmission(brain):
     # "Climbing to Ford 15" is heading 150 for the *sender* (Springfield 1),
     # not flight Ford. The speaker's own callsign wins.

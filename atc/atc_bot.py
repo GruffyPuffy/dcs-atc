@@ -293,13 +293,11 @@ def main() -> None:
     # to warn on unannounced CTR entry / occupied-runway go-arounds.
     state = None if args.no_state else StateClient(args.state_host, args.state_port)
     callsigns = CallsignRegistry()
-    callsign_names = list(callsigns.names)
     if state is not None:
         try:
             slots = state.callsigns()
             if slots:
                 callsigns = CallsignRegistry.from_mission(slots)
-                callsign_names = list(callsigns.names)
                 print(f"[*] Callsigns from mission: {len(callsigns.names)} flights "
                       f"({', '.join(callsigns.names[:8])}...)")
         except (OSError, RuntimeError) as error:
@@ -485,7 +483,7 @@ def main() -> None:
             # near-silent clip (a PTT click or breath) Whisper echoes it back
             # verbatim as if the pilot had said it. `hotwords` biases the same
             # vocabulary without that failure mode.
-            hotwords=stt_hint(callsign_names,
+            hotwords=stt_hint(callsigns.names,
                               [airfield.name, airfield.tower]),
         )
         segments = list(segments)  # materialise: the guard below re-reads them
@@ -721,13 +719,19 @@ def main() -> None:
                 players = state.aircraft()
                 all_units = state.all_units()
                 with lock:
+                    # Keep the callsign registry and speaker map in step with
+                    # who is actually flying: learn dynamic-slot callsigns, prune
+                    # departed players, and seed "player -> callsign" directly
+                    # from the live unit list (DCS reports both).
+                    brain.sync_speakers(
+                        [(ac.player, ac.callsign) for ac in players])
                     # Solo training mode: with one (or zero) players online, an
                     # unrecognized call is prompted instead of ignored.
                     brain.set_pilot_count(len(players))
                     # Known callsigns online, used to attribute a garbled call to
                     # a pilot whose flight name the transmission still resembles.
                     brain.set_active_pilots(
-                        [brain.callsign_for_speaker(ac.player) for ac in players])
+                        [ac.callsign for ac in players if ac.callsign])
                 # Greet each newly-seen pilot with the radio setup, so they can
                 # tune in without reading the docs. Sent once per player (by
                 # DCS name) via the in-game message feed. Retry until the bridge
