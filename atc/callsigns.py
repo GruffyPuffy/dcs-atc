@@ -91,24 +91,10 @@ class CallsignRegistry:
         # unique, non-empty, sorted longest-first so "springfield" wins over "s"
         self.names = sorted({n.strip() for n in names if n and n.strip()},
                             key=len, reverse=True)
-        # Flight names learned at runtime (dynamic slots), so they can be pruned
-        # again when the player leaves. Mission callsigns are never pruned: they
-        # stay valid even when nobody occupies the slot.
-        self._learned: set[str] = set()
-        self.variants: dict[str, list[str]] = {}
-        self.fractures: dict[str, list[str]] = {}
-        self._accepted: set[str] = set()
-        self._regex = None
-        self._rebuild()
-
-    def _rebuild(self) -> None:
-        """Rebuild the derived tables after `names` changes."""
-        # Longest-first, so "springfield" wins over a shorter prefix of it.
-        self.names.sort(key=len, reverse=True)
         # flight name (lowercase) -> generated STT variants. Drop variants that
         # are themselves number words (e.g. "four" for "Ford"), which would
         # otherwise match phrases like "four two" as a callsign.
-        self.variants = {
+        self.variants: dict[str, list[str]] = {
             name.lower(): [v for v in generate_variants(name)
                            if v not in NUMBER_WORDS]
             for name in self.names
@@ -116,17 +102,18 @@ class CallsignRegistry:
         # Known multi-word STT fractures (e.g. "spring fail" for "Springfield").
         # Exposed separately so the matcher can collapse the spaces: they must
         # match as a single flight word, not a name followed by a stray token.
-        self.fractures = {
+        self.fractures: dict[str, list[str]] = {
             name.lower(): [v for v in KNOWN_ERRORS.get(name.lower(), [])
                            if " " in v]
             for name in self.names
         }
+        self._regex = self._build_regex()
         # Lower-cased set of every accepted spelling, for fuzzy recovery.
-        self._accepted = set()
+        self._accepted: set[str] = set()
         for name in self.names:
             self._accepted.add(name.lower())
-            self._accepted.update(self.variants[name.lower()])
-        self._regex = self._build_regex()
+            for variant in self.variants.get(name.lower(), ()):
+                self._accepted.add(variant)
 
     def _name_alt(self) -> str:
         """Regex alternation of every flight-name spelling (variants + fractures).
@@ -367,46 +354,3 @@ class CallsignRegistry:
             if flight:
                 names.append(flight)
         return cls(names or DEFAULT_NAMES)
-
-    def add(self, names: list[str]) -> list[str]:
-        """Add flight names to the registry; return the ones that were new.
-
-        Used for dynamic slots: a player who spawns into a slot that is not in
-        `env.mission` (e.g. a dynamically created flight) is only known from the
-        live unit list, so the registry has to learn their flight name at
-        runtime or their callsign is never recognised. Learned names are
-        remembered so `prune` can drop them again when the player leaves.
-        """
-        added = []
-        known = {n.lower() for n in self.names}
-        for raw in names:
-            flight = re.sub(r"\d+$", "", (raw or "").strip()).strip()
-            if not flight or flight.lower() in known:
-                continue
-            known.add(flight.lower())
-            self.names.append(flight)
-            self._learned.add(flight.lower())
-            added.append(flight)
-        if added:
-            self._rebuild()
-        return added
-
-    def prune(self, keep: list[str]) -> list[str]:
-        """Drop learned names not in `keep`; return the ones removed.
-
-        Mission callsigns are never removed — they remain valid when the slot is
-        empty. Only names learned from the live unit list are pruned, so a
-        departed player's dynamic callsign stops being recognised (and cannot
-        mis-match a later garbled call).
-        """
-        keep_low = {re.sub(r"\d+$", "", (k or "").strip()).strip().lower()
-                    for k in keep}
-        removed = [n for n in self.names
-                   if n.lower() in self._learned and n.lower() not in keep_low]
-        if not removed:
-            return []
-        drop = {n.lower() for n in removed}
-        self.names = [n for n in self.names if n.lower() not in drop]
-        self._learned -= drop
-        self._rebuild()
-        return removed

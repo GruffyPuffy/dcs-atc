@@ -231,38 +231,6 @@ class AtcBrain:
         for key in self.callsigns.speaker_spellings(who):
             self.speaker_callsigns[key] = callsign
 
-    def sync_speakers(self, pairs: list[tuple[str, str]]) -> None:
-        """Sync the callsign registry and speaker map from the live unit list.
-
-        `pairs` is (player name, unit callsign) for every live player, as DCS
-        reports them (`u:getPlayerName()` / `u:getName()`). This is the single
-        entry point for keeping the brain in step with who is actually flying:
-
-        - **Learn** flight names not in `env.mission` (dynamic slots), so a
-          player who spawned into a dynamically created flight is recognised.
-        - **Prune** learned names whose player has left, so a stale dynamic
-          callsign cannot mis-match a later garbled call. Mission callsigns are
-          never pruned.
-        - **Seed** the speaker map directly ("Caveman -> Chevy 11") instead of
-          waiting to learn it from what the pilot says. Because the map is keyed
-          by player name, two players who share a callsign stay distinct.
-        """
-        live = [callsign for _, callsign in pairs if callsign]
-        self.callsigns.add(live)
-        self.callsigns.prune(live)
-        keys: set[str] = set()
-        for player, callsign in pairs:
-            if not player or not callsign:
-                continue
-            # Canonicalise: DCS reports the unit name ("Chevy 11") while the
-            # brain keys its state by the spoken form ("Chevy 1").
-            canonical = self.callsigns.extract(callsign) or callsign
-            keys.update(self._speaker_keys(player))
-            self.remember_speaker(player, canonical)
-        for key in list(self.speaker_callsigns):
-            if key not in keys:
-                del self.speaker_callsigns[key]
-
     @staticmethod
     def _norm_speaker(name: str) -> str:
         """Normalise a speaker name for lookup: lower-case, no separators.
