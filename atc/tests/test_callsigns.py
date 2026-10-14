@@ -142,3 +142,67 @@ def test_from_mission_strips_trailing_digits():
 def test_from_mission_empty_falls_back_to_defaults():
     reg = CallsignRegistry.from_mission([])
     assert reg.names  # DEFAULT_NAMES
+
+
+def test_add_learns_a_dynamic_slot_callsign():
+    """A dynamic slot is not in env.mission, so the registry must learn it.
+
+    The mission only defines Hornet/Uzi; the player spawned into a dynamically
+    created "Chevy 11" slot, which the live unit list reports. Without `add`
+    the registry never knows "Chevy" and every call gets "say again".
+    """
+    reg = CallsignRegistry.from_mission([{"name": "Hornet11"},
+                                         {"name": "Uzi11"}])
+    assert "Chevy" not in reg.names
+
+    added = reg.add(["Chevy 11"])
+    assert added == ["Chevy"]
+    assert "Chevy" in reg.names
+    # The new name is fully usable: extraction and fuzzy matching both work.
+    assert reg.extract_all("ground, Chevy one one") == ["Chevy 1"]
+    assert reg.looks_like("chevy one one", "Chevy")
+
+
+def test_add_is_idempotent_and_ignores_known_names():
+    reg = CallsignRegistry.from_mission([{"name": "Hornet11"}])
+    assert reg.add(["Hornet11"]) == []      # already known
+    assert reg.add(["Chevy 11"]) == ["Chevy"]
+    assert reg.add(["Chevy 11"]) == []      # second time is a no-op
+    assert reg.names.count("Chevy") == 1
+
+
+def test_add_keeps_longest_name_first():
+    """A longer name must still win over a shorter prefix of it."""
+    reg = CallsignRegistry.from_mission([{"name": "Colt1"}])
+    reg.add(["Coltrane 1"])
+    assert reg.names[0] == "Coltrane"
+
+
+def test_prune_drops_learned_names_but_keeps_mission_ones():
+    """A departed player's dynamic callsign is forgotten; mission ones are not.
+
+    Mission callsigns stay valid when the slot is empty, so they must survive a
+    prune even though nobody is flying them.
+    """
+    reg = CallsignRegistry.from_mission([{"name": "Hornet11"}])
+    reg.add(["Chevy 11"])
+
+    removed = reg.prune(["Hornet11"])  # Chevy's player left
+    assert removed == ["Chevy"]
+    assert "Chevy" not in reg.names
+    assert "Hornet" in reg.names       # mission callsign retained
+    # The pruned name is no longer recognised.
+    assert reg.extract_all("ground, Chevy one one") == []
+
+
+def test_prune_keeps_a_learned_name_while_its_player_is_online():
+    reg = CallsignRegistry.from_mission([{"name": "Hornet11"}])
+    reg.add(["Chevy 11"])
+    assert reg.prune(["Hornet11", "Chevy 11"]) == []
+    assert "Chevy" in reg.names
+
+
+def test_prune_is_a_noop_when_nothing_was_learned():
+    reg = CallsignRegistry.from_mission([{"name": "Hornet11"}])
+    assert reg.prune([]) == []
+    assert "Hornet" in reg.names
