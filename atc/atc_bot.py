@@ -36,7 +36,7 @@ from ctr import CtrEvent, CtrTracker
 from phonetics import stt_hint
 from srs_client import SrsClient
 from speech import is_probably_non_speech, spell_atc_numbers
-from state_client import StateClient, norm_identity, resolve_player_unit
+from state_client import StateClient, norm_identity, resolve_player_unit, slot_callsign
 import topgun
 from workers import ControllerWorker, SharedState
 
@@ -464,6 +464,8 @@ def main() -> None:
         peak = peak_dbfs(pcm)
         wav_path = save_wav(pcm)
         started = time.monotonic()
+        with lock:
+            hint_names = brain.stt_flight_names()
         segments, _ = stt.transcribe(
             resample_16k(pcm),
             language="en",
@@ -474,16 +476,15 @@ def main() -> None:
             # Don't let one segment's text bias the next: on short/noisy clips
             # this causes repeat-hallucination loops.
             condition_on_previous_text=False,
-            # Bias the decoder toward THIS mission's callsigns (the highest-value
-            # tokens) plus our standard phraseology. `hotwords` is the dedicated
-            # hint channel in faster-whisper; the callsigns dominate the front of
-            # the string.
+            # Bias the decoder toward the callsigns currently online (and their
+            # known STT errors), not the whole mission list — 60 flights blow
+            # the 900-char cap and drown the one name the pilot is about to say.
             #
             # No `initial_prompt`: it becomes the decoder *prefix*, so on a
             # near-silent clip (a PTT click or breath) Whisper echoes it back
             # verbatim as if the pilot had said it. `hotwords` biases the same
             # vocabulary without that failure mode.
-            hotwords=stt_hint(callsigns.names,
+            hotwords=stt_hint(hint_names,
                               [airfield.name, airfield.tower]),
         )
         segments = list(segments)  # materialise: the guard below re-reads them
@@ -711,6 +712,7 @@ def main() -> None:
         """Poll live positions: warn on unannounced CTR entry, and issue
         go-arounds when the runway is occupied on final."""
         greeted: set[str] = set()  # players already sent the radio setup
+        seen_players: set[str] = set()
         while True:
             time.sleep(2.0)
             if state is None:
@@ -721,8 +723,9 @@ def main() -> None:
                 with lock:
                     # Keep the callsign registry and speaker map in step with
                     # who is actually flying: learn dynamic-slot callsigns, prune
-                    # departed players, and seed "player -> callsign" directly
-                    # from the live unit list (DCS reports both).
+                    # departed players, and seed "player -> callsign" for the
+                    # units whose name *is* a callsign (DCS reports only the
+                    # name, so a synthetic one is deliberately not seeded).
                     brain.sync_speakers(
                         [(ac.player, ac.callsign) for ac in players])
                     # Solo training mode: with one (or zero) players online, an
@@ -730,8 +733,25 @@ def main() -> None:
                     brain.set_pilot_count(len(players))
                     # Known callsigns online, used to attribute a garbled call to
                     # a pilot whose flight name the transmission still resembles.
+                    # Only pilots we can actually name are included: a raw unit
+                    # name ("Kutaisi_F/A-18C Lot 20_2-") could only mislead it.
                     brain.set_active_pilots(
-                        [ac.callsign for ac in players if ac.callsign])
+                        brain.known_callsigns([ac.player for ac in players]))
+                online = {ac.player for ac in players if ac.player}
+                for name in list(seen_players - online):
+                    log(f"PLAYER LEFT: {name}")
+                    seen_players.discard(name)
+                for ac in players:
+                    if not ac.player or ac.player in seen_players:
+                        continue
+                    seen_players.add(ac.player)
+                    seeded = slot_callsign(ac.callsign) or "-"
+                    with lock:
+                        known = brain.callsign_for_speaker(ac.player)
+                    if known == ac.player:
+                        known = "-"
+                    log(f"PLAYER JOIN: {ac.player}  type={ac.type}  "
+                        f"unit={ac.callsign!r}  slot={seeded}  known={known}")
                 # Greet each newly-seen pilot with the radio setup, so they can
                 # tune in without reading the docs. Sent once per player (by
                 # DCS name) via the in-game message feed. Retry until the bridge

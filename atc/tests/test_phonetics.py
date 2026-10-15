@@ -41,6 +41,15 @@ def test_stt_hint_puts_callsigns_first():
     assert "cleared for takeoff" in hint
 
 
+def test_stt_hint_includes_known_errors_for_that_flight():
+    from phonetics import stt_hint
+    hint = stt_hint(["Ford"])
+    assert hint.startswith("Ford")
+    assert "forward" in hint.lower()
+    # A 60-name dictionary must not be required: one live flight stays short.
+    assert len(hint) < 900
+
+
 def test_stt_hint_dedupes_and_caps():
     from phonetics import stt_hint
     hint = stt_hint(["Colt", "colt", "Colt"], ["Kutaisi", "kutaisi"])

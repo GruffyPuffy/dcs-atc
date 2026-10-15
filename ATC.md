@@ -91,6 +91,14 @@ identify (*"Ground, Springfield 1-1"* → `remember_speaker("Caveman", "Springfi
 and from then on addresses their automatic calls (CTR warning, go-around) by
 callsign.
 
+The mapping is also **seeded** from the live unit list when DCS happens to name
+the slot after its callsign (`Unit:getName()` → `"Springfield11"` →
+`Springfield 1`), so a known slot is recognised *before* the pilot transmits. A
+unit name that is not a callsign shape is deliberately never used: a dynamically
+spawned slot is named after the airbase, type and index
+(`Kutaisi_F/A-18C Lot 20_2- 1`) and carries no callsign at all, so those pilots
+are learned from what they say, as above.
+
 The two are linked but neither implies the other: the DCS player name is **not**
 in the callsign, and the SRS name is **not** in the position data as a callsign.
 SRS reports the DCS player name as its client name (the SRS client's

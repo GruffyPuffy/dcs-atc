@@ -34,8 +34,19 @@ NUMBER_WORDS = {
 }
 
 # Fallback names if the mission callsigns are unavailable (e.g. no state bridge).
-DEFAULT_NAMES = ["Colt", "Springfield", "Enfield", "Chevy", "Pontiac", "Uzi",
-                 "Dodge", "Ford", "Viper", "Hawg", "Hornet", "Boar", "Anvil"]
+DEFAULT_NAMES = [
+    "Colt", "Springfield", "Enfield", "Chevy", "Pontiac", "Uzi",
+    "Dodge", "Ford", "Viper", "Hawg", "Hornet", "Boar", "Anvil",
+    # MA_Training_CA client-slot flights (used when the bridge is down).
+    "Adder", "Beaver", "Beluga", "Camel", "Cheetah", "Darkstar", "Devil",
+    "Echo", "Empress", "Epic", "Filthy", "Frodo", "Gandalf", "Gypsy",
+    "Hawk", "Heavy", "Husky", "Ironside", "Monster", "Mossie", "Nemo",
+    "Nomad", "Outlaw", "Palehorse", "Pig", "Pinball", "Python",
+    "Quarterback", "Rattler", "Savage", "Scary", "Scorpion", "Shark",
+    "Shell", "Texaco", "Turtle", "Vader", "Venom", "Vodka", "Wedge",
+    "Whitehorse", "XRay", "Yankee", "Yeti", "Yvette", "Zeitgest",
+    "Zeppelin", "Zippo", "Zircon", "Zodiac", "Zombie", "Zooty",
+]
 
 
 def _speaker_key(name: str) -> str:
@@ -46,6 +57,17 @@ def _speaker_key(name: str) -> str:
     """
     from state_client import norm_identity
     return norm_identity(name)
+
+
+def flight_name(callsign: str) -> str:
+    """The flight name ("Springfield") from a callsign ("Springfield 1-2").
+
+    Everything from the flight/element number on is dropped, along with the
+    separator in front of it, so both a canonical callsign and a bare slot name
+    reduce to the same name ("Springfield 1-2" and "Springfield11" both give
+    "Springfield"). A multi-word flight name keeps its words.
+    """
+    return re.sub(r"[\s\-_]*\d.*$", "", (callsign or "").strip()).strip()
 
 
 def _edit_distance(a: str, b: str) -> int:
@@ -113,11 +135,16 @@ class CallsignRegistry:
                            if v not in NUMBER_WORDS]
             for name in self.names
         }
-        # Known multi-word STT fractures (e.g. "spring fail" for "Springfield").
-        # Exposed separately so the matcher can collapse the spaces: they must
-        # match as a single flight word, not a name followed by a stray token.
-        self.fractures = {
+        # Known STT substitutions (e.g. "forward" for "Ford", "spring fail"
+        # for "Springfield"). Multi-word values have spaces made optional in
+        # the regex so they match as a single flight word.
+        self.errors = {
             name.lower(): [v for v in KNOWN_ERRORS.get(name.lower(), [])
+                           if v not in NUMBER_WORDS]
+            for name in self.names
+        }
+        self.fractures = {
+            name.lower(): [v for v in self.errors.get(name.lower(), [])
                            if " " in v]
             for name in self.names
         }
@@ -126,6 +153,7 @@ class CallsignRegistry:
         for name in self.names:
             self._accepted.add(name.lower())
             self._accepted.update(self.variants[name.lower()])
+            self._accepted.update(self.errors.get(name.lower(), []))
         self._regex = self._build_regex()
 
     def _name_alt(self) -> str:
@@ -138,7 +166,7 @@ class CallsignRegistry:
         for name in self.names:
             low = name.lower()
             for variant in [low, *self.variants.get(low, []),
-                            *self.fractures.get(low, [])]:
+                            *self.errors.get(low, [])]:
                 alternatives.append(re.escape(variant).replace(r"\ ", r"\s*"))
         # Longest first so "spring field" is preferred over a bare "field".
         alternatives.sort(key=len, reverse=True)
@@ -161,8 +189,16 @@ class CallsignRegistry:
         )
         return re.compile(pattern, re.IGNORECASE)
 
-    def extract(self, text: str) -> str | None:
-        """Return a normalised callsign like 'Colt 1' or 'Colt 1-1', or None."""
+    def extract(self, text: str, focus: list[str] | None = None) -> str | None:
+        """Return a normalised callsign like 'Colt 1' or 'Colt 1-1', or None.
+
+        `focus` restricts matching to those flights (and *their* known STT
+        errors). Pass the callsign DCS already reported for this speaker so a
+        60-name mission list cannot steal the match.
+        """
+        names = self._focus_names(focus)
+        if names is not None:
+            return self._extract_from_names(text, names)
         if self._regex is not None:
             match = self._regex.search(text)
             if match:
@@ -189,6 +225,76 @@ class CallsignRegistry:
                 out.append(cs)
         return out
 
+    def _focus_names(self, focus: list[str] | None) -> list[str] | None:
+        """Canonical flight names to match against, or None for the full set."""
+        if not focus:
+            return None
+        out: list[str] = []
+        for raw in focus:
+            flight = flight_name(raw)
+            if not flight:
+                continue
+            for known in self.names:
+                if known.lower() == flight.lower():
+                    if known not in out:
+                        out.append(known)
+                    break
+            else:
+                titled = flight.title() if flight.lower() != "xray" else "XRay"
+                if titled not in out:
+                    out.append(titled)
+        return out
+
+    def _spellings(self, name: str) -> list[str]:
+        """Every accepted spelling of one flight name, number-words excluded."""
+        low = (name or "").lower()
+        seen: set[str] = set()
+        out: list[str] = []
+        for spelling in (low, *self.variants.get(low, []),
+                         *KNOWN_ERRORS.get(low, []),
+                         *generate_variants(name)):
+            s = (spelling or "").lower().strip()
+            if not s or s in NUMBER_WORDS or s in seen:
+                continue
+            seen.add(s)
+            out.append(s)
+        return out
+
+    def _extract_from_names(self, text: str, names: list[str]) -> str | None:
+        """Match `text` against only these flight names and their errors."""
+        if not text or not names:
+            return None
+        alts = []
+        for name in names:
+            for spelling in self._spellings(name):
+                alts.append(re.escape(spelling).replace(r"\ ", r"\s*"))
+        if not alts:
+            return None
+        alts.sort(key=len, reverse=True)
+        num = _number_pattern()
+        pattern = (
+            rf"\b(?P<name>{'|'.join(alts)})\s*[- ,]?\s*"
+            rf"(?P<num>{num})(?:\s*[- ]?\s*(?P<elem>{num}))?\b"
+        )
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            owner = self._owner_of_spelling(match.group("name"), names)
+            number = _normalise_number(match.group("num"))
+            element = match.group("elem")
+            return canonical_callsign(
+                owner or match.group("name").strip().title(),
+                number,
+                _normalise_number(element) if element else None)
+        return self._fuzzy_extract(text, names=names)
+
+    def _owner_of_spelling(self, spelling: str, names: list[str]) -> str | None:
+        compact = re.sub(r"[^a-z]", "", (spelling or "").lower())
+        for name in names:
+            for known in self._spellings(name):
+                if re.sub(r"[^a-z]", "", known) == compact:
+                    return name
+        return None
+
     def strip(self, text: str) -> str:
         """Remove every callsign from `text` (replaced with a space).
 
@@ -209,7 +315,7 @@ class CallsignRegistry:
         return canonical_callsign(canonical, number,
                                   _normalise_number(element) if element else None)
 
-    def _fuzzy_extract(self, text: str) -> str | None:
+    def _fuzzy_extract(self, text: str, names: list[str] | None = None) -> str | None:
         """Recover a callsign whose flight name was misheard beyond the rules.
 
         Scans token windows for a word within a small edit distance of a known
@@ -242,7 +348,8 @@ class CallsignRegistry:
             if token.lower() in NUMBER_WORDS:
                 continue
             best, best_d, second_d = None, 99, 99
-            for known in self.names:
+            pool = names if names is not None else self.names
+            for known in pool:
                 variants = [known.lower(), *self.variants.get(known.lower(), []),
                             *KNOWN_ERRORS.get(known.lower(), [])]
                 # Never let a number word (e.g. "four" for "Ford") stand in for
@@ -279,11 +386,15 @@ class CallsignRegistry:
 
     def _canonical_name(self, name: str) -> str:
         low = name.lower()
+        compact = re.sub(r"[^a-z]", "", low)
         for known in self.names:
             if known.lower() == low:
                 return known
             if low in self.variants.get(known.lower(), []):
                 return known
+            for err in KNOWN_ERRORS.get(known.lower(), []):
+                if err.lower() == low or re.sub(r"[^a-z]", "", err.lower()) == compact:
+                    return known
         return name
 
     def speaker_spellings(self, who: str) -> list[str]:
@@ -380,7 +491,7 @@ class CallsignRegistry:
         added = []
         known = {n.lower() for n in self.names}
         for raw in names:
-            flight = re.sub(r"\d+$", "", (raw or "").strip()).strip()
+            flight = flight_name(raw)
             if not flight or flight.lower() in known:
                 continue
             known.add(flight.lower())
@@ -399,8 +510,7 @@ class CallsignRegistry:
         departed player's dynamic callsign stops being recognised (and cannot
         mis-match a later garbled call).
         """
-        keep_low = {re.sub(r"\d+$", "", (k or "").strip()).strip().lower()
-                    for k in keep}
+        keep_low = {flight_name(k).lower() for k in keep}
         removed = [n for n in self.names
                    if n.lower() in self._learned and n.lower() not in keep_low]
         if not removed:

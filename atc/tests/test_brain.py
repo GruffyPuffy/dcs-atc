@@ -718,15 +718,116 @@ def test_speaker_callsign_mapping(brain):
     assert brain.callsign_for_speaker("Unknown") == "Unknown"
 
 
-def test_sync_speakers_seeds_from_the_live_unit_list(brain):
-    """DCS reports the unit's real callsign next to the player flying it.
+def test_sync_speakers_seeds_from_a_slot_named_unit(brain):
+    """A mission slot's unit name *is* its callsign, so seed from it.
 
-    Seeding from that list means a pilot is known *before* they transmit, and
-    the raw unit name ("Chevy 11") is canonicalised to the brain's key
-    ("Chevy 1").
+    Seeding means a pilot is known *before* they transmit, and the slot name
+    ("Chevy11") is canonicalised to the brain's key ("Chevy 1").
     """
-    brain.sync_speakers([("Caveman", "Chevy 11")])
+    brain.sync_speakers([("Caveman", "Chevy11")])
     assert brain.callsign_for_speaker("Caveman") == "Chevy 1"
+    assert brain.known_callsigns(["Caveman"]) == ["Chevy 1"]
+
+
+def test_sync_speakers_ignores_a_unit_name_that_is_not_a_callsign(brain):
+    """A dynamically spawned slot's unit name must never become a callsign.
+
+    DCS names a dynamic spawn after the airbase, type and index
+    ("Kutaisi_F/A-18C Lot 20_2- 1"), not after the flight's callsign. Seeding
+    that verbatim put the unit name on the air ("Kutaisi_F/A-18C Lot 20_2- 1,
+    Ground, ..."). The pilot stays unseeded until they say who they are.
+    """
+    brain.sync_speakers([("Caveman", "Kutaisi_F/A-18C Lot 20_2- 1")])
+    assert brain.known_callsigns(["Caveman"]) == []
+    assert brain.callsign_for_speaker("Caveman") == "Caveman"
+    # ...and the bogus name is not learned as a flight name either.
+    assert not any("Kutaisi" in name for name in brain.callsigns.names)
+
+
+def test_known_callsigns_reports_only_pilots_we_can_name(brain):
+    """A pilot bound by radio counts too, so both paths feed the heuristic."""
+    brain.sync_speakers([("Caveman", "Chevy11"),          # slot-shaped name
+                         ("Maverick", "Kutaisi_F/A-18C Lot 20_2- 1")])
+    brain.remember_speaker("Maverick", "Ford 1")           # bound by radio
+    assert brain.known_callsigns(["Caveman", "Maverick", "Ghost"]) == \
+        ["Chevy 1", "Ford 1"]
+
+
+def test_sync_speakers_binds_an_unseeded_pilot_from_what_they_say(brain):
+    """A dynamic-slot pilot is identified from their own transmission.
+
+    The unit name carries no callsign, but the pilot says one, so the normal
+    learn path still binds them (keyed by their SRS name).
+    """
+    brain.sync_speakers([("Caveman", "Kutaisi_F/A-18C Lot 20_2- 1")])
+    brain.remember_speaker("Caveman", "Ford 1")
+    assert brain.callsign_for_speaker("Caveman") == "Ford 1"
+
+
+def test_sync_speakers_keeps_a_radio_learned_binding_while_online(brain):
+    """The 2-second poll must not wipe what the pilot said over the radio.
+
+    Regression: the poll re-derives only slot-shaped callsigns, so a pilot on a
+    dynamically spawned slot (unit name carries no callsign) would lose their
+    binding on the very next poll. On the radio that looked like the tower
+    addressing the raw unit name ("Caveman, Tower, you are on the runway…")
+    instead of the callsign they had been using all session.
+    """
+    pairs = [("Caveman", "Kutaisi_F/A-18C Lot 20_2- 1")]
+    brain.sync_speakers(pairs)
+    brain.remember_speaker("Caveman", "Ford 1")    # the pilot checks in
+    for _ in range(3):                             # ...then the poll runs again
+        brain.sync_speakers(pairs)
+    assert brain.callsign_for_speaker("Caveman") == "Ford 1"
+    assert brain.known_callsigns(["Caveman"]) == ["Ford 1"]
+
+
+def test_sync_speakers_drops_the_seed_when_the_slot_goes_away(brain):
+    """A slot-derived seed is tied to the slot, so leaving clears it.
+
+    Only the poll's own seeds are pruned: they can be re-derived on the next
+    poll, so a departed slot must not keep a stale callsign recognised.
+    """
+    brain.sync_speakers([("Caveman", "Chevy11")])
+    assert brain.callsign_for_speaker("Caveman") == "Chevy 1"
+    brain.sync_speakers([("Maverick", "Chevy12")])   # Caveman's slot gone
+    assert brain.callsign_for_speaker("Caveman") == "Caveman"
+
+
+def test_radio_learned_binding_beats_the_slot_seed(brain):
+    """What the pilot calls themselves wins over the slot-name default.
+
+    The poll's slot name is only a guess from the unit name; the callsign the
+    pilot actually uses is authoritative.
+    """
+    brain.sync_speakers([("Caveman", "Chevy11")])
+    assert brain.callsign_for_speaker("Caveman") == "Chevy 1"
+    brain.remember_speaker("Caveman", "Ford 1")   # pilot re-identifies
+    brain.sync_speakers([("Caveman", "Chevy11")])
+    assert brain.callsign_for_speaker("Caveman") == "Ford 1"
+    # ...but the slot's flight name is still recognised.
+    assert brain.callsigns.extract("Chevy one, request taxi") == "Chevy 1"
+
+
+def test_a_wiped_identity_would_warn_an_empty_uncleared_record(brain):
+    """Why losing the binding put the raw name on the air, not just the name.
+
+    If the monitor's `callsign_for_speaker` falls back to the player name, it
+    reads a *different*, empty `PilotState` — so checks consult a pilot who was
+    never cleared and warn wrongly ("Caveman, Tower, you are on the runway
+    without clearance"), even though "Ford 1" was cleared for takeoff.
+    """
+    brain.handle("Ford one, ready to copy clearance", speaker="Caveman",
+                 controller=Controller.GROUND)
+    brain.handle("Ford one, requesting taxi", speaker="Caveman",
+                 controller=Controller.GROUND)
+    brain.handle("Tower, Ford one at runway 07, ready for departure",
+                 speaker="Caveman", controller=Controller.TOWER)
+    assert brain.pilots["Ford 1"].phase is not Phase.IDLE
+    # The cleared pilot is (correctly) not an incursion...
+    assert brain.check_incursion("Ford 1", True) is None
+    # ...but the raw player name is a different, uncleared pilot.
+    assert brain.check_incursion("Caveman", True) is not None
 
 
 def test_sync_speakers_keeps_duplicate_callsigns_distinct(brain):
@@ -735,16 +836,17 @@ def test_sync_speakers_keeps_duplicate_callsigns_distinct(brain):
     The map is keyed by player name, so each pilot resolves to their own
     callsign even when the flight names collide.
     """
-    brain.sync_speakers([("Caveman", "Chevy 11"), ("Maverick", "Chevy 12")])
+    brain.sync_speakers([("Caveman", "Chevy11"), ("Maverick", "Chevy12")])
     assert brain.callsign_for_speaker("Caveman") == "Chevy 1"
     assert brain.callsign_for_speaker("Maverick") == "Chevy 1-2"
 
 
 def test_sync_speakers_drops_departed_players(brain):
-    brain.sync_speakers([("Caveman", "Chevy 11"), ("Maverick", "Chevy 12")])
-    brain.sync_speakers([("Maverick", "Chevy 12")])  # Caveman left
+    brain.sync_speakers([("Caveman", "Chevy11"), ("Maverick", "Chevy12")])
+    brain.sync_speakers([("Maverick", "Chevy12")])  # Caveman left
     assert brain.callsign_for_speaker("Caveman") == "Caveman"
     assert brain.callsign_for_speaker("Maverick") == "Chevy 1-2"
+    assert brain.known_callsigns(["Caveman", "Maverick"]) == ["Chevy 1-2"]
 
 
 def test_content_flight_name_does_not_hijack_transmission(brain):
@@ -1552,6 +1654,15 @@ def test_control_passing_entry_hands_to_tower(brain):
                          controller=Controller.CONTROL)
     assert "contact Tower" in reply
     assert brain.pilots["Colt 1"].phase == Phase.LANDING
+
+
+def test_extract_callsign_uses_only_the_known_speakers_errors(brain):
+    """Once DCS/radio has named the speaker, other flights cannot steal STT."""
+    brain.remember_speaker("Caveman", "Ford 1")
+    brain.set_active_pilots(["Ford 1"])
+    assert brain.extract_callsign("ground, forward one", "Caveman") == "Ford 1"
+    assert brain.extract_callsign("ground, forward, one", "Caveman") == "Ford 1"
+    assert brain.stt_flight_names() == ["Ford"]
 
 
 def test_control_never_reissues_join_after_handoff(brain):

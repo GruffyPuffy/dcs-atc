@@ -1,6 +1,6 @@
 """Callsign recognition: mission names, STT variants, number words."""
 
-from callsigns import CallsignRegistry
+from callsigns import CallsignRegistry, flight_name
 
 
 def test_extracts_plain_callsign(callsigns):
@@ -206,3 +206,46 @@ def test_prune_is_a_noop_when_nothing_was_learned():
     reg = CallsignRegistry.from_mission([{"name": "Hornet11"}])
     assert reg.prune([]) == []
     assert "Hornet" in reg.names
+
+
+def test_flight_name_strips_the_flight_and_element_numbers():
+    assert flight_name("Springfield 1-2") == "Springfield"
+    assert flight_name("Springfield 1") == "Springfield"
+    assert flight_name("Springfield11") == "Springfield"
+    assert flight_name("Colt1") == "Colt"
+    assert flight_name("") == ""
+
+
+def test_add_reduces_any_element_to_one_flight_name():
+    """Every element of a flight shares one flight name.
+
+    The registry must not learn "Springfield 1-" from the second element's
+    callsign, so adding any element is a no-op once the name is known.
+    """
+    reg = CallsignRegistry.from_mission([{"name": "Hornet11"}])
+    assert reg.add(["Springfield 1"]) == ["Springfield"]
+    assert reg.add(["Springfield 1-2"]) == []
+    assert reg.add(["Springfield12"]) == []
+    assert reg.names.count("Springfield") == 1
+
+
+def test_prune_keeps_a_learned_name_named_by_any_element():
+    reg = CallsignRegistry.from_mission([{"name": "Hornet11"}])
+    reg.add(["Springfield 1"])
+    assert reg.prune(["Springfield 1-3"]) == []
+
+
+def test_forward_one_is_ford_when_focused():
+    """Whisper hears 'Ford' as 'forward'; only Ford's error list should fire."""
+    reg = CallsignRegistry(["Ford", "Uzi", "Colt"])
+    assert reg.extract("ground, forward one", focus=["Ford 1"]) == "Ford 1"
+    assert reg.extract("ground, forward, one", focus=["Ford 1"]) == "Ford 1"
+    # Without focus the same spelling is still Ford (it's in KNOWN_ERRORS),
+    # but a competing flight must not win once we know the speaker.
+    assert reg.extract("ground for the one", focus=["Ford 1"]) != "Uzi 1"
+
+
+def test_focus_ignores_other_flights_errors():
+    reg = CallsignRegistry(["Ford", "Uzi", "Dodge"])
+    assert reg.extract("touch one", focus=["Ford 1"]) is None
+    assert reg.extract("touch one", focus=["Dodge 1"]) == "Dodge 1"

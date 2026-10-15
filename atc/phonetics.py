@@ -37,27 +37,156 @@ CONFUSIONS: dict[str, str] = {
 DROPPABLE = set("lrtdh")
 
 # Extra known STT errors that are not pure phonetics (e.g. Whisper guessing a
-# different word). Applied as whole-word substitutions. Keys are the
+# common English word). Applied as whole-word substitutions. Keys are the
 # lower-cased base name; multi-word values are matched as phrases (spaces are
 # made flexible in the callsign regex), so "spring fail" also catches
 # "Springfail".
+#
+# The list covers every client-slot flight in MA_Training_CA plus the original
+# defaults. Matching and STT biasing should *select* the rows for the callsign
+# DCS currently reports, not score the whole dictionary on every transmission.
 KNOWN_ERRORS: dict[str, list[str]] = {
+    # Standard DCS NATO flight callsigns. Live STT (Ford→forward, Dodge→touch)
+    # is kept even when it is not a phonetic neighbour.
+    "anvil": ["amble", "annville", "an ville"],
+    "boar": ["bore", "boor", "board"],
+    "chevy": ["shevy", "chevrolet", "chevy's", "chevvy", "chevrie"],
     "colt": ["coat", "cult", "bolt", "cold", "colt's"],
-    "ford": ["fort", "four", "fourth", "fork"],
-    "hawg": ["hog", "hawk", "hulk"],
-    "boar": ["bore", "boar"],
-    "uzi": ["oozie", "uzzie", "oozy"],
-    "viper": ["vyper", "vipper", "piper"],
-    "dodge": ["dodger", "dodges"],
-    # "Springfield" is long and Whisper reliably fractures it (observed live:
-    # "Spring fail", "SpringPill", "springfield"). Cover the common fractures.
-    "springfield": ["spring fail", "spring failed", "spring fails", "springfield",
+    "dodge": ["dodger", "dodges", "touch", "touched", "todger", "dodge's"],
+    "enfield": ["en field", "anfield", "enfeld", "infield", "enfiled"],
+    "ford": ["fort", "four", "fourth", "fork", "forward", "forwards",
+             "ford's", "foard"],
+    "hawg": ["hog", "hawk", "hulk", "hawgs"],
+    "hornet": ["hornets", "hornett", "horn it"],
+    "pontiac": ["pontyack", "pontiack", "ponty ac", "pond i ac"],
+    "springfield": ["spring fail", "spring failed", "spring fails",
                     "spring field", "springpill", "springville", "spring pearl"],
-    "enfield": ["en field", "anfield", "enfeld"],
-    "pontiac": ["pontiac", "pontyack", "pontiack"],
-    "chevy": ["chevy", "shevy", "chevy"],
-    "anvil": ["anvil", "amble", "annville"],
-    "hornet": ["hornet", "hornets", "hornett"],
+    "uzi": ["oozie", "uzzie", "oozy", "uzy", "uzi's"],
+    "viper": ["vyper", "vipper", "piper", "viper's"],
+
+    # A-10 / attack
+    "pig": ["pick", "big", "pigg", "piggs", "peg"],
+    "tusk": ["dusk", "task", "tusked", "tusks"],
+
+    # F/A-18
+    "check": ["cheque", "chick", "checks"],
+    "devil": ["devel", "devils", "double"],
+    "hawk": ["hawg", "hock", "hulk", "hawks", "hog"],
+    "joker": ["choker", "jokers", "jocker"],
+    "jury": ["jewry", "jerry"],
+    "ragin": ["raging", "rage in", "raygen", "ragan"],
+    "ram": ["rom", "ramm", "lamb"],
+    "roman": ["rowman", "roaming", "roam in"],
+    "snake": ["snakes", "snek", "shnake"],
+    "squid": ["squish", "skwid"],
+    "sting": ["stink", "steeng"],
+
+    # F-15E
+    "best": ["beast", "bests"],
+    "dude": ["dood", "doomed", "dudes"],
+    "gunny": ["gummy", "gunnie"],
+    "jazz": ["chas", "chaz", "jass"],
+    "rage": ["rays"],
+    "sled": ["slid", "sledge", "sleds"],
+    "sniper": ["snipers", "sniper's"],
+    "tahoe": ["taho", "tahoes", "toyota"],
+    "thud": ["third", "stud"],
+    "trek": ["track", "treck", "trekk"],
+
+    # Heavy / bomber
+    "bone": ["bohn", "bones", "bown"],
+    "buff": ["buffs", "bough", "tough"],
+    "dump": ["dumb", "dumps"],
+    "kenworth": ["can worth", "ken worth"],
+    "vader": ["vador", "evader", "veider", "invader", "vader's", "beta"],
+
+    # AWACS
+    "darkstar": ["dark star", "darcstar", "darkstar's", "dark start", "dockstar"],
+    "focus": ["fokus", "phocus", "folks"],
+    "magic": ["majic", "magik", "madgik"],
+    "overlord": ["over lord", "overload", "overlord's"],
+    "wizard": ["wizzard", "wisard", "lizard"],
+
+    # Tanker
+    "arco": ["arcko", "ourco", "our co", "ar co"],
+    "shell": ["shel", "shall", "chel", "shells"],
+    "texaco": ["taxaco", "texako", "texas go", "texas co", "texaco's", "taxico"],
+
+    # JTAC
+    "axeman": ["axe man", "x man", "axman"],
+    "badger": ["batcher", "badgers"],
+    "darknight": ["dark night", "darkknight", "dark knight"],
+    "deathstar": ["death star", "dead star"],
+    "eyeball": ["eye ball", "i ball", "eyeballs"],
+    "ferret": ["ferritt", "fair it", "ferrette"],
+    "firefly": ["fire fly", "fireflies"],
+    "hammer": ["hamer", "hammers"],
+    "jaguar": ["jagwire", "jag war"],
+    "mantis": ["mantes", "manti", "mantiss"],
+    "moonbeam": ["moon beam"],
+    "pinpoint": ["pin point", "pen point"],
+    "playboy": ["play boy", "playboys"],
+    "pointer": ["point er", "pointers"],
+    "warrior": ["warrier", "worrier"],
+    "whiplash": ["whip lash"],
+
+    # AH-64
+    "apache": ["apachie", "a patch", "apatchy"],
+    "bootleg": ["boot leg", "bootlegs"],
+    "carnivor": ["carnivore", "carnivour"],
+    "crow": ["krow", "crows", "crowe"],
+    "gatling": ["gatlin"],
+    "gunslinger": ["gun slinger", "guns slinger"],
+    "hammerhead": ["hammer head", "hammerheads"],
+    "palehorse": ["pale horse", "paled horse", "pail horse", "pale hors"],
+    "saber": ["sabre", "savour"],
+    "sioux": ["sue", "soo", "su"],
+
+    # MA_Training_CA client slots not covered above.
+    "adder": ["add her", "ada", "atter"],
+    "beaver": ["beever", "bever", "believer"],
+    "beluga": ["belouga", "balluga", "blue ga"],
+    "camel": ["cammel", "carmel", "camera"],
+    "cheetah": ["cheeta", "cheater"],
+    "echo": ["eko", "eco", "ecko"],
+    "empress": ["impress", "em pres", "empress's"],
+    "epic": ["epik", "epoch"],
+    "filthy": ["filter", "filthy's"],
+    "frodo": ["froyo", "frodo's", "photo"],
+    "gandalf": ["gandolf", "gun dalf", "gandalf's"],
+    "gypsy": ["gipsy", "gypsie", "tipsy"],
+    "heavy": ["hevy", "heavi", "heaviest"],
+    "husky": ["huskie", "huskey"],
+    "ironside": ["iron side", "iron sides"],
+    "monster": ["monsters", "munster"],
+    "mossie": ["mossy", "mozzie"],
+    "nemo": ["nimo", "nemo's"],
+    "nomad": ["nomads", "no mad", "nomad's"],
+    "outlaw": ["out law", "outlaws"],
+    "pinball": ["pin ball", "pinballs"],
+    "python": ["pythons", "python's", "pie thon"],
+    "quarterback": ["quarter back", "quarterbacks"],
+    "rattler": ["rattlers", "ratler", "rattle her"],
+    "savage": ["savages", "salvage"],
+    "scary": ["scarey", "carry", "scari"],
+    "scorpion": ["scorpions", "scorpian"],
+    "shark": ["sharks", "sharp"],
+    "turtle": ["turtles", "hurdle"],
+    "venom": ["venum", "venoms"],
+    "vodka": ["vodkas", "vodca"],
+    "wedge": ["wedges", "wedg"],
+    "whitehorse": ["white horse", "white hors"],
+    "xray": ["x-ray", "x ray", "exray", "x rays"],
+    "yankee": ["yankees", "yanky"],
+    "yeti": ["yetti", "yetty"],
+    "yvette": ["evette", "y vet"],
+    "zeitgest": ["zeitgeist", "zeit geist", "sight gist"],
+    "zeppelin": ["zepplin", "zeplin", "zeppelin's"],
+    "zippo": ["zipo", "zippos"],
+    "zircon": ["zircon's", "circle on"],
+    "zodiac": ["zodiak", "zodiacs"],
+    "zombie": ["zombies", "zombi"],
+    "zooty": ["snooty", "zootie", "duty"],
 }
 
 # Generic phraseology that recurs on every frequency. Kept short and after the
@@ -95,10 +224,16 @@ def _callsign_hints(names: list[str], *, variants_per_name: int = 3) -> list[str
             continue
         canonical.append(name)
         low = name.lower()
-        # Top variants (skip ones that are just the name, and number words).
+        # Top phonetic variants (skip the name itself).
         for variant in generate_variants(name)[:variants_per_name]:
             if variant.lower() != low:
                 expanded.append(variant)
+        # Lexical STT substitutions for *this* flight only (e.g. "forward" for
+        # Ford). These are the words Whisper actually emits, so they belong in
+        # the hotword list — generate_variants never produces them.
+        for err in KNOWN_ERRORS.get(low, []):
+            if err.lower() != low:
+                expanded.append(err)
         # Spoken-number forms: "Chevy one", "Chevy one one".
         for num in _SPOKEN_NUMBERS:
             expanded.append(f"{name} {num}")

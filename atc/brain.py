@@ -25,9 +25,10 @@ from enum import Enum
 from pathlib import Path
 
 import topgun
-from callsigns import CallsignRegistry
+from callsigns import CallsignRegistry, flight_name
 from ctr import AircraftTrack, CtrEvent
 from airspace import bearing_distance
+from state_client import slot_callsign
 
 TOWER = "Kutaisi Tower"
 RUNWAY = "25"
@@ -182,6 +183,11 @@ class AtcBrain:
         # automatic calls (CTR warning, go-around) can address the pilot by
         # callsign instead of the raw DCS unit name.
         self.speaker_callsigns: dict[str, str] = {}
+        # Speaker-map keys seeded by the last `sync_speakers` poll, with the
+        # callsign seeded. Only a key still holding its seeded value is removed
+        # when a slot goes away: a binding learned from the radio cannot be
+        # re-derived by the poll, so it must survive.
+        self._seeded_keys: dict[str, str] = {}
         # Single-pilot training aid: when true, a transmission we do not
         # understand is prompted with "say again" (addressed to the one pilot)
         # instead of being ignored. Set from the live pilot count (see
@@ -234,34 +240,73 @@ class AtcBrain:
     def sync_speakers(self, pairs: list[tuple[str, str]]) -> None:
         """Sync the callsign registry and speaker map from the live unit list.
 
-        `pairs` is (player name, unit callsign) for every live player, as DCS
-        reports them (`u:getPlayerName()` / `u:getName()`). This is the single
-        entry point for keeping the brain in step with who is actually flying:
+        `pairs` is (player name, unit name) for every live player, as DCS
+        reports them (`u:getPlayerName()` / `u:getName()`). DCS gives us the
+        unit's *name*, never its radio callsign: for a mission slot the name
+        often *is* the callsign ("Springfield11"), but on a user-made mission it
+        can be unrelated ("Aerial-1-1") and a dynamically spawned slot gets a
+        synthetic name ("Kutaisi_F/A-18C Lot 20_2- 1"). So the name is only
+        trusted when `slot_callsign` can parse a callsign out of it; otherwise
+        seeding would put the unit name on the air.
+
+        This is the single entry point for keeping the brain in step with who is
+        actually flying:
 
         - **Learn** flight names not in `env.mission` (dynamic slots), so a
           player who spawned into a dynamically created flight is recognised.
         - **Prune** learned names whose player has left, so a stale dynamic
           callsign cannot mis-match a later garbled call. Mission callsigns are
           never pruned.
-        - **Seed** the speaker map directly ("Caveman -> Chevy 11") instead of
+        - **Seed** the speaker map directly ("Caveman -> Chevy 1") instead of
           waiting to learn it from what the pilot says. Because the map is keyed
           by player name, two players who share a callsign stay distinct.
+
+        A player whose unit name carries no callsign stays unseeded and is bound
+        from what they actually say (`remember_speaker`), keyed by their SRS
+        name. Only the poll's own slot-derived seeds are ever removed here — a
+        radio-learned binding cannot be re-derived by a poll, so dropping it
+        would lose the pilot's identity (and their callsign with it, putting the
+        raw name back on the air) until they next transmit.
         """
-        live = [callsign for _, callsign in pairs if callsign]
+        discovered: dict[str, str] = {}
+        for player, unit_name in pairs:
+            if not player:
+                continue
+            callsign = slot_callsign(unit_name or "")
+            if callsign:
+                discovered[player] = callsign
+        live = list(discovered.values())
         self.callsigns.add(live)
         self.callsigns.prune(live)
-        keys: set[str] = set()
-        for player, callsign in pairs:
-            if not player or not callsign:
-                continue
-            # Canonicalise: DCS reports the unit name ("Chevy 11") while the
-            # brain keys its state by the spoken form ("Chevy 1").
-            canonical = self.callsigns.extract(callsign) or callsign
-            keys.update(self._speaker_keys(player))
-            self.remember_speaker(player, canonical)
-        for key in list(self.speaker_callsigns):
-            if key not in keys:
+        # Forget the seeds whose slot is no longer on the radio, but keep any
+        # key the radio has since rebound (its value differs from the seed).
+        for key, seeded in self._seeded_keys.items():
+            if self.speaker_callsigns.get(key) == seeded:
                 del self.speaker_callsigns[key]
+        self._seeded_keys = {}
+        for player, callsign in discovered.items():
+            # Seed only a pilot we cannot name yet: the slot name is a default,
+            # and what they call themselves on the radio is authoritative.
+            if self.callsign_for_speaker(player) == player:
+                for key in self._speaker_keys(player):
+                    self.speaker_callsigns[key] = callsign
+                    self._seeded_keys[key] = callsign
+
+    def known_callsigns(self, players: list[str]) -> list[str]:
+        """The real callsigns of these online pilots, unknown ones omitted.
+
+        A pilot is *known* once the speaker map resolves them to something other
+        than their own name — either a slot-shaped unit name (see
+        `sync_speakers`) or a callsign learned from their own transmission. Used
+        as the candidate set for attributing a garbled call, so a raw unit name
+        ("Kutaisi_F/A-18C Lot 20_2- 1") can never be compared against.
+        """
+        out: list[str] = []
+        for who in players:
+            callsign = self.callsign_for_speaker(who)
+            if callsign and callsign != who and callsign not in out:
+                out.append(callsign)
+        return out
 
     @staticmethod
     def _norm_speaker(name: str) -> str:
@@ -306,6 +351,22 @@ class AtcBrain:
                 return self.speaker_callsigns[key]
         return who
 
+    def stt_flight_names(self) -> list[str]:
+        """Flight names to bias STT toward for the next transcription.
+
+        Once DCS (or a prior radio call) has named the pilots currently online,
+        only *their* names and known errors go into Whisper's hotword list —
+        a 60-flight mission dictionary would be truncated and would pull the
+        decoder toward the wrong word. Falls back to the full registry when
+        nobody is identified yet (first contact).
+        """
+        names: list[str] = []
+        for callsign in self.active_pilots:
+            flight = flight_name(callsign)
+            if flight and flight not in names:
+                names.append(flight)
+        return names or list(self.callsigns.names)
+
     def extract_callsign(self, text: str, speaker: str = "") -> str | None:
         """The callsign a transmission is *from*, or None.
 
@@ -315,13 +376,20 @@ class AtcBrain:
         otherwise the first callsign named. A speaker never established still
         uses the first match, and a call with no callsign returns None (the
         caller may then fall back to `_resolve_speaker`).
+
+        When we already know this speaker (DCS seed or a prior call), matching
+        is restricted to that one flight — including its known STT errors —
+        so "forward one" can resolve to Ford 1 without "for the one" becoming
+        Uzi 1.
         """
+        own = self.callsign_for_speaker(speaker) if speaker else ""
+        if own and own != speaker:
+            return self.callsigns.extract(text, focus=[own])
+        if len(self.active_pilots) == 1:
+            return self.callsigns.extract(text, focus=self.active_pilots)
         found = self.callsigns.extract_all(text)
         if not found:
             return None
-        own = self.callsign_for_speaker(speaker) if speaker else ""
-        if own and own != speaker and own in found:
-            return own
         return found[0]
 
     def _resolve_speaker(self, text: str, who: str) -> str | None:
