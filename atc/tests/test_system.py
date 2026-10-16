@@ -501,6 +501,41 @@ def test_takeoff_withheld_while_still_rolling(airfield, brain):
     assert brain.check_lineup("Colt 1", sc._track()) is not None
 
 
+def test_lineup_readback_is_silent(airfield, brain):
+    """Line-up readback is not in the SOP as a 'roger' — stay quiet until lined up."""
+    sc = _scenario(airfield, brain).holding("Holding C")
+    sc.say("Tower, Colt 1, ready for departure", Controller.TOWER)
+    r = sc.say("Line up and wait 25, Colt 1", Controller.TOWER)
+    assert r == ""
+
+
+def test_takeoff_readback_is_silent(airfield, brain):
+    """Takeoff-clearance readback has no SOP reply — next call is the airborne handoff."""
+    sc = _scenario(airfield, brain).at_threshold("25")
+    sc.say("Tower, Colt 1, ready for departure", Controller.TOWER)
+    sc.say("Line up and wait 25, Colt 1", Controller.TOWER)
+    r = sc.say("cleared for takeoff runway 25, Colt 1", Controller.TOWER)
+    assert r == ""
+
+
+def test_descent_handoff_waits_until_at_1500(airfield, brain):
+    """Control does not push to Tower on the descend readback if still high."""
+    sc = _scenario(airfield, brain).at_gate("East")
+    sc.alt = 8000.0
+    sc.say("Kutaisi Control, Colt 1, inbound 10 miles east at Angels 8",
+           Controller.CONTROL)
+    sc.say("150 to join via Entry East, Colt 1", Controller.CONTROL)
+    r = sc.say("Descend to 1500 feet, Colt 1", Controller.CONTROL)
+    assert r == ""
+    assert sc.phase() == Phase.INBOUND
+    assert brain.check_descent_handoff("Colt 1", sc._track()) is None
+    sc.alt = 1500.0
+    call = brain.check_descent_handoff("Colt 1", sc._track())
+    assert call and "contact Tower" in call
+    assert sc.phase() == Phase.LANDING
+    assert brain.check_descent_handoff("Colt 1", sc._track()) is None
+
+
 def test_holding_point_beside_runway_is_not_lined_up(airfield):
     """A pilot at a holding point is NOT lined up, even if it is near the
     threshold.

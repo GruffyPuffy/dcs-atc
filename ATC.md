@@ -166,11 +166,11 @@ step on the next controller's first call.
 | "Colt 1, holding short runway 25" | **hold short** (after taxi) | "Colt 1, Ground, contact Tower on channel 7." |
 | "Tower, Colt 1, at runway 25, ready for departure" | **departure** (after taxi/holding) | "Colt 1, Tower, line up and wait runway 25." |
 | "Tower, Colt 1, ready for departure" (**while an arrival**) | **wrong call** | "Colt 1, Tower, negative, report runway in sight for landing." (never clears a takeoff for a pilot who is inbound/landing) |
-| "Line up and wait 25, Colt 1" | **readback** | "Colt 1, Tower, roger." — then, once the aircraft is actually **lined up** (at the threshold, pointing down the runway, stationary), the monitor issues "cleared for takeoff runway 25" unprompted. The clearance does **not** follow the readback alone: the pilot has only acknowledged the instruction, they may still be taxiing on. (A right turnout is spoken, a left turnout is the default and is not, and a straight-out departure gets "fly runway heading".) |
+| "Line up and wait 25, Colt 1" | **readback** | *(silent)* — then, once the aircraft is actually **lined up** (at the threshold, pointing down the runway, stationary), the monitor issues "cleared for takeoff runway 25" unprompted. The clearance does **not** follow the readback alone: the pilot has only acknowledged the instruction, they may still be taxiing on. (A right turnout is spoken, a left turnout is the default and is not, and a straight-out departure gets "fly runway heading".) |
 | "Control, Colt 1, at 1500 ft" | **departure check-in** | "Colt 1, Control, radar contact, climb to Angels 15." |
 | "Kutaisi Control, Colt 1, inbound 35 miles north at Angels 12" | **inbound** | "Colt 1, Control, radar contact, turn right heading 150 to join via Entry East." (heading **and turn** computed from the live position; a pilot already pointing at the gate gets "fly heading 150" instead; entry is the best/straight-in gate for runway 25) |
 | "150 to join via Entry East, Colt 1" | **readback** | "Colt 1, Control, descend and maintain 5000 feet." (far out) / "…descend to 1500 feet." (within 15 NM of the entry) — the descent is **stepped by distance** |
-| "Descend to 1500 feet, Colt 1" | **readback** | "Colt 1, Control, contact Tower on channel 7." (Control hands off right after the descend readback) |
+| "Descend to 1500 feet, Colt 1" | **readback** | *(silent if still high)* — then, once at 1500 ft, "Colt 1, Control, contact Tower on channel 7." unprompted. Already at 1500 on the readback → handoff immediately. |
 | "Tower, Colt 1, Entry East" | **entry** | "Colt 1, Tower, report runway in sight." |
 | "Tower, Colt 1, runway in sight" | **runway in sight** | "2-ship Colt 1, Tower, wind calm, cleared for left overhead break runway 25." (the "2-ship" prefix appears once a formation size has been heard) | |
 | "Tower, Colt 1, on final" | **final** | "Colt 1, Tower, wind calm, runway 25, cleared to land." |
@@ -971,7 +971,7 @@ and the bot's reply. Frequencies (AM): **ATIS 270.500**, **Ground 250.000**,
 | 6 | Ground | "Cleared taxi Sierra Echo and hold short runway 25, Colt 1." | *(silent — next step is the hold-short report)* |
 | 7 | Ground | "Colt 1, holding short runway 25." | "Colt 1, Ground, contact Tower on channel 7." |
 | 8 | Tower | "Tower, Colt 1, at runway 25, ready for departure." | "Colt 1, Tower, line up and wait runway 25." |
-| 9 | Tower | "Line up and wait 25, Colt 1." | "Colt 1, Tower, roger." — then, once you are lined up on the runway, "Colt 1, Tower, cleared for takeoff runway 25." |
+| 9 | Tower | "Line up and wait 25, Colt 1." | *(silent)* — then, once you are lined up on the runway, "Colt 1, Tower, cleared for takeoff runway 25." |
 | 10 | Tower | "Tower, Colt 1, airborne." | "Colt 1, Tower, contact Control on channel 8." |
 | 11 | Control | "Control, Colt 1, at 1500 ft." | "Colt 1, Control, radar contact, climb to Angels 15." |
 
@@ -984,7 +984,7 @@ Ground phase; 8–10 Tower; 11 Control.)
 |---|------|-----------|-------------|
 | 1 | Control | "Kutaisi Control, Colt 1, inbound 35 miles north at Angels 12." | "Colt 1, Control, radar contact, turn right heading 150 to join via Entry East." (heading + turn computed; entry = best/straight-in gate for the runway) |
 | 2 | Control | "150 to join via Entry East, Colt 1." | "Colt 1, Control, descend to 1500 feet." |
-| 3 | Control | "Descend to 1500 feet, Colt 1." | "Colt 1, Control, contact Tower on channel 7." |
+| 3 | Control | "Descend to 1500 feet, Colt 1." | *(silent if still high)* — then, once at 1500 ft, "Colt 1, Control, contact Tower on channel 7." |
 | 4 | Tower | "Tower, Colt 1, Entry North." | "Colt 1, Tower, report runway in sight." |
 | 5 | Tower | "Tower, Colt 1, runway in sight." | "2-ship Colt 1, Tower, wind calm, cleared for left overhead break runway 25." |
 | 6 | Tower | "Tower, Colt 1, on final." | "Colt 1, Tower, wind calm, runway 25, cleared to land." |
@@ -1048,7 +1048,7 @@ Every reply here is the bot's actual output. Kneeboard card:
 | # | Freq | Pilot says | Bot replies |
 |---|------|-----------|-------------|
 | 1 | Tower | "Tower, Colt 1, ready for departure." | "Colt 1, Tower, line up and wait runway 25." |
-| 2 | Tower | "Line up and wait 25, Colt 1." | "Colt 1, Tower, roger." — then, once lined up, "Colt 1, Tower, cleared for takeoff runway 25." |
+| 2 | Tower | "Line up and wait 25, Colt 1." | *(silent)* — then, once lined up, "Colt 1, Tower, cleared for takeoff runway 25." |
 | 3 | Tower | *(no call needed)* | "Colt 1, Tower, contact Control on channel 8." *(Tower hands off unprompted once you are past the runway; "airborne" also works)* |
 | 4 | Control | "Control, Colt 1, at 1500 ft." | "Colt 1, Control, radar contact, climb to Angels 15." |
 
@@ -1058,7 +1058,7 @@ Every reply here is the bot's actual output. Kneeboard card:
 |---|------|-----------|-------------|
 | 5 | Control | "Kutaisi Control, Colt 1, inbound 35 miles north at Angels 12." | "Colt 1, Control, radar contact, turn right heading 150 to join via Entry East." *(heading + turn computed)* |
 | 6 | Control | "150 to join via Entry East, Colt 1." | "Colt 1, Control, descend to 1500 feet." |
-| 7 | Control | "Descend to 1500 feet, Colt 1." | "Colt 1, Control, contact Tower on channel 7." |
+| 7 | Control | "Descend to 1500 feet, Colt 1." | *(silent if still high)* — then, once at 1500 ft, "Colt 1, Control, contact Tower on channel 7." |
 | 8 | Tower | "Tower, Colt 1, Entry East." | "Colt 1, Tower, report runway in sight." |
 | 9 | Tower | "Colt 1, runway in sight." | "Colt 1, Tower, wind calm, cleared for left overhead break runway 25." |
 | 10 | Tower | "Colt 1, on final." | "Colt 1, Tower, wind calm, runway 25, cleared to land." |

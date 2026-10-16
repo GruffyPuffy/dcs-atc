@@ -891,6 +891,15 @@ def main() -> None:
                         log(f"DESCEND: {callsign} ({ac.player})")
                         speak(descend, freq=freq_for(Controller.CONTROL),
                               controller=Controller.CONTROL)
+                    # Arrival handoff: after the "descend to 1500" readback,
+                    # wait until they are actually at 1500 before pushing to
+                    # Tower (they may still be at Angels 8).
+                    with lock:
+                        desc_hand = brain.check_descent_handoff(callsign, tr)
+                    if desc_hand:
+                        log(f"LEVEL 1500: {callsign} ({ac.player}) -> Tower")
+                        speak(desc_hand, freq=freq_for(Controller.CONTROL),
+                              controller=Controller.CONTROL)
                     # Takeoff clearance: after the pilot reads back "line up and
                     # wait", wait until they are actually lined up on the runway
                     # before clearing takeoff (they may still be taxiing on).

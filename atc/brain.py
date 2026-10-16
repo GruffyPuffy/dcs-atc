@@ -51,6 +51,10 @@ EXIT_REPORT_RADIUS_NM = 1.5
 # ft); further out -> an intermediate step-down (5000 ft) first.
 DESCENT_FINAL_NM = 15.0
 DESCENT_INTERMEDIATE_FT = 5000
+# Pattern altitude Control descends an arrival to, and the slop for "you are
+# there" (altimeter / radar, not a hard deck).
+PATTERN_ALT_FT = 1500
+PATTERN_ALT_SLOP_FT = 200
 
 
 class Controller(str, Enum):
@@ -100,6 +104,9 @@ class PilotState:
     # The pilot has read back "line up and wait" but is not yet lined up on the
     # runway. The takeoff clearance waits until they are (see check_lineup).
     lineup_readback: bool = False
+    # The pilot has read back "descend to 1500 feet" but is not yet there.
+    # Control holds the Tower handoff until they are (see check_descent_handoff).
+    descend_readback: bool = False
     # Tower has pushed a landed flight to Ground (Master Arms SOP: "after
     # landing, tower will push you to the Ground channel"). Fires once per
     # landing; re-arms on the next approach (go-around / touch-and-go).
@@ -884,7 +891,7 @@ class AtcBrain:
             # fall back to the old behaviour and clear on the readback.
             if not self._lined_up(track):
                 pilot.lineup_readback = True
-                return self._say("lineup_ack", callsign)
+                return ""
             coach = self._readback_coaching(callsign, pilot, low,
                                             pilot.last_clearance or pilot.last_reply,
                                             controller)
@@ -963,6 +970,7 @@ class AtcBrain:
         pilot.takeoff_ready_announced = False
         pilot.landing_ready_announced = False
         pilot.lineup_readback = False
+        pilot.descend_readback = False
         pilot.landing_handoff_announced = False
         return self._say("state_reset", callsign,
                          agency=self._agency(controller))
@@ -993,6 +1001,7 @@ class AtcBrain:
         pilot.awaiting_takeoff = False
         pilot.awaiting_landing = False
         pilot.lineup_readback = False
+        pilot.descend_readback = False
         pilot.landing_handoff_announced = False
         return self._say("cancel_ack", callsign,
                          agency=self._agency(controller))
@@ -1164,7 +1173,7 @@ class AtcBrain:
                     return self._say("hold_short_traffic", callsign)
                 if not self._lined_up(track):
                     pilot.lineup_readback = True
-                    return self._say("lineup_ack", callsign)
+                    return ""
                 pilot.phase = Phase.DEPARTURE
                 pilot.awaiting_takeoff = False
                 return self._takeoff_clearance(callsign, pilot)
@@ -1193,7 +1202,7 @@ class AtcBrain:
                     return self._say("hold_short_traffic", callsign)
                 if not self._lined_up(track):
                     pilot.lineup_readback = True
-                    return self._say("lineup_ack", callsign)
+                    return ""
                 pilot.phase = Phase.DEPARTURE
                 pilot.awaiting_takeoff = False
                 return self._takeoff_clearance(callsign, pilot)
@@ -1238,10 +1247,12 @@ class AtcBrain:
         # Readback of the takeoff clearance once already cleared ("right turn
         # out, cleared for takeoff, 33, Colt 1"). Must come before the "final"
         # check, so a readback containing "turn" is not misread as a landing.
+        # Master Arms: after the takeoff clearance readback there is no extra
+        # call — the next transmission is the airborne handoff.
         if pilot.phase == Phase.DEPARTURE and re.search(
                 r"\b(cleared|takeoff|take off|right turn|left turn|turnout)\b",
                 low):
-            return self._say("roger", callsign, agency=self.tower_short)
+            return ""
         # After landing, Tower hands the flight to Ground. Normally the bot
         # pushes the pilot to Ground *unprompted* once they roll off the runway
         # (check_landing_handoff); this branch covers a pilot who reports
@@ -1322,10 +1333,9 @@ class AtcBrain:
                              heading=f"{heading:03.0f}", turn=turn)
         # Readback of the join clearance ("150 to join via Entry East") ->
         # Control issues the descent to 1500 ft (once). The pilot's readback of
-        # *that* descent then hands the flight to Tower — matching the Master
-        # Arms arrival flow, where Control hands off right after the descend
-        # readback (there is no separate "passing the entry point" call). An
-        # explicit entry report is handled by the branch below.
+        # *that* descent then hands the flight to Tower — but only once they are
+        # actually at 1500 (the readback is just the acknowledgement; they may
+        # still be at Angels 8). An explicit entry report is handled below.
         # NOTE: a *request* for a heading/vector/azimuth is a trainer aid and is
         # matched in `_dispatch` BEFORE controller dispatch, so it never reaches
         # this readback branch. Only a genuine readback ("150 to join via Entry
@@ -1337,6 +1347,9 @@ class AtcBrain:
                 # altitude; close to the entry -> the final 1500 ft. The
                 # handoff to Tower waits until the final descent has been given.
                 return self._descend_reply(callsign, pilot, track)
+            if not self._at_pattern_alt(track):
+                pilot.descend_readback = True
+                return ""
             pilot.phase = Phase.LANDING
             return self._say("contact_tower_from_control", callsign)
         # Already inbound / handed off, and the pilot reports being at or near
@@ -1494,6 +1507,17 @@ class AtcBrain:
         if track is None or self.airfield is None:
             return "right"
         return self.airfield.turn_to_heading(track.heading, heading)
+
+    def _at_pattern_alt(self, track: AircraftTrack | None) -> bool:
+        """True if the aircraft is at/below pattern altitude (or we cannot tell).
+
+        Control holds the Tower handoff until the arrival has actually descended
+        to 1500 ft. Without a live track we trust the pilot (offline tests and
+        a missing radar still hand off on the readback).
+        """
+        if track is None:
+            return True
+        return track.alt_ft <= PATTERN_ALT_FT + PATTERN_ALT_SLOP_FT
 
     def _lined_up(self, track: AircraftTrack | None) -> bool:
         """True if the aircraft is lined up on the runway (or we cannot tell).
@@ -1724,6 +1748,24 @@ class AtcBrain:
             pilot.descend_issued = True
             return self._say("control_descend", callsign)
         return None
+
+    def check_descent_handoff(self, callsign: str,
+                              track: AircraftTrack | None) -> str | None:
+        """Hand an arrival to Tower once it is actually at 1500 ft.
+
+        After "descend to 1500 feet" the pilot reads it back, but they may still
+        be at Angels 8. Control waits until the aircraft is at pattern altitude,
+        then pushes them to Tower unprompted. Fires once.
+        """
+        pilot = self._pilot(callsign)
+        if (pilot.phase != Phase.INBOUND or not pilot.descend_issued
+                or not pilot.descend_readback or track is None):
+            return None
+        if not self._at_pattern_alt(track):
+            return None
+        pilot.descend_readback = False
+        pilot.phase = Phase.LANDING
+        return self._say("contact_tower_from_control", callsign)
 
     def _spoken_parking(self, low: str) -> str | None:
         """Parking area named in the transmission, e.g. 'ramp north'."""
