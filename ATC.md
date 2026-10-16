@@ -131,6 +131,16 @@ online:
 - **Multiple pilots** — the bot stays silent (it assumes the transmission was
   for someone else), so it never steps on another flight's calls.
 
+**Dynamic slots.** A dynamically spawned slot has no mission callsign to learn
+(the unit name is synthetic, e.g. `Kutaisi_F/A-18C Lot 20_2-1`), and STT may
+never render the radio callsign recognisably (*"Pontiac 11"* heard as *"contact
+one"*). Since `remember_speaker` only runs once a callsign **was** understood,
+such a pilot could never satisfy the "say again" prompt — it would repeat
+forever. So when **no** pilot is known to be online, the bot stays silent rather
+than prompting; the prompt is reserved for a pilot we can place, who simply
+needs to say their callsign. The bot never puts the SRS player name on the air
+as a callsign.
+
 A pilot acknowledging a **frequency change** ("Colt 1, channel 8, push") gets
 **no reply at all** — the transmission was a handoff, and answering would only
 step on the next controller's first call.

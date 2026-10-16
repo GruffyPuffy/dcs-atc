@@ -772,7 +772,13 @@ class AtcBrain:
             # not understood (most often a forgotten callsign). On a multi-pilot
             # server we stay silent instead, to avoid replying to traffic meant
             # for someone else.
-            if self.solo_mode:
+            #
+            # Only prompt a pilot we can place. With nobody known to be online
+            # there is no callsign to learn — a dynamic slot has none, and STT
+            # cannot render one we never knew — so the prompt would repeat
+            # forever and the pilot could never satisfy it. Stay silent until
+            # they sign in successfully; then the prompt works as intended.
+            if self.solo_mode and self.active_pilots:
                 return self._say("say_again_no_callsign", "",
                                  agency=self._agency(controller))
             return None

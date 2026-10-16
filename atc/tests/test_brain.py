@@ -968,10 +968,20 @@ def test_flight_checkin_does_not_swallow_requests(brain):
 
 def test_solo_mode_prompts_on_unknown_call(brain):
     # Single-pilot trainer: an unrecognized call (e.g. a forgotten callsign)
-    # gets a spoken prompt instead of silence.
+    # gets a spoken prompt instead of silence. The pilot is known to be online
+    # (the state bridge names them), so there is a callsign to ask for.
     brain.set_pilot_count(1)
+    brain.set_active_pilots(["Colt 1"])
     reply = brain.handle("requesting taxi", controller=Controller.GROUND)
     assert reply and "say again" in reply.lower()
+
+
+def test_solo_mode_stays_silent_when_no_pilot_is_known(brain):
+    # A dynamic slot has no callsign to learn, so prompting "say again" would
+    # repeat forever. Stay silent until the pilot signs in successfully.
+    brain.set_pilot_count(1)
+    brain.set_active_pilots([])
+    assert brain.handle("requesting taxi", controller=Controller.GROUND) is None
 
 
 def test_multiplayer_stays_silent_on_unknown_call(brain):

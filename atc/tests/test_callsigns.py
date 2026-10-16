@@ -127,6 +127,37 @@ def test_unknown_speaker_content_opening_call_is_not_guessed():
     assert "say again" in reply.lower()
 
 
+def test_dynamic_slot_pilot_is_not_nagged_before_checking_in():
+    """A pilot in a dynamic slot has no mission callsign to learn.
+
+    STT mangles the radio callsign ("Pontiac 11" heard as "contact one"), so
+    the bot can never learn it from a transmission — and `remember_speaker`
+    only runs once a callsign *was* understood. Prompting "say again" would
+    repeat forever and the pilot could never satisfy it, so with nobody known
+    to be online the bot stays silent instead.
+    """
+    from brain import AtcBrain, Controller
+    reg = CallsignRegistry(["Springfield", "Colt"])
+    brain = AtcBrain(callsigns=reg)
+    brain.set_pilot_count(1)
+    brain.set_active_pilots([])  # dynamic slot: no callsign known
+    for text in ("contact one", "On tech one", "Other one"):
+        assert brain.handle(text, controller=Controller.GROUND,
+                            speaker="Caveman") is None
+
+
+def test_solo_prompt_still_fires_once_a_pilot_is_known():
+    """The "say again" prompt is for a pilot we can place, not a stranger."""
+    from brain import AtcBrain, Controller
+    reg = CallsignRegistry(["Springfield", "Colt"])
+    brain = AtcBrain(callsigns=reg)
+    brain.set_pilot_count(1)
+    brain.set_active_pilots(["Springfield 1"])
+    reply = brain.handle("requesting taxi", controller=Controller.GROUND,
+                         speaker="Caveman")
+    assert reply and "say again" in reply.lower()
+
+
 def test_number_word_not_matched_as_name(callsigns):
     # "four two" must NOT be read as the flight "Ford"
     assert callsigns.extract("four two, holding short") is None
