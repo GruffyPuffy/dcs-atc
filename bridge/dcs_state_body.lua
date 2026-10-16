@@ -165,22 +165,35 @@ elseif op == 'runways' then
             end
         end
     end
-    return envelope(true, out)elseif op == 'tower' then
-    -- Dispatcher/tower position for an airbase (by name), so the bot knows
-    -- where the tower actually is without a hand-entered coordinate. Falls
-    -- back to the tech object (control tower) then the airbase centre.
-    for _, b in ipairs(coalition.getAirbases(2)) do
-        if b:getName() == req.airbase then
-            local p = nil
-            local ok, disp = pcall(function() return b:getDispatcherTowerPos() end)
-            if ok and disp then p = disp end
-            if not p then
-                local ok2, tech = pcall(function() return b:getTechObjectPos() end)
-                if ok2 and tech then p = tech end
+    return envelope(true, out)
+elseif op == 'tower' then
+    -- Dispatcher/tower position for an airbase (by name). DCS sometimes returns
+    -- a Position3 ({p=vec3}) or a zero vec3 (Caucasus origin / Crimea); only a
+    -- real local-coord point is accepted, then airbase centre.
+    local function as_point(p)
+        if type(p) ~= 'table' then return nil end
+        if type(p.p) == 'table' then p = p.p end
+        if type(p.x) ~= 'number' or type(p.z) ~= 'number' then return nil end
+        if p.x == 0 and p.z == 0 then return nil end
+        return p
+    end
+    for _, coa in ipairs({0, 1, 2}) do
+        local okb, bases = pcall(coalition.getAirbases, coa)
+        if okb and bases then
+            for _, b in ipairs(bases) do
+                if b:getName() == req.airbase then
+                    local p = nil
+                    local ok, disp = pcall(function() return b:getDispatcherTowerPos() end)
+                    if ok then p = as_point(disp) end
+                    if not p then
+                        local ok2, tech = pcall(function() return b:getTechObjectPos() end)
+                        if ok2 then p = as_point(tech) end
+                    end
+                    if not p then p = b:getPoint() end
+                    local lat, lon, alt = coord.LOtoLL(p)
+                    return envelope(true, { name = b:getName(), lat = lat, lon = lon, alt = alt })
+                end
             end
-            if not p then p = b:getPoint() end
-            local lat, lon, alt = coord.LOtoLL(p)
-            return envelope(true, { name = b:getName(), lat = lat, lon = lon, alt = alt })
         end
     end
     return envelope(false, 'NO_AIRBASE')

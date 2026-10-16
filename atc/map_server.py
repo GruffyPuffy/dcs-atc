@@ -31,6 +31,7 @@ from urllib.parse import urlsplit
 from airspace import Airfield
 from brain import AtcBrain, EXIT_REPORT_RADIUS_NM
 from state_client import StateClient
+from topgun import BUST_RADIUS_M
 
 # Debrief saving is best-effort, but a *silent* failure is what let a whole
 # sortie go missing. `MapService` takes the bot's own `log()` callable and
@@ -437,6 +438,28 @@ def _airspace_payload(airfield: Airfield, basemap: str | None = None) -> dict:
     }
 
 
+def _midfield_pos(airfield: Airfield) -> list[float]:
+    """Fallback wind-arrow origin when DCS has not given a tower position."""
+    if airfield.runways:
+        lats = [p[0] for p in airfield.runways.values()]
+        lons = [p[1] for p in airfield.runways.values()]
+        return [sum(lats) / len(lats), sum(lons) / len(lons)]
+    return [airfield.ctr.center_lat, airfield.ctr.center_lon]
+
+
+KT_PER_MS = 1.943844  # DCS weather is m/s; the map shows knots
+
+
+def _wind_payload(brain: AtcBrain) -> dict:
+    """Live wind for the map arrow (dir = meteorological FROM, speed in kt)."""
+    ms = float(getattr(brain, "wind_speed", 0.0) or 0.0)
+    return {
+        "dir": round(float(getattr(brain, "wind_dir", 0.0) or 0.0), 1),
+        "speed": round(ms * KT_PER_MS),
+        "text": getattr(brain, "wind", "calm"),
+    }
+
+
 def _basemap_payload(airfield: Airfield, choice: str | None) -> dict:
     """The base-map tile layer for the map.
 
@@ -527,6 +550,8 @@ class MapService:
         self.replay = bool(replay or existed)
         # Last seen phase per callsign, to record phase transitions on the path.
         self._last_phase: dict[str, str] = {}
+        # Live DCS tower/dispatcher lat/lon (TopGun uses the same bridge op).
+        self._tower_pos: list[float] | None = None
 
     def save_tracks(self) -> None:
         """Write the current trails to `tracks_file` (no-op if unconfigured).
@@ -767,6 +792,30 @@ class MapService:
             "comms": comms,
         }
 
+    def _live_tower_pos(self) -> list[float]:
+        """Chart TWR if configured; else live DCS; else mid-runway.
+
+        DCS `getDispatcherTowerPos` often geocodes to the Caucasus origin
+        (Crimea); those points are rejected. Chart coords come from the
+        overlay TWR star (`airspace.json` `tower_pos`).
+        """
+        if self.airfield.tower_pos:
+            return [self.airfield.tower_pos[0], self.airfield.tower_pos[1]]
+        if self._tower_pos is not None:
+            return self._tower_pos
+        getter = getattr(self.state, "tower", None) if self.state else None
+        if getter is not None:
+            try:
+                info = getter(self.airfield.name)
+            except (OSError, RuntimeError):
+                info = None
+            if info and info.get("lat") is not None and info.get("lon") is not None:
+                lat, lon = float(info["lat"]), float(info["lon"])
+                if self.airfield.ctr.distance_nm(lat, lon) <= 3.0:
+                    self._tower_pos = [lat, lon]
+                    return self._tower_pos
+        return _midfield_pos(self.airfield)
+
     def snapshot(self) -> dict:
         """One map frame: airspace geometry + live aircraft with their state."""
         aircraft: list[dict] = []
@@ -849,8 +898,12 @@ class MapService:
                     callsign, self.tracks.path(callsign),
                     self.tracks.comms(callsign)))
         self._maybe_save_tracks()  # keep the debrief file reasonably fresh
+        airfield = _airspace_payload(self.airfield, self.basemap)
+        airfield["tower_pos"] = self._live_tower_pos()
+        airfield["wind"] = _wind_payload(self.brain)
+        airfield["topgun"] = {"radius_m": BUST_RADIUS_M}
         return {
-            "airfield": _airspace_payload(self.airfield, self.basemap),
+            "airfield": airfield,
             "aircraft": aircraft,
             "ai_air": ai_air,
             "chatter": self.chatter(),

@@ -1106,6 +1106,10 @@ shows:
   they last talked to (Ground amber, Tower green, Control blue). A tooltip
   shows type, altitude and heading; a side table lists callsign, phase, altitude
   and heading.
+- **Wind arrow**: a cyan arrow based at the chart **TWR** (`airspace.json`
+  `tower_pos`, georeferenced from the overlay star). Falls back to a live DCS
+  tower position, then mid-runway. Points **downwind**; the label is
+  meteorological FROM (`030°`). Orange dashed circle: TopGun bust (200 m).
 - **AI air traffic**: AI planes/helicopters within 150 NM of the field, as small
   grey (blue) / red (red) triangles, so you can see the traffic the bot
   sequences against. The page draws only those in the **current viewport**, so

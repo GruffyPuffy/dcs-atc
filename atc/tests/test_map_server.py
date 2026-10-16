@@ -43,6 +43,46 @@ def test_snapshot_has_airspace_geometry(brain, airfield):
     assert snap["aircraft"] == []
 
 
+def test_snapshot_includes_wind_arrow_at_tower(brain, airfield):
+    brain.set_wind(30, 4)
+    service = MapService(airfield, brain, FakeState([]))
+    af = service.snapshot()["airfield"]
+    assert af["wind"]["dir"] == 30
+    assert af["wind"]["speed"] == 8  # 4 m/s from DCS, shown in knots
+    assert af["wind"]["text"] == "030, 4 knots"
+    assert af["tower_pos"] == [airfield.tower_pos[0], airfield.tower_pos[1]]
+    assert af["topgun"]["radius_m"] == 200
+
+
+def test_snapshot_uses_live_dcs_tower_when_unconfigured(brain, airfield):
+    airfield.tower_pos = None
+
+    class WithTower(FakeState):
+        def tower(self, name):
+            return {"name": name, "lat": 42.1789, "lon": 42.4811}
+
+    brain.set_wind(270, 2)
+    service = MapService(airfield, brain, WithTower([]))
+    af = service.snapshot()["airfield"]
+    assert af["tower_pos"] == [42.1789, 42.4811]
+    assert af["topgun"]["radius_m"] == 200
+
+
+def test_snapshot_rejects_tower_off_the_field(brain, airfield):
+    """Caucasus origin (Crimea) must not become the wind-arrow base."""
+    airfield.tower_pos = None
+
+    class OriginTower(FakeState):
+        def tower(self, name):
+            return {"name": name, "lat": 45.129, "lon": 34.266}
+
+    service = MapService(airfield, brain, OriginTower([]))
+    lat, lon = service.snapshot()["airfield"]["tower_pos"]
+    rwy = list(airfield.runways.values())
+    assert lat == (rwy[0][0] + rwy[1][0]) / 2
+    assert lon == (rwy[0][1] + rwy[1][1]) / 2
+
+
 def test_record_captures_trail_without_a_browser(brain, airfield, tmp_path):
     """`record` must save trails even when nothing polls the map page."""
     tracks_file = tmp_path / "tracks.json"

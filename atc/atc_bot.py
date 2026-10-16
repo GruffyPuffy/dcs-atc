@@ -690,14 +690,18 @@ def main() -> None:
     _bust_watch = topgun.BustWatch()
 
     def tower_position():
-        """(lat, lon) of the tower/dispatcher for this airfield, or None."""
+        """(lat, lon) of the tower for this airfield, or None."""
+        if airfield.tower_pos:
+            return airfield.tower_pos
         if _tower_pos[0] is None and state is not None:
             try:
                 info = state.tower(airfield.name)
             except (OSError, RuntimeError):
                 info = None
             if info:
-                _tower_pos[0] = (info["lat"], info["lon"])
+                lat, lon = info["lat"], info["lon"]
+                if airfield.ctr.distance_nm(lat, lon) <= 3.0:
+                    _tower_pos[0] = (lat, lon)
         return _tower_pos[0]
 
     topgun_on = topgun.enabled()

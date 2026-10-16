@@ -33,6 +33,10 @@
       "control": "Kutaisi Control",
       "control_frequency_mhz": 257.0,
       "elevation_ft": 148,
+      "tower_pos": [
+        42.1797,
+        42.48089
+      ],
       "active_runway": "25",
       "default_runway": "07",
       "ctr": {

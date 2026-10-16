@@ -164,6 +164,61 @@ function drawAirspace(af) {
     }).bindTooltip(`Line-up check · runway ${zone.runway} `
       + `(takeoff clearance issued here)`).addTo(staticLayer);
   }
+
+  drawWind(af);
+}
+
+function destMeters(lat, lon, deg, meters) {
+  const rad = deg * Math.PI / 180;
+  const north = Math.cos(rad) * meters;
+  const east = Math.sin(rad) * meters;
+  return [lat + north / 111320,
+          lon + east / (111320 * Math.cos(lat * Math.PI / 180))];
+}
+
+function drawWind(af) {
+  // Tower marker + TopGun bust circle + downwind arrow (label is FROM).
+  const pos = af.tower_pos || af.center;
+  if (!pos) return;
+  const radiusM = af.topgun && af.topgun.radius_m;
+  if (radiusM) {
+    L.circle(pos, {
+      radius: radiusM,
+      color: '#f0883e', weight: 2, dashArray: '4 3',
+      fillColor: '#f0883e', fillOpacity: 0.2,
+    }).bindTooltip(`Tower · TopGun bust ${radiusM} m`).addTo(staticLayer);
+  }
+  L.circleMarker(pos, {
+    radius: 5, color: '#79c0ff', weight: 2,
+    fillColor: '#79c0ff', fillOpacity: 1,
+  }).bindTooltip('Tower').addTo(staticLayer);
+
+  const wind = af.wind || {};
+  const speed = Number(wind.speed) || 0;
+  const from = Number(wind.dir) || 0;
+  const dir3 = String(Math.round(from)).padStart(3, '0');
+  if (speed >= 1) {
+    const to = (from + 180) % 360;
+    const tip = destMeters(pos[0], pos[1], to, 250);
+    const left = destMeters(tip[0], tip[1], to + 140, 60);
+    const right = destMeters(tip[0], tip[1], to - 140, 60);
+    const style = { color: '#79c0ff', weight: 3, lineCap: 'round', lineJoin: 'round' };
+    L.polyline([pos, tip], style).addTo(staticLayer);
+    L.polyline([left, tip, right], style).addTo(staticLayer);
+  }
+  const label = speed < 1 ? 'calm' : `${dir3}°`;
+  const tipText = speed < 1
+    ? 'Wind calm'
+    : `Wind from ${dir3}° · ${Math.round(speed)} kt`;
+  L.marker(pos, {
+    icon: L.divIcon({
+      className: 'wind',
+      html: `<div class="wind-label">${label}</div>`,
+      iconSize: [0, 0],
+      iconAnchor: [0, 0],
+    }),
+    keyboard: false,
+  }).bindTooltip(tipText).addTo(staticLayer);
 }
 
 function aircraftIcon(ac) {

@@ -64,6 +64,12 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
   text-shadow: 0 0 2px #000;
 }
 .ac .ac-label { font-size: 11px; white-space: nowrap; text-shadow: 0 0 3px #000; }
+/* Wind / tower label (the arrow itself is a map polyline). */
+.wind { background: none; border: none; }
+.wind .wind-label {
+  font-size: 11px; color: #79c0ff; white-space: nowrap; font-weight: 600;
+  text-shadow: 0 0 3px #000; margin-left: 10px; margin-top: -6px;
+}
 #map { position: absolute; inset: 44px 260px 0 0; }
 #panel { position: absolute; top: 44px; right: 0; bottom: 0; width: 260px;
   background: var(--panel); border-left: 1px solid var(--line); padding: 10px 12px;

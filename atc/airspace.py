@@ -155,6 +155,9 @@ class Airfield:
     parking_areas: dict[str, tuple[float, float]] = field(default_factory=dict)
     # Named runway holding positions (P1..P4 on the MA chart), lat/lon.
     holding_points: dict[str, tuple[float, float]] = field(default_factory=dict)
+    # Control-tower building (lat, lon), georeferenced from the chart TWR
+    # symbol when DCS does not give a usable dispatcher position.
+    tower_pos: tuple[float, float] | None = None
     # Overhead-break direction per runway ("left"/"right"), e.g. Kutaisi's
     # "overhead break is south": 25 -> left, 07 -> right. A runway not listed
     # falls back to `default_break_direction`.
@@ -796,6 +799,8 @@ def _build_airfield(name: str, spec: dict, defaults: dict,
                      for p, v in spec.get("parking_areas", {}).items()}
     holding_points = {h: (float(v[0]), float(v[1]))
                       for h, v in spec.get("holding_points", {}).items()}
+    tower_raw = spec.get("tower_pos")
+    tower_pos = (float(tower_raw[0]), float(tower_raw[1])) if tower_raw else None
 
     ctr = ControlZone(
         name=f"{name} CTR",
@@ -826,6 +831,7 @@ def _build_airfield(name: str, spec: dict, defaults: dict,
         parking_routes=parking_routes,
         parking_areas=parking_areas,
         holding_points=holding_points,
+        tower_pos=tower_pos,
         break_directions={str(k): str(v).lower()
                           for k, v in spec.get("break_directions", {}).items()},
         default_break_direction=str(

@@ -177,7 +177,9 @@ class AtcBrain:
         self.phraseology = phraseology or Phraseology.load()
         self.callsigns = callsigns or CallsignRegistry()
         self.pilots: dict[str, PilotState] = {}
-        self.wind = "calm"  # updated from live weather
+        self.wind = "calm"  # spoken phrase, updated from live weather
+        self.wind_dir = 0.0  # meteorological FROM, degrees
+        self.wind_speed = 0.0  # as reported by weather (m/s)
         self.qnh = "2992"  # updated from live weather (inHg, 4 digits)
         # Weather phrase ("CAVOK" / visibility + clouds), from live weather.
         # Ground reads it out when a pilot checks in WITHOUT "with information X"
@@ -516,6 +518,8 @@ class AtcBrain:
 
     def set_wind(self, direction: float, speed: float) -> None:
         """Update the spoken wind (MA SOP: "270, 2 knots"; calm below 1 kt)."""
+        self.wind_dir = float(direction or 0.0)
+        self.wind_speed = float(speed or 0.0)
         if speed < 0.5:
             self.wind = "calm"
         else:

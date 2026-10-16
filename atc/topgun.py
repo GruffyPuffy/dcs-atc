@@ -67,12 +67,16 @@ _STALLS = re.compile(
     re.IGNORECASE,
 )
 
-# How close (nm), how low (ft AGL) and how fast (kt) counts as a bust, and how
+# How close, how low (ft AGL) and how fast (kt) counts as a bust, and how
 # long the state must have held before the sting fires (s).
-BUST_DISTANCE_NM = 1.5
+# The monitor ticks every 2 s (do not poll DCS faster). At 250 kt that is
+# ~260 m between samples, so 50 m would miss the pass; 200 m still has to
+# actually overfly the tower, not the whole field (old value was 1.5 NM).
+BUST_RADIUS_M = 200.0
+BUST_DISTANCE_NM = BUST_RADIUS_M / 1852.0
 BUST_AGL_FT = 300.0
 BUST_SPEED_KT = 250.0
-BUST_HOLD_S = 1.5
+BUST_HOLD_S = 0.2
 
 
 def negative_clip() -> Path | None:
