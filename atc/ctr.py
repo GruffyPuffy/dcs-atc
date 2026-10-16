@@ -29,6 +29,7 @@ class AircraftTrack:
     distance_nm: float
     relative: str
     heading: float = 0.0
+    speed_kt: float = 0.0
 
 
 class CtrTracker:
@@ -39,7 +40,8 @@ class CtrTracker:
         self._inside: dict[str, bool] = {}
 
     def update(self, callsign: str, lat: float, lon: float,
-               alt_ft: float, heading: float = 0.0) -> tuple[CtrEvent, AircraftTrack]:
+               alt_ft: float, heading: float = 0.0,
+               speed_kt: float = 0.0) -> tuple[CtrEvent, AircraftTrack]:
         """Update one aircraft and return (event, track)."""
         inside = self.airfield.ctr.contains(lat, lon, alt_ft)
         previous = self._inside.get(callsign)
@@ -54,10 +56,11 @@ class CtrTracker:
             event = CtrEvent.NO_CHANGE
 
         self._inside[callsign] = inside
-        return event, self.track(callsign, lat, lon, alt_ft, heading)
+        return event, self.track(callsign, lat, lon, alt_ft, heading, speed_kt)
 
     def track(self, callsign: str, lat: float, lon: float,
-              alt_ft: float, heading: float = 0.0) -> AircraftTrack:
+              alt_ft: float, heading: float = 0.0,
+              speed_kt: float = 0.0) -> AircraftTrack:
         """Build a track for a position WITHOUT changing tracker state."""
         return AircraftTrack(
             callsign=callsign,
@@ -68,6 +71,7 @@ class CtrTracker:
             distance_nm=self.airfield.ctr.distance_nm(lat, lon),
             relative=self.airfield.ctr.relative_position(lat, lon),
             heading=heading,
+            speed_kt=speed_kt,
         )
 
     def is_inside(self, callsign: str) -> bool:

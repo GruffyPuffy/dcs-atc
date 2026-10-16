@@ -776,7 +776,8 @@ def main() -> None:
                     with lock:
                         callsign = brain.callsign_for_speaker(ac.player)
                         event, tr = tracker.update(callsign, ac.lat, ac.lon,
-                                                   ac.alt_ft, ac.heading)
+                                                   ac.alt_ft, ac.heading,
+                                                   getattr(ac, "speed_kt", 0.0))
                         warning = brain.on_ctr_event(callsign, event, tr)
                     if warning:
                         log(f"CTR {event.value}: {callsign} ({ac.player})")
@@ -890,6 +891,14 @@ def main() -> None:
                         log(f"DESCEND: {callsign} ({ac.player})")
                         speak(descend, freq=freq_for(Controller.CONTROL),
                               controller=Controller.CONTROL)
+                    # Takeoff clearance: after the pilot reads back "line up and
+                    # wait", wait until they are actually lined up on the runway
+                    # before clearing takeoff (they may still be taxiing on).
+                    with lock:
+                        lineup = brain.check_lineup(callsign, tr)
+                    if lineup:
+                        log(f"LINED UP: {callsign} ({ac.player})")
+                        speak(lineup, controller=Controller.TOWER)
             except (OSError, RuntimeError):
                 pass  # bridge down or mission not running; retry next tick
 

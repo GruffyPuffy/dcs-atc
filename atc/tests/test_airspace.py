@@ -241,6 +241,40 @@ def test_runway_corridor_geometry(airfield):
     assert len(corridor["corners"]) == 4
 
 
+def test_lineup_zone_geometry_matches_is_lined_up(airfield):
+    """The drawn line-up corridor must agree with the logic it mirrors.
+
+    A point just inside the rectangle is accepted, and one well outside it is
+    not — so the map cannot drift from `is_lined_up`. (The corners themselves
+    sit exactly on the inclusive boundary, where a projection round-trip is
+    subject to floating-point error, so we sample just inside.)
+    """
+    zones = airfield.lineup_zone_geometry()
+    assert {z["runway"] for z in zones} == set(airfield.runways)
+    for zone in zones:
+        rwy = zone["runway"]
+        hdg = airfield.runway_heading(rwy)
+        assert len(zone["corners"]) == 4
+        # Centroid of the rectangle: comfortably inside the corridor.
+        clat = sum(c[0] for c in zone["corners"]) / 4
+        clon = sum(c[1] for c in zone["corners"]) / 4
+        assert airfield.is_lined_up(clat, clon, hdg, rwy, speed_kt=0.0), rwy
+        # A point well beyond the corridor (mid-runway) is outside it.
+        far = airfield.runway_threshold(airfield._opposite_runway(rwy))
+        assert not airfield.is_lined_up(far[0], far[1], hdg, rwy, speed_kt=0.0)
+
+
+def test_lineup_zone_excludes_holding_points(airfield):
+    """The drawn corridor must not cover any holding point (they are beside
+    the runway, not on it)."""
+    for zone in airfield.lineup_zone_geometry():
+        rwy = zone["runway"]
+        hdg = airfield.runway_heading(rwy)
+        for name, (lat, lon) in airfield.holding_points.items():
+            assert not airfield.is_lined_up(lat, lon, hdg, rwy, speed_kt=0.0), \
+                f"{rwy} {name}"
+
+
 # ---------- Second airfield (circular CTR) ----------
 
 def test_gudauta_loads_with_circular_ctr():

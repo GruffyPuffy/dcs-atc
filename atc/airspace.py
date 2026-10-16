@@ -155,6 +155,11 @@ class Airfield:
     parking_areas: dict[str, tuple[float, float]] = field(default_factory=dict)
     # Named runway holding positions (P1..P4 on the MA chart), lat/lon.
     holding_points: dict[str, tuple[float, float]] = field(default_factory=dict)
+    # Overhead-break direction per runway ("left"/"right"), e.g. Kutaisi's
+    # "overhead break is south": 25 -> left, 07 -> right. A runway not listed
+    # falls back to `default_break_direction`.
+    break_directions: dict[str, str] = field(default_factory=dict)
+    default_break_direction: str = "left"
     # Radio preset channel numbers, per agency (Master Arms SOP). These are
     # per-airfield (a preset is a property of the airfield's radio plan), so
     # they live here rather than in the global phraseology variables.
@@ -280,6 +285,17 @@ class Airfield:
             return ""
         return "right" if delta > 0 else "left"
 
+    def break_direction(self, runway: str | None = None) -> str:
+        """Overhead-break direction for a runway: "left" or "right".
+
+        Per-airfield, per-runway (Master Arms: at Kutaisi the overhead break is
+        flown on the south side — left for 25, right for 07). A runway not
+        configured falls back to `default_break_direction`.
+        """
+        rwy = runway or self.active_runway
+        direction = self.break_directions.get(rwy, self.default_break_direction)
+        return direction if direction in ("left", "right") else "left"
+
     def best_entry_gate(self, runway: str | None = None) -> str | None:
         """Entry gate that best sets up a landing on a runway.
 
@@ -393,6 +409,38 @@ class Airfield:
             east_m = along_m * ax + across_m * px
             corners.append(list(_offset(thr[0], thr[1], north_m, east_m)))
         return {"corners": corners}
+
+    def lineup_zone_geometry(self, runway: str | None = None,
+                             max_along_nm: float = 0.2,
+                             behind_nm: float = 0.03,
+                             max_across_nm: float = 0.025) -> list[dict]:
+        """The line-up corridor(s) as map rectangles.
+
+        Mirrors `is_lined_up`: the area at the threshold end of the runway where
+        the bot accepts the aircraft as lined up (and so issues the takeoff
+        clearance). Returns [{runway, corners: [[lat,lon], ...]}, ...] — one per
+        runway, so both ends are visible on the map.
+        """
+        zones: list[dict] = []
+        for rwy in self.runways:
+            thr = self.runway_threshold(rwy)
+            rwy_hdg = self.runway_heading(rwy)
+            if thr is None or rwy_hdg is None:
+                continue
+            along = math.radians(rwy_hdg)
+            ax, ay = math.sin(along), math.cos(along)   # east, north
+            px, py = ay, -ax                            # perpendicular
+            start_m = -behind_nm * M_PER_NM
+            end_m = max_along_nm * M_PER_NM
+            half_m = max_across_nm * M_PER_NM
+            corners = []
+            for along_m, across_m in ((start_m, -half_m), (end_m, -half_m),
+                                      (end_m, half_m), (start_m, half_m)):
+                north_m = along_m * ay + across_m * py
+                east_m = along_m * ax + across_m * px
+                corners.append(list(_offset(thr[0], thr[1], north_m, east_m)))
+            zones.append({"runway": rwy, "corners": corners})
+        return zones
 
     def runway_threshold(self, runway: str | None = None) -> tuple[float, float] | None:
         """Threshold (lat, lon) for a runway (default: the active runway)."""
@@ -549,6 +597,48 @@ class Airfield:
             return None
         bearing, _ = bearing_distance(lat, lon, target[0], target[1])
         return bearing
+
+    def is_lined_up(self, lat: float, lon: float, heading: float,
+                    runway: str | None = None, max_along_nm: float = 0.2,
+                    behind_nm: float = 0.03, max_across_nm: float = 0.025,
+                    max_offset_deg: float = 30.0,
+                    max_speed_kt: float = 15.0,
+                    speed_kt: float | None = None) -> bool:
+        """True if the aircraft looks like it is lined up on the runway.
+
+        Heuristic for the takeoff clearance: **on the runway centreline at the
+        threshold end**, pointing down the runway (within `max_offset_deg`), and
+        essentially stationary (`speed_kt` <= `max_speed_kt`). A pilot who has
+        only *read back* "line up and wait" but has not yet taxied onto the
+        runway is not lined up, so the takeoff clearance is withheld until they
+        are.
+
+        The position test is a **runway corridor**, not a radius: within
+        `max_along_nm` of the threshold *along* the runway (and no more than
+        `behind_nm` before it), and within `max_across_nm` of the centreline.
+        A radius would wrongly accept a pilot at a holding point beside the
+        runway — at Kutaisi, Holding A/N is only 387 m from the 07 threshold but
+        387 m *sideways*, and Holding B is 565 m down the runway on a taxiway.
+
+        `speed_kt` is optional: without it (no live speed) only the position and
+        heading are checked, so the trainer still works offline.
+        """
+        thr = self.runway_threshold(runway)
+        rwy_hdg = self.runway_heading(runway)
+        if thr is None or rwy_hdg is None:
+            return False
+        along_dir = math.radians(rwy_hdg)
+        ax, ay = math.sin(along_dir), math.cos(along_dir)
+        ex, ny = _project(lat, lon, thr[0], thr[1])
+        along = ex * ax + ny * ay
+        across = ex * ay - ny * ax
+        if not (-behind_nm * M_PER_NM <= along <= max_along_nm * M_PER_NM):
+            return False
+        if abs(across) > max_across_nm * M_PER_NM:
+            return False
+        if abs((heading - rwy_hdg + 180) % 360 - 180) > max_offset_deg:
+            return False
+        return speed_kt is None or speed_kt <= max_speed_kt
 
     def is_on_final(self, lat: float, lon: float, heading: float,
                     runway: str | None = None, max_nm: float = 12.0,
@@ -736,6 +826,10 @@ def _build_airfield(name: str, spec: dict, defaults: dict,
         parking_routes=parking_routes,
         parking_areas=parking_areas,
         holding_points=holding_points,
+        break_directions={str(k): str(v).lower()
+                          for k, v in spec.get("break_directions", {}).items()},
+        default_break_direction=str(
+            spec.get("default_break_direction", "left")).lower(),
         channels={k: str(v) for k, v in spec.get("channels", {}).items()},
         map_config=map_config or {},
     )

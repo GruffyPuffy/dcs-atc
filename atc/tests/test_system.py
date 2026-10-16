@@ -462,6 +462,96 @@ def test_lineup_never_traps_the_pilot(airfield, brain):
     assert sc.phase() == Phase.DEPARTURE
 
 
+def test_takeoff_waits_until_actually_lined_up(airfield, brain):
+    """Reading back "line up and wait" must NOT clear takeoff on its own.
+
+    The pilot has only acknowledged the instruction; they may still be taxiing
+    onto the runway. The clearance follows once the monitor sees them lined up
+    (at the threshold, pointing down the runway, stationary).
+    """
+    sc = _scenario(airfield, brain).holding("Holding C")
+    sc.say("Tower, Colt 1, ready for departure", Controller.TOWER)
+    assert sc.phase() == Phase.LINEUP
+
+    # Readback while still at the holding point: acknowledged, not cleared.
+    r = sc.say("Line up and wait 25, Colt 1", Controller.TOWER)
+    assert "cleared for takeoff" not in r.lower()
+    assert sc.phase() == Phase.LINEUP
+    # The monitor sees them still holding short -> no clearance yet.
+    assert brain.check_lineup("Colt 1", sc._track()) is None
+
+    # Now they have taxied on and are lined up: the monitor clears takeoff.
+    sc.at_threshold("25")
+    call = brain.check_lineup("Colt 1", sc._track())
+    assert call and "cleared for takeoff" in call.lower()
+    assert sc.phase() == Phase.DEPARTURE
+    # Fires once.
+    assert brain.check_lineup("Colt 1", sc._track()) is None
+
+
+def test_takeoff_withheld_while_still_rolling(airfield, brain):
+    """A pilot lined up but still moving is not yet cleared for takeoff."""
+    sc = _scenario(airfield, brain).at_threshold("25")
+    sc.say("Tower, Colt 1, ready for departure", Controller.TOWER)
+    sc.speed = 40.0  # still rolling onto the runway
+    r = sc.say("Line up and wait 25, Colt 1", Controller.TOWER)
+    assert "cleared for takeoff" not in r.lower()
+    assert brain.check_lineup("Colt 1", sc._track()) is None
+    sc.speed = 0.0  # stopped, lined up
+    assert brain.check_lineup("Colt 1", sc._track()) is not None
+
+
+def test_holding_point_beside_runway_is_not_lined_up(airfield):
+    """A pilot at a holding point is NOT lined up, even if it is near the
+    threshold.
+
+    The position test must be a runway corridor, not a radius: at Kutaisi,
+    Holding A/N is only 387 m from the 07 threshold but 387 m *sideways*, and
+    Holding B is 565 m down the runway on a taxiway. A radius would clear them
+    for takeoff while they are still off the runway.
+    """
+    for runway in ("25", "07"):
+        hdg = airfield.runway_heading(runway)
+        for name, point in airfield.holding_points.items():
+            assert not airfield.is_lined_up(point[0], point[1], hdg, runway,
+                                            speed_kt=0.0), f"{runway} {name}"
+
+
+def test_lined_up_accepts_threshold_and_rejects_mid_runway(airfield):
+    """Lined up = on the centreline at the threshold end, not mid-runway."""
+    for runway in ("25", "07"):
+        hdg = airfield.runway_heading(runway)
+        thr = airfield.runway_threshold(runway)
+        assert airfield.is_lined_up(thr[0], thr[1], hdg, runway, speed_kt=0.0)
+        # The far threshold is 1.3 nm down the runway: not the line-up point.
+        far = airfield.runway_threshold(
+            airfield._opposite_runway(runway))
+        assert not airfield.is_lined_up(far[0], far[1], hdg, runway,
+                                        speed_kt=0.0)
+
+
+# ---------- Overhead-break direction (per airfield, per runway) ----------
+
+def test_overhead_break_direction_follows_runway(airfield, brain):
+    """Kutaisi's break is on the south side: left for 25, right for 07."""
+    assert airfield.break_direction("25") == "left"
+    assert airfield.break_direction("07") == "right"
+
+    sc = _scenario(airfield, brain).on_final("25")
+    r = sc.say("Tower, Colt 1, runway in sight", Controller.TOWER)
+    assert "left overhead break" in r.lower()
+
+    brain.set_runway("07")
+    sc = _scenario(airfield, brain).on_final("07")
+    r = sc.say("Tower, Colt 1, runway in sight", Controller.TOWER)
+    assert "right overhead break" in r.lower()
+
+
+def test_overhead_break_direction_defaults_when_unconfigured(airfield):
+    """A runway with no configured direction falls back to the default."""
+    assert airfield.break_direction("99") == airfield.default_break_direction
+
+
 # ---------- Diversity: single ship vs 4-ship ----------
 
 def test_single_ship_has_no_formation_prefix(airfield, brain):

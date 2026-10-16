@@ -25,6 +25,7 @@
     "hold_short": "{callsign}, {tower}, hold short runway {runway}.",
     "takeoff": "{callsign}, {tower}, cleared for takeoff runway {runway}.",
     "line_up": "{callsign}, {tower}, line up and wait runway {runway}.",
+    "lineup_ack": "{callsign}, {tower}, roger.",
     "hold_short_traffic": "{callsign}, {tower}, hold short, runway {runway} is occupied.",
     "continue_approach": "{callsign}, {tower}, continue approach, traffic on the runway.",
     "lineup_readback": "{callsign}, {tower}, {turnout} turnout, cleared for takeoff runway {runway}.",

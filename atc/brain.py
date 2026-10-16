@@ -97,6 +97,9 @@ class PilotState:
     awaiting_landing: bool = False
     takeoff_ready_announced: bool = False
     landing_ready_announced: bool = False
+    # The pilot has read back "line up and wait" but is not yet lined up on the
+    # runway. The takeoff clearance waits until they are (see check_lineup).
+    lineup_readback: bool = False
     # Tower has pushed a landed flight to Ground (Master Arms SOP: "after
     # landing, tower will push you to the Ground channel"). Fires once per
     # landing; re-arms on the next approach (go-around / touch-and-go).
@@ -392,6 +395,48 @@ class AtcBrain:
             return None
         return found[0]
 
+    def _is_flight_checkin(self, text: str, speaker: str = "") -> bool:
+        """True for a flight check-in: a bare callsign (or element number).
+
+        Master Arms SOP: on switching frequency a flight checks in *as a flight*
+        before addressing the agency — the lead says just the flight callsign
+        ("Adder1"), each wingman answers with their number ("2"). It is a
+        flight-internal call, not a call to the agency, so the controller does
+        not answer it (answering it would make the flight check-in act as the
+        agency contact).
+
+        Only a transmission that is *nothing but* the callsign (optionally with
+        the speaker's own name) counts, so a real request ("Dodge 1, requesting
+        taxi") or an agency check-in ("Ground, Dodge 1") is never swallowed. A
+        bare element number ("2", "3", "4" … for a 2/3/4-ship) is also accepted,
+        in digits or words ("two"): it is never a valid call to an agency, so
+        treating it as a flight check-in is safe.
+        """
+        rest = self.callsigns.strip(text)
+        if speaker:
+            # Drop the speaker's own name only when it is not an agency word: a
+            # player whose SRS name is literally "Ground" must not have the
+            # agency stripped out of "Ground, Dodge 1" (that is the agency
+            # check-in, not a flight check-in).
+            if speaker.lower() not in self._agency_words():
+                rest = re.sub(rf"\b{re.escape(speaker)}\b", " ", rest,
+                              flags=re.IGNORECASE)
+        rest = re.sub(r"[^a-z0-9]+", "", rest.lower())
+        return not rest or bool(re.fullmatch(r"[2-9]|two|three|four|five|six|"
+                                             r"seven|eight|niner|nine", rest))
+
+    def _agency_words(self) -> set[str]:
+        """Lower-case agency names that address a controller, not a flight.
+
+        Used so a pilot's own name is never mistaken for (or stripped as) an
+        agency call: "Ground, Dodge 1" is the agency check-in even if the
+        speaker happens to be called "Ground".
+        """
+        return {w.lower() for w in (self.tower_short, self.ground_short,
+                                    self.control_short, "atis", "tower",
+                                    "ground", "control", "approach",
+                                    "departure", "center", "centre")}
+
     def _resolve_speaker(self, text: str, who: str) -> str | None:
         """Attribute a transmission with no extracted callsign to a pilot.
 
@@ -491,6 +536,11 @@ class AtcBrain:
                      for role in ("ground", "tower") if role in channels}
         if "control" in channels:
             overrides["channel"] = channels["control"]
+        # The overhead-break direction is per-airfield, per-runway (MA: at
+        # Kutaisi the break is on the south side — left for 25, right for 07).
+        # Derive it from the airfield so the clearance follows the active runway.
+        if self.airfield is not None:
+            overrides["downwind"] = self.airfield.break_direction(self.runway)
         return self.phraseology.render(
             key, callsign=callsign, tower=self.tower_short,
             agency=agency or self.tower_short,
@@ -685,6 +735,14 @@ class AtcBrain:
         `speaker` is the transmitting pilot's SRS/DCS name, used to exclude them
         from the runway-occupancy check (they are not traffic to themselves).
         """
+        # Flight check-in (Master Arms SOP): on switching frequency a flight
+        # checks in *as a flight* before addressing the agency — the lead says
+        # just the flight callsign ("Adder1"), each wingman answers with their
+        # number ("2"). It is a flight-internal call, not a call to the agency,
+        # so the controller stays silent. Checked before callsign extraction so
+        # the wingman's bare number is caught too (it names no callsign).
+        if self._is_flight_checkin(text, speaker):
+            return ""
         # Every callsign the text names, in order. A transmission can mention
         # several (a readback "descend to Enfield 15" names Enfield; a formation
         # call names two flights). Prefer the *speaker's own* callsign when it is
@@ -811,9 +869,16 @@ class AtcBrain:
             r"via|in use|qnh|q\.?n\.?h\.?)\b",
             low)
         if readback and pilot.phase == Phase.LINEUP:
-            # Readback of "line up and wait" -> the takeoff clearance. The
-            # takeoff is issued regardless; coaching is appended if the line-up
-            # readback is incomplete, so the pilot never has to repeat it.
+            # Readback of "line up and wait". The takeoff clearance is NOT given
+            # on the readback alone: the pilot has only acknowledged the
+            # instruction, they have not yet taxied onto the runway. Wait until
+            # the aircraft is actually lined up (at the threshold, pointing down
+            # the runway, stationary) — the monitor issues the clearance then
+            # (see check_lineup). Without a live track we cannot tell, so we
+            # fall back to the old behaviour and clear on the readback.
+            if not self._lined_up(track):
+                pilot.lineup_readback = True
+                return self._say("lineup_ack", callsign)
             coach = self._readback_coaching(callsign, pilot, low,
                                             pilot.last_clearance or pilot.last_reply,
                                             controller)
@@ -891,6 +956,7 @@ class AtcBrain:
         pilot.awaiting_landing = False
         pilot.takeoff_ready_announced = False
         pilot.landing_ready_announced = False
+        pilot.lineup_readback = False
         pilot.landing_handoff_announced = False
         return self._say("state_reset", callsign,
                          agency=self._agency(controller))
@@ -920,6 +986,7 @@ class AtcBrain:
         pilot.descend_intermediate = False
         pilot.awaiting_takeoff = False
         pilot.awaiting_landing = False
+        pilot.lineup_readback = False
         pilot.landing_handoff_announced = False
         return self._say("cancel_ack", callsign,
                          agency=self._agency(controller))
@@ -1083,11 +1150,15 @@ class AtcBrain:
             # would be stuck in Lineup forever.
             if pilot.phase == Phase.LINEUP:
                 # Already lined up: this "ready" call is the natural trigger for
-                # the takeoff clearance. Still sequence against traffic.
+                # the takeoff clearance. Still sequence against traffic, and
+                # still wait until the aircraft is actually lined up.
                 if self._runway_busy(traffic, exclude=speaker):
                     pilot.awaiting_takeoff = True
                     pilot.takeoff_ready_announced = False
                     return self._say("hold_short_traffic", callsign)
+                if not self._lined_up(track):
+                    pilot.lineup_readback = True
+                    return self._say("lineup_ack", callsign)
                 pilot.phase = Phase.DEPARTURE
                 pilot.awaiting_takeoff = False
                 return self._takeoff_clearance(callsign, pilot)
@@ -1114,6 +1185,9 @@ class AtcBrain:
                     pilot.awaiting_takeoff = True
                     pilot.takeoff_ready_announced = False
                     return self._say("hold_short_traffic", callsign)
+                if not self._lined_up(track):
+                    pilot.lineup_readback = True
+                    return self._say("lineup_ack", callsign)
                 pilot.phase = Phase.DEPARTURE
                 pilot.awaiting_takeoff = False
                 return self._takeoff_clearance(callsign, pilot)
@@ -1414,6 +1488,19 @@ class AtcBrain:
         if track is None or self.airfield is None:
             return "right"
         return self.airfield.turn_to_heading(track.heading, heading)
+
+    def _lined_up(self, track: AircraftTrack | None) -> bool:
+        """True if the aircraft is lined up on the runway (or we cannot tell).
+
+        Without a live track we cannot verify, so we trust the pilot (offline
+        behaviour unchanged). With a track, the takeoff clearance waits until
+        the aircraft is at the threshold, pointing down the runway, stationary.
+        """
+        if track is None or self.airfield is None:
+            return True
+        return self.airfield.is_lined_up(
+            track.lat, track.lon, track.heading, self.runway,
+            speed_kt=getattr(track, "speed_kt", None))
 
     def _takeoff_turnout(self, pilot: PilotState) -> str:
         """The turnout clause for the takeoff clearance: "left"/"right"/"straight".
@@ -1831,6 +1918,27 @@ class AtcBrain:
             return self._say("cleared_land", callsign,
                              flight=self._formation_prefix(pilot))
         return None
+
+    def check_lineup(self, callsign: str,
+                     track: AircraftTrack | None) -> str | None:
+        """Issue the takeoff clearance once the pilot is actually lined up.
+
+        After "line up and wait" the pilot reads it back, but the takeoff
+        clearance must not follow until they have taxied onto the runway and are
+        lined up (at the threshold, pointing down the runway, stationary). The
+        monitor calls this each tick; it fires once, then the phase is Departure.
+        """
+        pilot = self._pilot(callsign)
+        if (pilot.phase != Phase.LINEUP or not pilot.lineup_readback
+                or track is None or self.airfield is None):
+            return None
+        if not self.airfield.is_lined_up(
+                track.lat, track.lon, track.heading, self.runway,
+                speed_kt=getattr(track, "speed_kt", None)):
+            return None
+        pilot.lineup_readback = False
+        pilot.phase = Phase.DEPARTURE
+        return self._takeoff_clearance(callsign, pilot)
 
     def check_landing_handoff(self, callsign: str, on_runway: bool) -> str | None:
         """Push a landed flight to Ground, unprompted, once it is rolling out.

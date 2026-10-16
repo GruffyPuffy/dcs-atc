@@ -72,6 +72,7 @@ class Scenario:
         self.lon = airfield.ctr.center_lon
         self.heading = 0.0
         self.alt = 1000.0
+        self.speed = 0.0
         # `traffic` may be a shared list so several scenarios see one radar
         # picture (interleaved flights); otherwise each scenario owns its own.
         self._traffic: list[Unit] = traffic if traffic is not None else []
@@ -89,6 +90,9 @@ class Scenario:
 
     def at_threshold(self, runway: str = "25") -> "Scenario":
         self.lat, self.lon = self.airfield.runway_threshold(runway)
+        # A pilot at the threshold is pointing down the runway, stationary.
+        self.heading = self.airfield.runway_heading(runway) or 0.0
+        self.speed = 0.0
         return self
 
     def holding(self, name: str) -> "Scenario":
@@ -171,7 +175,7 @@ class Scenario:
             lat=self.lat, lon=self.lon, alt_ft=self.alt,
             distance_nm=self.airfield.ctr.distance_nm(self.lat, self.lon),
             relative=self.airfield.ctr.relative_position(self.lat, self.lon),
-            heading=self.heading)
+            heading=self.heading, speed_kt=self.speed)
 
     def say(self, text: str, controller) -> str | None:
         """Transmit `text` to `controller`; return (and log) the reply."""

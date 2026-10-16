@@ -34,8 +34,10 @@ example), colour-coded by who is talking (PILOT / GND / TWR / CTL / AWACS).
 - **Controllers** address the pilot on every line (*"Adder11, …"*) and name
   their own facility only on first contact.
 - **On every radio switch**: acknowledge the handoff, then **check in as a
-  flight** on the new frequency (*"Adder1" / "2"*), then make the first call
-  with the agency prefix (*"Tower, Adder11, Entry East"*).
+  flight** on the new frequency (*"Adder1"*, then each wingman answers *"2"*,
+  *"3"*, *"4"* …), then make the first call with the agency prefix (*"Tower,
+  Adder11, Entry East"*). The flight check-in is a flight-internal call — the
+  controller does not answer it.
 
 ## Deliberate deviations from the wiki
 

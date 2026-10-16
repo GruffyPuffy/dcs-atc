@@ -925,6 +925,47 @@ def test_frequency_change_push_is_silent(brain):
     assert reply == ""
 
 
+def test_flight_checkin_bare_callsign_is_silent(brain):
+    # Master Arms SOP: after switching frequency the flight checks in *as a
+    # flight* ("Colt 1") before addressing the agency. It is a flight-internal
+    # call, so the controller stays silent — it must NOT be answered as an
+    # agency contact (and must not get "say again").
+    assert brain.handle("Colt 1", controller=Controller.TOWER) == ""
+    assert brain.handle("Colt one", controller=Controller.GROUND) == ""
+
+
+def test_flight_checkin_wingman_number_is_silent(brain):
+    # The wingman answers the lead's flight check-in with their number: "2" for
+    # a 2-ship, "3"/"4" for a 3/4-ship, and so on. A bare element number is
+    # never a valid agency call, so it is silent too — in digits or words.
+    for element in ("2", "3", "4", "5", "two", "three", "four"):
+        assert brain.handle(element, controller=Controller.TOWER) == "", element
+    # "1" is the lead, who says the flight callsign instead — not an element, so
+    # it is not silently accepted (multiplayer: no callsign -> no reply).
+    assert brain.handle("1", controller=Controller.TOWER) != ""
+
+
+def test_agency_checkin_still_answered(brain):
+    # "Ground, Colt 1" is the *agency* check-in (not the flight check-in): it
+    # names the agency, so it is answered normally.
+    reply = brain.handle("Ground, Colt 1", controller=Controller.GROUND)
+    assert reply and "Ground" in reply
+
+
+def test_agency_checkin_not_swallowed_by_agency_named_speaker(brain):
+    # A player whose SRS name is literally "Ground" must not have the agency
+    # stripped out of their call: "Ground, Colt 1" is still the agency check-in.
+    reply = brain.handle("Ground, Colt 1", controller=Controller.GROUND,
+                         speaker="Ground")
+    assert reply and "Ground" in reply
+
+
+def test_flight_checkin_does_not_swallow_requests(brain):
+    # A call that carries a request is not a flight check-in.
+    reply = brain.handle("Colt 1, requesting taxi", controller=Controller.GROUND)
+    assert "taxi" in reply.lower()
+
+
 def test_solo_mode_prompts_on_unknown_call(brain):
     # Single-pilot trainer: an unrecognized call (e.g. a forgotten callsign)
     # gets a spoken prompt instead of silence.

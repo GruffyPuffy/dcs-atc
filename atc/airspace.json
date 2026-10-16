@@ -149,6 +149,10 @@
         "tower": "7",
         "control": "8",
         "atis": "21"
+      },
+      "break_directions": {
+        "25": "left",
+        "07": "right"
       }
     },
     "Gudauta": {

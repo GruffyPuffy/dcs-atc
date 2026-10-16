@@ -155,6 +155,15 @@ function drawAirspace(af) {
       fillColor: '#f85149', fillOpacity: 0.08,
     }).bindTooltip('Runway occupancy corridor').addTo(staticLayer);
   }
+  // Line-up corridor: the area at the threshold end where the bot accepts the
+  // aircraft as lined up and issues the takeoff clearance (mirrors is_lined_up).
+  for (const zone of checks.lineup || []) {
+    L.polygon(zone.corners, {
+      color: '#a371f7', weight: 2, dashArray: '2 3',
+      fillColor: '#a371f7', fillOpacity: 0.25,
+    }).bindTooltip(`Line-up check · runway ${zone.runway} `
+      + `(takeoff clearance issued here)`).addTo(staticLayer);
+  }
 }
 
 function aircraftIcon(ac) {

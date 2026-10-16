@@ -41,6 +41,8 @@ check the log together.
 
 ## 2. Ground (Radio 2, 250.000)
 
+- [ ] **Flight check-in** — *"Colt 1"* (bare callsign, after switching) →
+      **silent** (flight-internal call; each wingman answers *"2"*, *"3"*, *"4"* …)
 - [ ] **Check-in** — *"Ground, Colt 1, two-ship Hornets on Ramp South"*
       → *"Colt 1, Ground, runway 25 in use, QNH 2992."*
 - [ ] **Check-in + ATIS** — *"…with information Oscar"* → just *"Colt 1, Ground."*

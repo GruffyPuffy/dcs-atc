@@ -425,6 +425,7 @@ def _airspace_payload(airfield: Airfield, basemap: str | None = None) -> dict:
             "holding": airfield.holding_zone_geometry(),
             "final": airfield.final_zone_geometry(),
             "runway": airfield.runway_corridor_geometry(),
+            "lineup": airfield.lineup_zone_geometry(),
             "exit": airfield.exit_zone_geometry(radius_nm=EXIT_REPORT_RADIUS_NM),
         },
         "overlay": _overlay_payload(airfield),
