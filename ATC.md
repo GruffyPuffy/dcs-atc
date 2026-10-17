@@ -512,11 +512,18 @@ prefix — the callsign alone.
 A background thread polls live positions every 2 seconds and tracks each
 aircraft's inside/outside state (`atc/ctr.py`). On a boundary crossing:
 
-| Event | Condition | Tower action |
+| Event | Condition | Action |
 | --- | --- | --- |
-| `ENTERED_CTR` | Aircraft enters the CTR **without** having called inbound | Broadcast: "Colt 1, Tower, you are entering controlled airspace without clearance. Squawk 4201 and state intentions." |
+| `ENTERED_CTR` | Aircraft enters the CTR **without** having called inbound | Broadcast on the **working frequency** (last agency the pilot talked to; Tower if never checked in): "Colt 1, Control, you are entering controlled airspace without clearance. Squawk 4201 and state intentions." |
 | `ENTERED_CTR` | Aircraft had called inbound | No action (already cleared) |
 | `EXITED_CTR` | Aircraft leaves the CTR | No action (currently) |
+
+Real ATC: Tower owns the CTR and would call on Tower (or Guard 121.5). In this
+trainer there is one radio and no Guard, so an unsolicited Tower-only call
+never reaches a pilot still on Control. Go-around, altitude-bust, runway
+incursion, and the TopGun sting use the same working-frequency rule. SOP
+handoffs (Tower→Control, Control→Stingray, Tower→Ground) stay on the issuing
+agency.
 
 The CTR is defined in `airspace.json` as a polygon (Kutaisi) or a radius around
 the airfield, with a ceiling in feet AGL. Kutaisi: surface to 1500 ft AGL.

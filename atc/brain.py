@@ -1935,13 +1935,27 @@ class AtcBrain:
         return self._say("vectors", callsign, agency=agency,
                          heading=f"{heading:03.0f}", vector_runway=runway)
 
+    def working_controller(self, callsign: str) -> Controller:
+        """Last agency this pilot talked to; Tower if they have never checked in.
+
+        Unsolicited calls (CTR warning, go-around, TopGun sting) must go on that
+        working frequency: this trainer has no Guard, and a Tower-only call
+        never reaches a pilot still on Control.
+        """
+        last = (self._pilot(callsign).last_controller or "").lower()
+        for ctrl in Controller:
+            if ctrl.value == last:
+                return ctrl
+        return Controller.TOWER
+
     def on_ctr_event(self, callsign: str, event: CtrEvent,
                      track: AircraftTrack) -> str | None:
         """React to a CTR boundary crossing. Returns a warning to broadcast,
         or None if no action is needed."""
         pilot = self._pilot(callsign)
         if event == CtrEvent.ENTERED and not pilot.cleared_inbound:
-            return self._say("ctr_warning", callsign)
+            agency = self._agency(self.working_controller(callsign))
+            return self._say("ctr_warning", callsign, agency=agency)
         return None
 
     def check_final(self, callsign: str, on_final: bool,

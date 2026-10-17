@@ -1056,6 +1056,20 @@ def test_ctr_entry_without_clearance_warns(airfield, brain):
     sc = _scenario(airfield, brain).at_gate("North")
     warning = brain.on_ctr_event("Colt 1", CtrEvent.ENTERED, sc._track())
     assert warning is not None and "without clearance" in warning.lower()
+    assert "Tower" in warning
+    assert brain.working_controller("Colt 1") == Controller.TOWER
+
+
+def test_ctr_warning_uses_working_agency(airfield, brain):
+    # After Stingray / Control, the pilot is not on Tower. The CTR warning
+    # must identify as Control so it matches the frequency they hear it on.
+    from ctr import CtrEvent
+    sc = _scenario(airfield, brain).at_gate("North")
+    sc.say("Kutaisi Control, Colt 1, radio check", Controller.CONTROL)
+    warning = brain.on_ctr_event("Colt 1", CtrEvent.ENTERED, sc._track())
+    assert warning is not None and "without clearance" in warning.lower()
+    assert "Control" in warning
+    assert brain.working_controller("Colt 1") == Controller.CONTROL
 
 
 def test_ctr_entry_after_inbound_is_silent(airfield, brain):

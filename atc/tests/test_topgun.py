@@ -175,6 +175,15 @@ def test_brain_arms_spike_on_control(tmp_path, monkeypatch):
 
 # ---------- bust timer (close + low + fast, held) ----------
 
+def test_bust_fires_on_first_in_window_sample():
+    # The monitor ticks every 2 s; a pass through a 200 m cylinder is one
+    # sample. Default hold is 0 so that sample fires immediately.
+    assert topgun.BUST_HOLD_S == 0.0
+    w = topgun.BustWatch()
+    assert w.update("Colt 1", near=True, low=True, fast=True, now=0.0) is True
+    assert w.update("Colt 1", near=True, low=True, fast=True, now=2.0) is False
+
+
 def test_bust_fires_after_hold():
     w = topgun.BustWatch(hold_s=1.5)
     assert w.update("Colt 1", near=True, low=True, fast=True, now=0.0) is False

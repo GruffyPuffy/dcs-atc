@@ -394,7 +394,7 @@ def main() -> None:
         # drop-in clip instead of synthesising the line (its presence is the
         # switch; see topgun.enabled()).
         if topgun_neg_clip is not None and text == topgun.NEGATIVE_LINE:
-            play_wav(topgun_neg_clip, freq, controller)
+            play_wav(topgun_neg_clip, freq, controller, text=text)
             return
         spoken = text
         for word, phonetic in PRONUNCIATION.items():
@@ -442,10 +442,30 @@ def main() -> None:
                 return hz
         return freq_hz
 
+    def working_controller(callsign: str) -> Controller:
+        """Last agency this pilot talked to; Tower if they have never checked in.
+
+        Unsolicited calls (CTR warning, go-around, TopGun sting) must go on the
+        frequency the pilot is actually on — this trainer has no Guard, and a
+        Tower-only call never reaches someone still on Control.
+        """
+        with lock:
+            return brain.working_controller(callsign)
+
+    def speak_to_pilot(callsign: str, text: str) -> None:
+        """Unsolicited TX on the pilot's working frequency."""
+        ctrl = working_controller(callsign)
+        speak(text, freq=freq_for(ctrl), controller=ctrl)
+
     def play_wav(path, freq: int = freq_hz,
-                 controller: Controller | None = None) -> None:
+                 controller: Controller | None = None,
+                 text: str = "") -> None:
         """Transmit a drop-in WAV clip (TopGun easter egg). Serialised with TTS
-        so the clip and a spoken reply can never overlap on the frequency."""
+        so the clip and a spoken reply can never overlap on the frequency.
+
+        `text` is the film line recorded in the debrief chatter so the map
+        shows that the clip played (the bot log already has `tx wav`).
+        """
         with wave.open(str(path), "rb") as wav:
             channels = wav.getnchannels()
             rate = wav.getframerate()
@@ -457,6 +477,9 @@ def main() -> None:
             client_for(controller, freq).transmit(pcm48k, freq)
         tag = f"[{controller.value}] " if controller else ""
         log(f"{tag}ATC (tx wav): {Path(path).name}")
+        line = text or Path(path).name
+        chatter("tx", freq, controller.value if controller else "atc",
+                line, controller)
 
     def transcribe(pcm: bytes, who: str, duration: float,
                    controller: Controller) -> str:
@@ -806,7 +829,7 @@ def main() -> None:
                         warning = brain.on_ctr_event(callsign, event, tr)
                     if warning:
                         log(f"CTR {event.value}: {callsign} ({ac.player})")
-                        speak(warning, controller=Controller.TOWER)
+                        speak_to_pilot(callsign, warning)
                     # TopGun easter egg: only for a pilot who asked to bust the
                     # tower, and only once per pass. This is off to the side of
                     # the ATC state machine: it plays a sting and adds nothing to
@@ -834,11 +857,15 @@ def main() -> None:
                                         f"({ac.player}) at {tdist:.2f} nm, "
                                         f"{ac.alt_ft - airfield.elevation_ft:.0f} ft AGL, "
                                         f"{getattr(ac, 'speed_kt', 0.0):.0f} kt")
+                                    ctrl = working_controller(callsign)
                                     if topgun_bust_clip is not None:
-                                        play_wav(topgun_bust_clip, freq_for(Controller.TOWER),
-                                                 controller=Controller.TOWER)
+                                        play_wav(topgun_bust_clip, freq_for(ctrl),
+                                                 controller=ctrl,
+                                                 text=topgun.BUST_LINE)
                                     else:
-                                        speak(topgun.BUST_LINE, controller=Controller.TOWER)
+                                        speak(topgun.BUST_LINE,
+                                              freq=freq_for(ctrl),
+                                              controller=ctrl)
                     on_final = airfield.is_on_final(ac.lat, ac.lon, ac.heading)
                     if on_final:
                         occupied = airfield.runway_occupied(
@@ -847,7 +874,7 @@ def main() -> None:
                             call = brain.check_final(callsign, on_final, occupied)
                         if call:
                             log(f"RUNWAY OCCUPIED: {callsign} ({ac.player})")
-                            speak(call, controller=Controller.TOWER)
+                            speak_to_pilot(callsign, call)
                     else:
                         with lock:
                             brain.check_final(callsign, False, False)
@@ -857,7 +884,7 @@ def main() -> None:
                         alt_call = brain.check_altitude(callsign, tr)
                     if alt_call:
                         log(f"ALTITUDE BUST: {callsign} ({ac.player})")
-                        speak(alt_call, controller=Controller.TOWER)
+                        speak_to_pilot(callsign, alt_call)
                     # Runway incursion: on the runway without a clearance.
                     on_rwy = airfield.runway_occupied(
                         [ac], exclude=None, on_runway=True)
@@ -865,7 +892,7 @@ def main() -> None:
                         inc_call = brain.check_incursion(callsign, on_rwy)
                     if inc_call:
                         log(f"RUNWAY INCURSION: {callsign} ({ac.player})")
-                        speak(inc_call, controller=Controller.TOWER)
+                        speak_to_pilot(callsign, inc_call)
                     # Call back a pilot held for an occupied runway, unprompted,
                     # once it clears (takeoff line-up or landing clearance).
                     busy = airfield.runway_occupied(all_units, exclude=ac.player)

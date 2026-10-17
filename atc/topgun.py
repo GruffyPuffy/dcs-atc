@@ -72,11 +72,14 @@ _STALLS = re.compile(
 # The monitor ticks every 2 s (do not poll DCS faster). At 250 kt that is
 # ~260 m between samples, so 50 m would miss the pass; 200 m still has to
 # actually overfly the tower, not the whole field (old value was 1.5 NM).
+# Hold is 0: a 200 m cylinder at 250 kt is one poll at most. A non-zero hold
+# started the timer on the first in-window sample (elapsed 0) and needed a
+# second tick, which was almost always already outside the cylinder.
 BUST_RADIUS_M = 200.0
 BUST_DISTANCE_NM = BUST_RADIUS_M / 1852.0
 BUST_AGL_FT = 300.0
 BUST_SPEED_KT = 250.0
-BUST_HOLD_S = 0.2
+BUST_HOLD_S = 0.0
 
 
 def negative_clip() -> Path | None:
@@ -158,10 +161,10 @@ class BustWatch:
     """Per-callsign timer for the tower-bust sting.
 
     Fires once the *whole* bust condition (close to the tower AND low AND fast)
-    has held continuously for `hold_s`. The timer starts only when all three are
-    true and resets the moment any of them breaks, so a wide/high entry that
-    dives into the window still has to hold low+fast for the full duration.
-    Each callsign fires at most once until `reset`.
+    has held continuously for `hold_s`. Default `hold_s` is 0 so the first
+    in-window sample fires (the 2 s monitor poll *is* the hold). A positive
+    hold starts the timer only when all three are true and resets the moment
+    any of them breaks. Each callsign fires at most once until `reset`.
     """
 
     def __init__(self, hold_s: float = BUST_HOLD_S,
