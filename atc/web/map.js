@@ -12,7 +12,7 @@ let baseLayer;  // the base-map tile layer (OSM or DCS); swapped on config chang
 let baseLayerName = '';
 const markers = new Map();  // callsign -> L.marker
 const aiMarkers = new Map();
-const paths = new Map();    // callsign -> L.polyline
+const paths = new Map();    // callsign -> L.layerGroup of path segments
 const commMarkers = new Map();  // callsign -> L.layerGroup
 // Which comm popup the user wants open (null = none). The map redraws every
 // 2 s, so we reopen only the popup the user actually opened, and a map click
@@ -271,9 +271,34 @@ function drawAircraft(list) {
   }
 }
 
+// A 2 s poll at jet speed is a few tenths of a NM. A gap bigger than this is
+// a teleport / identity switch / two sorties glued together — drawing it as
+// one polyline produces a fake straight chord (seen 2026-10-17).
+const PATH_JUMP_NM = 2.5;
+
+function nmBetween(a, b) {
+  const dLat = (b[0] - a[0]) * 60;
+  const dLon = (b[1] - a[1]) * 60 * Math.cos(a[0] * Math.PI / 180);
+  return Math.hypot(dLat, dLon);
+}
+
+function splitPath(pts, maxNm = PATH_JUMP_NM) {
+  const segs = [];
+  let cur = [];
+  for (const p of pts) {
+    if (cur.length && nmBetween(cur[cur.length - 1], p) > maxNm) {
+      if (cur.length >= 2) segs.push(cur);
+      cur = [];
+    }
+    cur.push(p);
+  }
+  if (cur.length >= 2) segs.push(cur);
+  return segs;
+}
+
 function drawPath(ac) {
   const pts = ac.path || [];
-  if (pts.length < 2) return;
+  const segs = splitPath(pts);
   const active = ac.active !== false;
   // A green trail reads clearly over the beige DCS chart (the controller-hued
   // gray melted into the apron). Active flight: brighter + solid; a completed /
@@ -281,12 +306,14 @@ function drawPath(ac) {
   const style = active
     ? { color: '#3fb950', weight: 3, opacity: 0.9, dashArray: null }
     : { color: '#2ea043', weight: 2.5, opacity: 0.85, dashArray: null };
-  if (paths.has(ac.callsign)) {
-    paths.get(ac.callsign).setLatLngs(pts).setStyle(style);
-  } else {
-    paths.set(ac.callsign, L.polyline(pts, {
-      ...style, interactive: false,
-    }).addTo(pathLayer));
+  let group = paths.get(ac.callsign);
+  if (!group) {
+    group = L.layerGroup().addTo(pathLayer);
+    paths.set(ac.callsign, group);
+  }
+  group.clearLayers();
+  for (const seg of segs) {
+    L.polyline(seg, { ...style, interactive: false }).addTo(group);
   }
 }
 

@@ -191,8 +191,10 @@ traffic, filterable by agency) for live debugging.
 
 ### Debriefs / replay
 
-Run the bot with `--debug` (or `./start_bot.sh --debug`) and it saves a
-**debrief** each session: every aircraft's flight trail plus every radio call.
+The bot saves a **debrief per pilot spawn**
+(`tracks_<airfield>_<player>_<callsign>_<time>.json`): that aircraft's trail
+plus its radio calls. Changing flight means respawning in another DCS slot
+(then checking in) — that opens a new file, stamped when the seat is taken.
 The map page has a **debrief** dropdown — pick one to load it and review a
 sortie after the fact (green trail, comm clusters, chatter), on any machine that
 can reach the map. Playback is visual only: it never re-synthesises TTS.

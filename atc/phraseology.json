@@ -18,6 +18,7 @@
     "altitude": "1500 ft",
     "descent_altitude": "1500 feet",
     "angels": "15",
+    "stingray_channel": "3",
     "qnh": "2992"
   },
   "templates": {
@@ -52,6 +53,7 @@
     "contact_tower_from_control": "{callsign}, {control}, contact {tower} on channel {tower_channel}.",
     "taxi_parking": "{callsign}, {ground}, cleared taxi to {parking} via {taxi_route}.",
     "contact_control": "{callsign}, {tower}, contact {control} on channel {channel}.",
+    "contact_stingray": "{callsign}, {control}, contact Stingray on channel {stingray_channel}.",
     "exit_deviation": "{callsign}, {tower}, note: you are not near {gate}. Continue.",
     "control_join": "{callsign}, {control}, radar contact, turn {turn} heading {heading} to join via {gate}.",
     "control_join_straight": "{callsign}, {control}, radar contact, fly heading {heading} to join via {gate}.",

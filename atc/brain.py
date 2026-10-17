@@ -28,7 +28,7 @@ import topgun
 from callsigns import CallsignRegistry, flight_name
 from ctr import AircraftTrack, CtrEvent
 from airspace import bearing_distance
-from state_client import slot_callsign
+from state_client import canonical_callsign, slot_callsign
 
 TOWER = "Kutaisi Tower"
 RUNWAY = "25"
@@ -55,6 +55,11 @@ DESCENT_INTERMEDIATE_FT = 5000
 # there" (altimeter / radar, not a hard deck).
 PATTERN_ALT_FT = 1500
 PATTERN_ALT_SLOP_FT = 200
+# Departure climb target (Angels 15) and slop for the unprompted Stingray
+# handoff. Control does not simulate AWACS, but MA SOP still pushes the flight
+# to Stingray on channel 3 once they are there.
+ANGELS_HANDOFF_FT = 15000
+ANGELS_HANDOFF_SLOP_FT = 500
 
 
 class Controller(str, Enum):
@@ -91,6 +96,9 @@ class PilotState:
     descend_issued: bool = False  # Control has issued the descent to 1500 ft
     descend_intermediate: bool = False  # Control issued the far-out step-down
     climb_issued: bool = False  # Control has issued the departure climb
+    # Control has pushed the departure to Stingray (AWACS). Fires once; we do
+    # not simulate channel 3, but the SOP call still goes out on Control.
+    stingray_handoff_announced: bool = False
     altitude_warned: bool = False  # warned about busting the CTR ceiling
     incursion_warned: bool = False  # warned about being on the runway uncleared
     exit_gate: str = ""  # assigned departure exit point
@@ -196,10 +204,12 @@ class AtcBrain:
         # callsign instead of the raw DCS unit name.
         self.speaker_callsigns: dict[str, str] = {}
         # Speaker-map keys seeded by the last `sync_speakers` poll, with the
-        # callsign seeded. Only a key still holding its seeded value is removed
-        # when a slot goes away: a binding learned from the radio cannot be
-        # re-derived by the poll, so it must survive.
+        # callsign seeded. A seed is dropped when the player leaves or respawns;
+        # a radio-learned binding on a dynamic slot is dropped the same way.
         self._seeded_keys: dict[str, str] = {}
+        # Last DCS unit name per player from `sync_speakers`. A change is a new
+        # spawn: the previous callsign is forgotten so the new slot can bind.
+        self._online_players: dict[str, str] = {}
         # Single-pilot training aid: when true, a transmission we do not
         # understand is prompted with "say again" (addressed to the one pilot)
         # instead of being ignored. Set from the live pilot count (see
@@ -243,8 +253,15 @@ class AtcBrain:
         calls to the wrong aircraft). Any extra spelling of the same pilot that
         the registry knows about is mapped to the same callsign, so a player
         whose SRS name matches a known STT variant is recognised too.
+
+        The binding is set **once per DCS spawn**. STT cannot jump Caveman from
+        Adder 1 to Adder 2 mid-flight; changing flight means respawning in
+        another slot and checking in again.
         """
         if not who or not callsign:
+            return
+        current = self.callsign_for_speaker(who)
+        if current and current != who:
             return
         for key in self.callsigns.speaker_spellings(who):
             self.speaker_callsigns[key] = callsign
@@ -275,30 +292,33 @@ class AtcBrain:
 
         A player whose unit name carries no callsign stays unseeded and is bound
         from what they actually say (`remember_speaker`), keyed by their SRS
-        name. Only the poll's own slot-derived seeds are ever removed here — a
-        radio-learned binding cannot be re-derived by a poll, so dropping it
-        would lose the pilot's identity (and their callsign with it, putting the
-        raw name back on the air) until they next transmit.
+        name — but only if they have no binding yet this spawn. Leaving the
+        server, or respawning into a different DCS unit, clears the binding so
+        the new slot (or a fresh radio check-in) can set it again. STT cannot
+        remap a live seat to another flight.
         """
+        live_players: dict[str, str] = {}
         discovered: dict[str, str] = {}
         for player, unit_name in pairs:
             if not player:
                 continue
+            live_players[player] = unit_name or ""
             callsign = slot_callsign(unit_name or "")
             if callsign:
                 discovered[player] = callsign
         live = list(discovered.values())
         self.callsigns.add(live)
         self.callsigns.prune(live)
-        # Forget the seeds whose slot is no longer on the radio, but keep any
-        # key the radio has since rebound (its value differs from the seed).
-        for key, seeded in self._seeded_keys.items():
-            if self.speaker_callsigns.get(key) == seeded:
-                del self.speaker_callsigns[key]
+        for player, unit_name in live_players.items():
+            prev = self._online_players.get(player)
+            if prev is not None and prev != unit_name:
+                self._forget_speaker(player)
+        for player in list(self._online_players):
+            if player not in live_players:
+                self._forget_speaker(player)
+        self._online_players = dict(live_players)
         self._seeded_keys = {}
         for player, callsign in discovered.items():
-            # Seed only a pilot we cannot name yet: the slot name is a default,
-            # and what they call themselves on the radio is authoritative.
             if self.callsign_for_speaker(player) == player:
                 for key in self._speaker_keys(player):
                     self.speaker_callsigns[key] = callsign
@@ -347,6 +367,34 @@ class AtcBrain:
             keys.append(cls._norm_speaker(name) + "1")
         return keys
 
+    def _forget_speaker(self, who: str) -> None:
+        """Drop every speaker-map key for this player (end of a DCS spawn)."""
+        keys = set(self._speaker_keys(who))
+        keys.update(self.callsigns.speaker_spellings(who))
+        for key in keys:
+            self.speaker_callsigns.pop(key, None)
+            self._seeded_keys.pop(key, None)
+
+    @staticmethod
+    def _same_aircraft(a: str, b: str) -> bool:
+        """True if two callsign strings name the same seat (lead 1-1 ≡ 1)."""
+        if not a or not b:
+            return False
+        if a.strip().lower() == b.strip().lower():
+            return True
+
+        def parts(cs: str) -> tuple[str, str, str | None] | None:
+            match = re.match(r"^(.+?)\s+(\d+)(?:-(\d+))?$", cs.strip())
+            if not match:
+                return None
+            return match.group(1), match.group(2), match.group(3)
+
+        left, right = parts(a), parts(b)
+        if not left or not right:
+            return False
+        return (canonical_callsign(*left).lower()
+                == canonical_callsign(*right).lower())
+
     def callsign_for_speaker(self, who: str) -> str:
         """Flight callsign for an SRS/DCS player name, or the name itself.
 
@@ -392,11 +440,15 @@ class AtcBrain:
         When we already know this speaker (DCS seed or a prior call), matching
         is restricted to that one flight — including its known STT errors —
         so "forward one" can resolve to Ford 1 without "for the one" becoming
-        Uzi 1.
+        Uzi 1. A focused match that names a *different* aircraft (STT "over to"
+        becoming Adder 2) is ignored: the transmission is still from this seat.
         """
         own = self.callsign_for_speaker(speaker) if speaker else ""
         if own and own != speaker:
-            return self.callsigns.extract(text, focus=[own])
+            found = self.callsigns.extract(text, focus=[own])
+            if found and not self._same_aircraft(own, found):
+                return own
+            return found or own
         if len(self.active_pilots) == 1:
             return self.callsigns.extract(text, focus=self.active_pilots)
         found = self.callsigns.extract_all(text)
@@ -547,6 +599,8 @@ class AtcBrain:
                      for role in ("ground", "tower") if role in channels}
         if "control" in channels:
             overrides["channel"] = channels["control"]
+        if "stingray" in channels:
+            overrides["stingray_channel"] = channels["stingray"]
         # The overhead-break direction is per-airfield, per-runway (MA: at
         # Kutaisi the break is on the south side — left for 25, right for 07).
         # Derive it from the airfield so the clearance follows the active runway.
@@ -965,6 +1019,7 @@ class AtcBrain:
         pilot.descend_issued = False
         pilot.descend_intermediate = False
         pilot.climb_issued = False
+        pilot.stingray_handoff_announced = False
         pilot.exit_gate = ""
         pilot.entry_gate = ""
         pilot.readback_fails = 0
@@ -1416,10 +1471,11 @@ class AtcBrain:
                 return self._say("control_too_early", callsign,
                                  gate=self._departure_gate(pilot))
             if pilot.climb_issued:
-                # Already climbed; this is a level report / readback with no
-                # next instruction, so acknowledge briefly (not "readback
-                # correct" — that is not MA phraseology here).
-                return self._say("roger", callsign, agency=self.control_short)
+                # Climb readback / level report. MA SOP next step is the
+                # Stingray handoff once they reach Angels 15 (radar, not a
+                # second call) — stay silent, same as any readback that has
+                # a next instruction. Do not "roger".
+                return ""
             pilot.climb_issued = True
             return self._say("control_climb", callsign)
         # Readback of the "remain below 1500 ft until clear of the control
@@ -1733,6 +1789,26 @@ class AtcBrain:
             return None
         pilot.climb_issued = True
         return self._say("control_climb", callsign)
+
+    def check_stingray_handoff(self, callsign: str,
+                               track: AircraftTrack | None) -> str | None:
+        """Push a climbed departure to Stingray once they reach Angels 15.
+
+        Master Arms SOP (kneeboard page 1): after the climb to Angels 15,
+        Control hands the flight to Stingray on channel 3. We do not simulate
+        AWACS, but the handoff still fires so the radio sequence matches the
+        card. Control then stays quiet until the inbound call. Fires once.
+        """
+        pilot = self._pilot(callsign)
+        if (pilot.phase != Phase.AIRBORNE or not pilot.climb_issued
+                or pilot.stingray_handoff_announced or track is None):
+            return None
+        if self._inside_ctr(track):
+            return None
+        if track.alt_ft < ANGELS_HANDOFF_FT - ANGELS_HANDOFF_SLOP_FT:
+            return None
+        pilot.stingray_handoff_announced = True
+        return self._say("contact_stingray", callsign)
 
     def check_arrival_descent(self, callsign: str,
                               track: AircraftTrack | None) -> str | None:

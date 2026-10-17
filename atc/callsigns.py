@@ -329,7 +329,8 @@ class CallsignRegistry:
         tokens = re.findall(r"[A-Za-z']+|\d+", text)
         if not tokens:
             return None
-        max_distance = 2 if any(len(n) >= 7 for n in self.names) else 1
+        pool = names if names is not None else self.names
+        max_distance = 2 if any(len(n) >= 7 for n in pool) else 1
         for i, token in enumerate(tokens):
             # A number right after the name ("cold 1") or an attached digit
             # ("cold1") is what distinguishes a callsign from ordinary words.
@@ -348,7 +349,6 @@ class CallsignRegistry:
             if token.lower() in NUMBER_WORDS:
                 continue
             best, best_d, second_d = None, 99, 99
-            pool = names if names is not None else self.names
             for known in pool:
                 variants = [known.lower(), *self.variants.get(known.lower(), []),
                             *KNOWN_ERRORS.get(known.lower(), [])]

@@ -27,6 +27,7 @@ REQUIRED_TEMPLATES = {
     "control_join_requested_nohdg",
     "contact_ground", "taxi_parking", "control_contact",
     "control_climb", "control_descend", "control_descend_step", "control_too_early",
+    "contact_stingray",
     "contact_tower_from_control",
     "go_around", "ctr_warning", "roger", "say_again",
     "say_again_no_callsign",

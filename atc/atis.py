@@ -71,8 +71,12 @@ class AtisReport:
         """
         if self.cavok:
             return "CAVOK"
-        return (f"visibility {self.visibility_m / 1000:.0f} kilometers, "
-                f"clouds {self.clouds_base_m:.0f} meters")
+        vis = f"visibility {self.visibility_m / 1000:.0f} kilometers"
+        # A base of 0 (or missing) is DCS for "no cloud layer", not clouds
+        # sitting on the ground — do not say "clouds 0 meters".
+        if self.clouds_base_m > 0:
+            return f"{vis}, clouds {self.clouds_base_m:.0f} meters"
+        return vis
 
     def broadcast(self) -> str:
         """The spoken ATIS text (single pass)."""
@@ -130,8 +134,10 @@ def build_atis(airfield: Airfield, weather: dict,
     else:
         hour = (now or datetime.datetime.now()).hour
 
-    # CAVOK: visibility >= 10 km, no significant cloud below 5000 ft, no precip
-    cavok = visibility_m >= 10000 and clouds_base_m >= 1500
+    # CAVOK: visibility >= 10 km and no significant cloud below 5000 ft
+    # (~1500 m). DCS reports clouds.base = 0 when there is no cloud layer
+    # (or the field is unset) — treat that as clear, not a 0 m ceiling.
+    cavok = visibility_m >= 10000 and (clouds_base_m <= 0 or clouds_base_m >= 1500)
 
     return AtisReport(
         airfield=airfield.name,

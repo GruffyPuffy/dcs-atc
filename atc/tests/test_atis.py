@@ -66,6 +66,31 @@ def test_build_atis_cavok(airfield):
     assert "QNH 29.92" in text
 
 
+def test_build_atis_zero_cloud_base_is_cavok(airfield):
+    # DCS reports clouds.base = 0 when there is no layer (or it is unset).
+    # With 80 km visibility that is CAVOK, not "clouds 0 meters".
+    weather = {"wind_dir": 30, "wind_speed_ms": 4, "qnh_mmhg": 760,
+               "visibility_m": 80000, "clouds_base_m": 0,
+               "temperature_c": 18}
+    report = build_atis(airfield, weather)
+    assert report.cavok
+    text = report.broadcast()
+    assert "CAVOK" in text
+    assert "clouds 0" not in text
+    assert "visibility" not in text
+
+
+def test_build_atis_low_vis_omits_zero_cloud_base(airfield):
+    weather = {"wind_dir": 30, "wind_speed_ms": 4, "qnh_mmhg": 760,
+               "visibility_m": 3000, "clouds_base_m": 0,
+               "temperature_c": 18}
+    report = build_atis(airfield, weather)
+    assert not report.cavok
+    text = report.broadcast()
+    assert "visibility 3 kilometers" in text
+    assert "clouds 0" not in text
+
+
 def test_build_atis_non_cavok(airfield):
     weather = {"wind_dir": 250, "wind_speed_ms": 5, "qnh_mmhg": 760,
                "visibility_m": 3000, "clouds_base_m": 300,

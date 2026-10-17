@@ -152,7 +152,8 @@
         "ground": "6",
         "tower": "7",
         "control": "8",
-        "atis": "21"
+        "atis": "21",
+        "stingray": "3"
       },
       "break_directions": {
         "25": "left",
@@ -252,7 +253,8 @@
         "ground": "6",
         "tower": "7",
         "control": "8",
-        "atis": "21"
+        "atis": "21",
+        "stingray": "3"
       },
       "_attribution": "Gudauta (UG23) aerodrome chart, Hoggit DCS World Wiki (TERPS chart). Frequencies use the Master Arms common UHF channel plan (Ch 6 Ground 250.000, Ch 7 Tower 270.000, Ch 8 Control 257.000, Ch 21 ATIS 270.500) so every airfield shares one radio setup. Taxi routes are best-effort from the chart taxiway letters; verify."
     }

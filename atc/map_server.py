@@ -69,8 +69,8 @@ COMM_MAX = 1000
 TRACKS_SAVE_INTERVAL = 10.0
 
 # Where saved sortie snapshots ("debriefs") live, and their filename pattern:
-#   <DEBRIEF_DIR>/tracks_<airfield>_<YYYYMMDD-HHMMSS>.json
-# A fresh file per session, so a tester can later pick the exact event.
+#   <DEBRIEF_DIR>/tracks_<airfield>_<player>_<callsign>_<YYYYMMDD-HHMMSS>.json
+# A fresh file per pilot spawn, so a tester can later pick the exact sortie.
 DEBRIEF_DIR = Path(__file__).with_name("debrief")
 
 # Process exit code the bot uses to ask its supervisor (run_server.sh) to
@@ -136,16 +136,28 @@ class ControlPlane:
 
 
 
-def debrief_filename(airfield: str, when: float | None = None) -> str:
-    """A timestamped debrief filename for an airfield (one file per session).
+def _debrief_slug(text: str) -> str:
+    """Filename-safe slug (alnum kept, everything else becomes a hyphen)."""
+    return "".join(c if c.isalnum() else "-" for c in (text or "").lower()).strip("-")
 
-    Keyed by airfield + start time (not callsign: one file holds every
-    callsign's trail). E.g. ``tracks_gudauta_20261010-105236.json``.
+
+def debrief_filename(airfield: str, when: float | None = None,
+                     player: str = "", callsign: str = "") -> str:
+    """A timestamped debrief filename (one file per pilot spawn).
+
+    ``tracks_<airfield>_<player>_<callsign>_<YYYYMMDD-HHMMSS>.json``.
+    Player/callsign are omitted when empty so a session-wide or replay name
+    still works (``tracks_gudauta_20261010-105236.json``).
     """
-    slug = "".join(c if c.isalnum() else "-" for c in airfield.lower()).strip("-")
     stamp = (time.strftime("%Y%m%d-%H%M%S", time.localtime(when))
              if when is not None else time.strftime("%Y%m%d-%H%M%S"))
-    return f"tracks_{slug}_{stamp}.json"
+    parts = ["tracks", _debrief_slug(airfield)]
+    if player:
+        parts.append(_debrief_slug(player))
+    if callsign:
+        parts.append(_debrief_slug(callsign))
+    parts.append(stamp)
+    return "_".join(p for p in parts if p) + ".json"
 
 
 class TrackHistory:
@@ -254,12 +266,22 @@ class TrackHistory:
         """
         self._active = set(active)
 
-    def to_json(self) -> dict:
-        """Serialisable snapshot of every trail + comm marker."""
+    def to_json(self, callsigns: set[str] | None = None) -> dict:
+        """Serialisable snapshot of every trail + comm marker.
+
+        Pass `callsigns` to keep only those aircraft (one pilot's spawn).
+        """
+        if callsigns is None:
+            track_items = self._tracks.items()
+            comm_items = self._comms.items()
+        else:
+            track_items = ((cs, pts) for cs, pts in self._tracks.items()
+                           if cs in callsigns)
+            comm_items = ((cs, calls) for cs, calls in self._comms.items()
+                          if cs in callsigns)
         return {
-            "tracks": {cs: [list(p) for p in pts]
-                       for cs, pts in self._tracks.items()},
-            "comms": {cs: list(c) for cs, c in self._comms.items()},
+            "tracks": {cs: [list(p) for p in pts] for cs, pts in track_items},
+            "comms": {cs: list(c) for cs, c in comm_items},
         }
 
     def load_json(self, data: dict) -> None:
@@ -332,9 +354,9 @@ class TrackHistory:
         return [c for c in (data.get("chatter") or []) if isinstance(c, dict)]
 
 
-# Keep at most this many debrief files (debriefs are saved every session now,
-# so the volume must not grow without bound). Oldest are pruned after a save.
-DEBRIEF_KEEP = 20
+# Keep at most this many debrief files (one file per pilot spawn, so a
+# multi-ship session writes several). Oldest are pruned after a save.
+DEBRIEF_KEEP = 40
 
 
 def prune_debriefs(keep: int = DEBRIEF_KEEP, directory: Path | None = None) -> None:
@@ -515,7 +537,8 @@ class MapService:
                  tracks_file: Path | str | None = None,
                  replay: bool = False,
                  control: "ControlPlane | None" = None,
-                 log: Callable[[str], None] | None = None):
+                 log: Callable[[str], None] | None = None,
+                 debrief_dir: Path | str | None = None):
         self.airfield = airfield
         self.brain = brain
         self.state = state
@@ -538,8 +561,12 @@ class MapService:
         # default, stop recording/overwriting, so a tester can review a saved
         # event (see `replay`).
         self.tracks_file = Path(tracks_file) if tracks_file else None
+        self.debrief_dir = Path(debrief_dir) if debrief_dir else None
+        # player name -> current spawn file / callsign (one debrief per spawn)
+        self._spawn_files: dict[str, Path] = {}
+        self._spawn_callsigns: dict[str, str] = {}
         self._last_saved = 0.0
-        existed = self.tracks_file is not None and self.tracks_file.exists()
+        existed = self.tracks_file is not None and self.tracks_file.is_file()
         if existed:
             self.tracks.load(self.tracks_file)
             # Restore the saved radio log too, so the chatter window mirrors a
@@ -554,12 +581,20 @@ class MapService:
         self._tower_pos: list[float] | None = None
 
     def save_tracks(self) -> None:
-        """Write the current trails to `tracks_file` (no-op if unconfigured).
+        """Write current trails to per-spawn files, or `tracks_file`.
 
         An empty history is **not** written, so a run that captured no trail
         never leaves an empty debrief file behind (which would show up in the
         map's load dropdown as an unusable entry).
         """
+        if self.replay:
+            return
+        if self._spawn_files:
+            with self.lock:
+                for player, path in list(self._spawn_files.items()):
+                    self._write_spawn(player, path)
+            prune_debriefs(directory=self.debrief_dir)
+            return
         if self.tracks_file is not None:
             with self.lock:
                 if self.tracks.is_empty():
@@ -573,9 +608,84 @@ class MapService:
             # Debriefs are saved every session now; keep the newest few only.
             prune_debriefs()
 
+    def _spawn_track_keys(self, player: str) -> set[str]:
+        """Callsigns (and raw player name) whose trail belongs to this spawn."""
+        known = self.brain.callsign_for_speaker(player)
+        if known and known != player:
+            self._spawn_callsigns[player] = known
+        keys = {player}
+        cs = self._spawn_callsigns.get(player) or ""
+        if cs:
+            keys.add(cs)
+        return keys
+
+    def _filter_chatter(self, player: str, callsign: str) -> list[dict]:
+        names = {player.lower()}
+        if callsign:
+            names.add(callsign.lower())
+        return [e for e in self._chatter
+                if (e.get("who") or "").lower() in names
+                or (e.get("callsign") or "").lower() in names]
+
+    def _write_spawn(self, player: str, path: Path) -> None:
+        keys = self._spawn_track_keys(player)
+        data = self.tracks.to_json(keys)
+        if not data.get("tracks"):
+            return
+        callsign = self._spawn_callsigns.get(player) or ""
+        data["player"] = player
+        data["callsign"] = callsign
+        with self._chatter_lock:
+            data["chatter"] = self._filter_chatter(player, callsign)
+        self.tracks.save_json(data, path)
+
+    def begin_spawn(self, player: str, callsign: str = "",
+                    unit: str = "") -> None:
+        """Open a new debrief file for this player's DCS spawn."""
+        if self.replay or self.debrief_dir is None or not player:
+            return
+        cs = callsign if callsign and callsign != player else ""
+        name = debrief_filename(self.airfield.name, player=player, callsign=cs)
+        path = self.debrief_dir / name
+        if path.exists():
+            stem, n = path.stem, 2
+            while True:
+                cand = path.with_name(f"{stem}-{n}.json")
+                if not cand.exists():
+                    path = cand
+                    break
+                n += 1
+        extra = f" unit={unit!r}" if unit else ""
+        with self.lock:
+            if player in self._spawn_files:
+                self._end_spawn_locked(player)
+            self._spawn_files[player] = path
+            self._spawn_callsigns[player] = cs
+        self.log(f"[*] Debrief spawn: {path.name}  player={player}"
+                 f"  callsign={cs or '-'}{extra}")
+
+    def end_spawn(self, player: str) -> None:
+        """Flush and close this player's current spawn debrief."""
+        if not player:
+            return
+        with self.lock:
+            self._end_spawn_locked(player)
+
+    def _end_spawn_locked(self, player: str) -> None:
+        path = self._spawn_files.pop(player, None)
+        keys = self._spawn_track_keys(player)
+        if path is not None:
+            self._write_spawn(player, path)
+            for key in keys:
+                self.tracks.forget(key)
+                self._last_phase.pop(key, None)
+        self._spawn_callsigns.pop(player, None)
+
     def _maybe_save_tracks(self) -> None:
         """Autosave the trails at most every `TRACKS_SAVE_INTERVAL` seconds."""
-        if self.tracks_file is None or self.replay:
+        if self.replay:
+            return
+        if self.tracks_file is None and not self._spawn_files:
             return
         now = time.monotonic()
         if now - self._last_saved < TRACKS_SAVE_INTERVAL:
@@ -590,9 +700,10 @@ class MapService:
         called (a live monitor tick or an open map page). This timer guarantees
         the debrief file is refreshed on a fixed cadence regardless, so a
         missed/blocked caller — or a crash — still leaves a recent file on disk.
-        No-op for a replay or when no `tracks_file` is configured.
+        No-op for a replay or when neither `tracks_file` nor `debrief_dir`
+        is configured.
         """
-        if self.tracks_file is None or self.replay:
+        if self.replay or (self.tracks_file is None and self.debrief_dir is None):
             return
 
         def _loop() -> None:
@@ -1032,6 +1143,7 @@ def start_map_server(airfield: Airfield, brain: AtcBrain,
                      tracks_file: Path | str | None = None,
                      replay: bool = False,
                      control: "ControlPlane | None" = None,
+                     debrief_dir: Path | str | None = None,
                      ) -> tuple[ThreadingHTTPServer | None, MapService]:
     """Start the map server on a daemon thread.
 
@@ -1040,23 +1152,27 @@ def start_map_server(airfield: Airfield, brain: AtcBrain,
     The `service` is returned so the bot can push chatter-log entries to it.
 
     `tracks_file`, when set, restores saved trails on startup and autosaves them
-    during the run (plus once at process exit), so a completed sortie survives a
-    bot restart for after-action review.
+    during the run (plus once at process exit). `debrief_dir` writes one file
+    per pilot spawn instead of a single session file.
     """
     service = MapService(airfield, brain, state, lock, basemap=basemap,
                          tracks_file=tracks_file, replay=replay, control=control,
-                         log=log)
-    if tracks_file is not None:
-        if service.replay:
-            log(f"[*] Debrief replay (read-only): {Path(tracks_file)}")
-        else:
-            import atexit
-            atexit.register(service.save_tracks)
-            # A wall-clock timer, so the debrief is refreshed even if the
-            # monitor tick or the map page never calls record()/snapshot().
-            service.start_autosave()
+                         log=log, debrief_dir=debrief_dir)
+    if service.replay and tracks_file is not None:
+        log(f"[*] Debrief replay (read-only): {Path(tracks_file)}")
+    elif tracks_file is not None or debrief_dir is not None:
+        import atexit
+        atexit.register(service.save_tracks)
+        # A wall-clock timer, so the debrief is refreshed even if the
+        # monitor tick or the map page never calls record()/snapshot().
+        service.start_autosave()
+        if tracks_file is not None:
             log(f"[*] Flight-track debrief file: {Path(tracks_file)} "
                 f"(autosave every {TRACKS_SAVE_INTERVAL:.0f}s)")
+        else:
+            log(f"[*] Flight-track debrief dir: {Path(debrief_dir)} "
+                f"(one file per pilot spawn, "
+                f"autosave every {TRACKS_SAVE_INTERVAL:.0f}s)")
     try:
         server = ThreadingHTTPServer((host, port), make_handler(service))
     except OSError as error:

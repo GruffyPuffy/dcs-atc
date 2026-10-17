@@ -590,14 +590,15 @@ def main() -> None:
     map_service = None
     if args.map_port:
         from map_server import (start_map_server, ControlPlane, DEBRIEF_DIR,
-                                debrief_filename, RESTART_EXIT_CODE)
+                                RESTART_EXIT_CODE)
         tracks_file = args.replay or args.tracks_file
+        debrief_dir = None
         if tracks_file is None and not args.no_debrief:
-            # One named snapshot per session: atc/debrief/tracks_<field>_<time>
-            # .json, so a tester can later pick exactly this event to review.
+            # One named snapshot per pilot spawn:
+            # atc/debrief/tracks_<field>_<player>_<callsign>_<time>.json
             # Saved by default (not only with --debug); --no-debrief opts out.
             DEBRIEF_DIR.mkdir(parents=True, exist_ok=True)
-            tracks_file = DEBRIEF_DIR / debrief_filename(airfield.name)
+            debrief_dir = DEBRIEF_DIR
 
         # Web-driven restart / airfield switch. The map server runs inside this
         # process, so it cannot restart the bot itself: it writes the requested
@@ -626,7 +627,7 @@ def main() -> None:
         _server, map_service = start_map_server(
             airfield, brain, state, args.map_port,
             host=args.map_host, lock=lock, log=log, tracks_file=tracks_file,
-            replay=bool(args.replay), control=control)
+            replay=bool(args.replay), control=control, debrief_dir=debrief_dir)
 
     # Last speaker to transmit, so a TX mirror can be addressed to them.
     _debug_reply_to = [""]
@@ -717,6 +718,7 @@ def main() -> None:
         go-arounds when the runway is occupied on final."""
         greeted: set[str] = set()  # players already sent the radio setup
         seen_players: set[str] = set()
+        seen_units: dict[str, str] = {}
         while True:
             time.sleep(2.0)
             if state is None:
@@ -745,17 +747,36 @@ def main() -> None:
                 for name in list(seen_players - online):
                     log(f"PLAYER LEFT: {name}")
                     seen_players.discard(name)
+                    seen_units.pop(name, None)
+                    if map_service is not None:
+                        map_service.end_spawn(name)
                 for ac in players:
-                    if not ac.player or ac.player in seen_players:
+                    if not ac.player:
                         continue
-                    seen_players.add(ac.player)
+                    prev_unit = seen_units.get(ac.player)
+                    respawned = (prev_unit is not None
+                                 and prev_unit != ac.callsign)
+                    if ac.player in seen_players and not respawned:
+                        continue
                     seeded = slot_callsign(ac.callsign) or "-"
                     with lock:
                         known = brain.callsign_for_speaker(ac.player)
-                    if known == ac.player:
-                        known = "-"
-                    log(f"PLAYER JOIN: {ac.player}  type={ac.type}  "
-                        f"unit={ac.callsign!r}  slot={seeded}  known={known}")
+                    callsign = "" if known == ac.player else known
+                    if respawned:
+                        log(f"PLAYER RESPAWN: {ac.player}  "
+                            f"{prev_unit!r} -> {ac.callsign!r}  "
+                            f"slot={seeded}  known={callsign or '-'}")
+                        if map_service is not None:
+                            map_service.end_spawn(ac.player)
+                    else:
+                        seen_players.add(ac.player)
+                        log(f"PLAYER JOIN: {ac.player}  type={ac.type}  "
+                            f"unit={ac.callsign!r}  slot={seeded}  "
+                            f"known={callsign or '-'}")
+                    seen_units[ac.player] = ac.callsign
+                    if map_service is not None:
+                        map_service.begin_spawn(
+                            ac.player, callsign, unit=ac.callsign)
                 # Greet each newly-seen pilot with the radio setup, so they can
                 # tune in without reading the docs. Sent once per player (by
                 # DCS name) via the in-game message feed. Retry until the bridge
@@ -885,6 +906,15 @@ def main() -> None:
                     if climb:
                         log(f"CLIMB: {callsign} ({ac.player})")
                         speak(climb, freq=freq_for(Controller.CONTROL),
+                              controller=Controller.CONTROL)
+                    # Stingray handoff: once the departure is at Angels 15,
+                    # Control pushes them to AWACS on channel 3 (SOP). We do
+                    # not simulate Stingray, but the call still goes out.
+                    with lock:
+                        stingray = brain.check_stingray_handoff(callsign, tr)
+                    if stingray:
+                        log(f"STINGRAY: {callsign} ({ac.player})")
+                        speak(stingray, freq=freq_for(Controller.CONTROL),
                               controller=Controller.CONTROL)
                     # Arrival descent: after the far-out step-down, Control
                     # issues the final "descend to 1500 feet" once the aircraft

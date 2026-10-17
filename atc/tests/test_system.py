@@ -105,6 +105,28 @@ def test_control_climbs_departure_on_radar_once_clear_of_ctr(airfield, brain):
     assert brain.check_departure_climb("Colt 1", sc._track()) is None
 
 
+def test_stingray_handoff_once_at_angels_15(airfield, brain):
+    # MA SOP: after the climb, Control pushes to Stingray on channel 3 once
+    # the aircraft is at Angels 15. We do not simulate AWACS, but the call
+    # still fires. The climb readback is silent (next instruction is this).
+    sc = _scenario(airfield, brain).at_threshold("25")
+    sc.say("Tower, Colt 1, ready for departure", Controller.TOWER)
+    sc.say("Line up and wait 25, Colt 1", Controller.TOWER)
+    sc.say("Tower, Colt 1, airborne", Controller.TOWER)
+    sc.at_gate("East").set_alt(airfield.elevation_ft + 1500)
+    r = sc.say("Control, Colt 1, at 1500 ft", Controller.CONTROL)
+    assert "climb to Angels 15" in r
+    assert sc.say("Climbing to Angels 15, Colt 1", Controller.CONTROL) == ""
+    assert brain.check_stingray_handoff("Colt 1", sc._track()) is None
+    sc.set_alt(12000)
+    assert brain.check_stingray_handoff("Colt 1", sc._track()) is None
+    sc.set_alt(15000)
+    call = brain.check_stingray_handoff("Colt 1", sc._track())
+    assert call and "contact Stingray" in call and "channel 3" in call
+    assert brain.pilots["Colt 1"].stingray_handoff_announced
+    assert brain.check_stingray_handoff("Colt 1", sc._track()) is None
+
+
 def test_light_path_return_and_landing(airfield, brain):
     sc = _scenario(airfield, brain).at_gate("North")
     r = sc.say("Kutaisi Control, Colt 1, inbound 35 miles north at Angels 12",

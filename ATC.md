@@ -99,6 +99,12 @@ spawned slot is named after the airbase, type and index
 (`Kutaisi_F/A-18C Lot 20_2- 1`) and carries no callsign at all, so those pilots
 are learned from what they say, as above.
 
+The callsign is **set once per DCS spawn**. Caveman in `Adder11` stays
+`Adder 1` for that seat — STT cannot jump them to Adder 2 because a garbled
+phrase sounded like another flight (`"over to"`). To fly a different callsign
+they must **respawn in another slot** and check in again. Leaving the server, or
+a DCS unit-name change, clears the binding so the new spawn can seed or announce.
+
 The two are linked but neither implies the other: the DCS player name is **not**
 in the callsign, and the SRS name is **not** in the position data as a callsign.
 SRS reports the DCS player name as its client name (the SRS client's
@@ -168,6 +174,7 @@ step on the next controller's first call.
 | "Tower, Colt 1, ready for departure" (**while an arrival**) | **wrong call** | "Colt 1, Tower, negative, report runway in sight for landing." (never clears a takeoff for a pilot who is inbound/landing) |
 | "Line up and wait 25, Colt 1" | **readback** | *(silent)* — then, once the aircraft is actually **lined up** (at the threshold, pointing down the runway, stationary), the monitor issues "cleared for takeoff runway 25" unprompted. The clearance does **not** follow the readback alone: the pilot has only acknowledged the instruction, they may still be taxiing on. (A right turnout is spoken, a left turnout is the default and is not, and a straight-out departure gets "fly runway heading".) |
 | "Control, Colt 1, at 1500 ft" | **departure check-in** | "Colt 1, Control, radar contact, climb to Angels 15." |
+| "Climbing to Angels 15, Colt 1" | **climb readback** | *(silent)* — then, once at Angels 15, "Colt 1, Control, contact Stingray on channel 3." (AWACS is not simulated) |
 | "Kutaisi Control, Colt 1, inbound 35 miles north at Angels 12" | **inbound** | "Colt 1, Control, radar contact, turn right heading 150 to join via Entry East." (heading **and turn** computed from the live position; a pilot already pointing at the gate gets "fly heading 150" instead; entry is the best/straight-in gate for runway 25) |
 | "150 to join via Entry East, Colt 1" | **readback** | "Colt 1, Control, descend and maintain 5000 feet." (far out) / "…descend to 1500 feet." (within 15 NM of the entry) — the descent is **stepped by distance** |
 | "Descend to 1500 feet, Colt 1" | **readback** | *(silent if still high)* — then, once at 1500 ft, "Colt 1, Control, contact Tower on channel 7." unprompted. Already at 1500 on the readback → handoff immediately. |
@@ -573,6 +580,7 @@ being asked. Each fires **once per event** and re-arms when the condition clears
 | **Runway incursion** | On the runway without a takeoff/landing clearance | "…you are on the runway without clearance, vacate immediately." |
 | **Departure handoff** | A departure is past the runway (Tower phase) | "…contact Control on channel 8." (Tower initiates, unprompted — the pilot need not report "airborne") |
 | **Departure climb** | A departure that checked in with Control while still inside the CTR has now left the zone | "…radar contact, climb to Angels 15." (Control watches on radar; no report needed) |
+| **Stingray handoff** | A departure that has been climbed is now at Angels 15 | "…contact Stingray on channel 3." (AWACS is not simulated; the SOP call still fires on Control) |
 
 The altitude-bust check uses a **horizontal-only** containment test
 (`ControlZone.contains_horizontal`) so an aircraft inside the CTR footprint but
@@ -974,9 +982,11 @@ and the bot's reply. Frequencies (AM): **ATIS 270.500**, **Ground 250.000**,
 | 9 | Tower | "Line up and wait 25, Colt 1." | *(silent)* — then, once you are lined up on the runway, "Colt 1, Tower, cleared for takeoff runway 25." |
 | 10 | Tower | "Tower, Colt 1, airborne." | "Colt 1, Tower, contact Control on channel 8." |
 | 11 | Control | "Control, Colt 1, at 1500 ft." | "Colt 1, Control, radar contact, climb to Angels 15." |
+| 12 | Control | "Climbing to Angels 15, Colt 1." | *(silent)* — then, once at Angels 15, "Colt 1, Control, contact Stingray on channel 3." |
 
 You are now clear of the CTR — the departure is complete. (Steps 2–7 are the
-Ground phase; 8–10 Tower; 11 Control.)
+Ground phase; 8–10 Tower; 11–12 Control. Stingray/AWACS is not simulated;
+stay on Control until you call inbound.)
 
 ### Arrival
 

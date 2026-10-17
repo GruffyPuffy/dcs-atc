@@ -481,18 +481,20 @@ def test_departure_exit_prefers_the_freest_gate(brain, airfield):
 
 
 def test_control_climb_issued_once_then_readback(brain):
-    """A second level report is acknowledged, not re-cleared (no loop)."""
+    """A second level report is silent, not re-cleared (no loop, no roger).
+
+    MA SOP next step is the Stingray handoff at Angels 15, so the climb
+    readback has a next instruction and must not get a bare "roger".
+    """
     first = brain.handle("Control, Colt 1, airborne 5 miles east climbing",
                          controller=Controller.CONTROL)
     assert "climb to Angels" in first
     assert brain.pilots["Colt 1"].climb_issued
     second = brain.handle("Climbing angels 15, Colt 1",
                           controller=Controller.CONTROL)
-    assert "climb to Angels" not in second
-    assert "readback correct" not in second.lower()
-    assert "roger" in second.lower()
+    assert second == ""
     third = brain.handle("Colt 1 at angels 16", controller=Controller.CONTROL)
-    assert "climb to Angels" not in third
+    assert third == ""
 
 
 def test_control_join_readback_descends(brain):
@@ -794,19 +796,46 @@ def test_sync_speakers_drops_the_seed_when_the_slot_goes_away(brain):
     assert brain.callsign_for_speaker("Caveman") == "Caveman"
 
 
-def test_radio_learned_binding_beats_the_slot_seed(brain):
-    """What the pilot calls themselves wins over the slot-name default.
+def test_radio_cannot_steal_a_live_slot_callsign(brain):
+    """A DCS slot is the seat for this spawn; STT cannot jump the pilot.
 
-    The poll's slot name is only a guess from the unit name; the callsign the
-    pilot actually uses is authoritative.
+    Changing flight requires a respawn in another slot, then a check-in.
     """
     brain.sync_speakers([("Caveman", "Chevy11")])
     assert brain.callsign_for_speaker("Caveman") == "Chevy 1"
-    brain.remember_speaker("Caveman", "Ford 1")   # pilot re-identifies
+    brain.remember_speaker("Caveman", "Ford 1")
     brain.sync_speakers([("Caveman", "Chevy11")])
-    assert brain.callsign_for_speaker("Caveman") == "Ford 1"
-    # ...but the slot's flight name is still recognised.
+    assert brain.callsign_for_speaker("Caveman") == "Chevy 1"
     assert brain.callsigns.extract("Chevy one, request taxi") == "Chevy 1"
+
+
+def test_stt_over_to_does_not_become_adder_two(brain):
+    """Regression: 'over to' fuzzy-matched Adder + number-word 'to' = 2."""
+    brain.sync_speakers([("Caveman", "Adder11")])
+    assert brain.extract_callsign("over to", "Caveman") == "Adder 1"
+    extracted = brain.extract_callsign("over to", "Caveman")
+    brain.remember_speaker("Caveman", extracted)
+    assert brain.callsign_for_speaker("Caveman") == "Adder 1"
+    brain.handle("Climbing to Angels 15, over to", speaker="Caveman",
+                 controller=Controller.CONTROL)
+    assert "Adder 2" not in brain.pilots
+
+
+def test_respawn_in_another_flight_reseeds_callsign(brain):
+    """A new DCS unit name is a new spawn; the previous seat is released."""
+    brain.sync_speakers([("Caveman", "Adder11")])
+    assert brain.callsign_for_speaker("Caveman") == "Adder 1"
+    brain.remember_speaker("Caveman", "Ford 1")
+    brain.sync_speakers([("Caveman", "Adder21")])
+    assert brain.callsign_for_speaker("Caveman") == "Adder 2"
+
+
+def test_radio_learned_binding_is_dropped_when_the_player_leaves(brain):
+    """Leaving the server ends the spawn, including a dynamic-slot check-in."""
+    brain.sync_speakers([("Caveman", "Kutaisi_F/A-18C Lot 20_2- 1")])
+    brain.remember_speaker("Caveman", "Ford 1")
+    brain.sync_speakers([])
+    assert brain.callsign_for_speaker("Caveman") == "Caveman"
 
 
 def test_a_wiped_identity_would_warn_an_empty_uncleared_record(brain):
