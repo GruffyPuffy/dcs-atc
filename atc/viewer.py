@@ -223,6 +223,11 @@ def debrief_snapshot(path: Path, airfield, basemap: str | None) -> dict:
     if af["basemap"]["url"].startswith("http://"):
         af["basemap"] = dict(af["basemap"],
                              url="/tiles/" + af["basemap"]["url"])
+    # Same for the WMS vector overlay (airbases/towns/navaids): map.js builds
+    # its GetMap URL from wms.url, so route it through the proxy too.
+    wms = af["basemap"].get("wms")
+    if wms and str(wms.get("url", "")).startswith("http://"):
+        af["basemap"]["wms"] = dict(wms, url="/tiles/" + wms["url"])
     return {
         "airfield": af,
         "aircraft": aircraft,
@@ -466,7 +471,8 @@ def make_handler(service: "ViewerService"):
                 self.close_connection = True
 
         def _route(self) -> None:
-            path = urlsplit(self.path).path
+            split = urlsplit(self.path)
+            path = split.path
             if path == "/api/atc":
                 # Replay-only viewer: /api/atc returns the newest debrief so
                 # the shared map.js render path still works, but there is no
@@ -501,8 +507,14 @@ def make_handler(service: "ViewerService"):
                     separators=(",", ":")).encode(),
                     "application/json; charset=utf-8")
                 return
-            if path.startswith("/tiles/") and path.endswith(".png"):
-                tile = _proxy_tile(service, path[len("/tiles/"):])
+            if path.startswith("/tiles/http://"):
+                # The path IS the origin URL (tiles end in .png; WMS GetMap
+                # URLs end in mapserv with the params in the query string,
+                # which map.js appends — forward that too).
+                url = path[len("/tiles/"):]
+                if split.query:
+                    url += "?" + split.query
+                tile = _proxy_tile(service, url)
                 if tile is None:
                     self.send_error(404)
                     return
