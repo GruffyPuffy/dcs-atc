@@ -220,6 +220,45 @@ validated against `airspace.json`, so the endpoint can never launch an arbitrary
 > Keep the map/control endpoints on your LAN or VPN only — never forward them to
 > the internet.
 
+### Public viewer (read-only, internet-safe)
+
+To share the map with people who must **not** be able to restart or stop the
+bot, run the separate viewer instead. It is a GET-only sidecar that reads the
+bot's debrief files: "live" is the newest debrief (the bot autosaves one per
+pilot spawn every ~10 s), and the debrief dropdown reviews any saved sortie.
+The active runway and wind are recovered from the sortie's own radio chatter
+(ATIS / "runway 07 in use"), so the zones are drawn for the runway that was
+actually in use. There is no mutating endpoint (the only POST is the login
+verification), so no request can restart, stop or change anything.
+
+Credentials live in an external file (not in the repo) with one or more
+accounts — a visitor must guess **both** the username and the password, and
+the page shows a proper login dialog instead of the browser's basic-auth
+prompt. In the Docker setup the file is `atc/.viewer-auth.json` inside the
+`atc-data` volume; the entrypoint creates it on first run from
+`ATC_VIEWER_USER` / `ATC_VIEWER_PASSWORD` (set them in `deploy/dcs/.env`;
+if unset, a random password is generated and printed once to the container
+log). Locally, just create the file yourself:
+
+    # atc/.viewer-auth.json  (gitignored; edit freely, no restart needed)
+    { "users": { "caveman": "tower3", "student": "radio7" } }
+
+    cd atc
+    uv run viewer.py --port 8443
+
+(In Docker the viewer is started for you by `run_server.sh` inside the bot
+container and published on port 18443 — see INSTALL.)
+
+A successful login sets a session cookie (24 h). Basic auth still works for
+API clients (`curl -u user:pass ...`). HTTPS is on by default (self-signed
+certificate, generated on first start); `--no-tls` serves plain HTTP for
+LAN testing.
+
+It binds `127.0.0.1` by default — expose it via a reverse proxy or tunnel, or
+pass `--host 0.0.0.0` to face the internet directly (then TLS + strong
+credentials are not optional). The bot's own map server (with its Restart/Stop
+authority) must stay on the LAN regardless.
+
 License
 -------
 

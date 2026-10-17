@@ -36,6 +36,13 @@ atc/debrief/
 # Web-driven restart state file (written by the map, read by run_server.sh)
 atc/.control
 
+# Viewer credentials (user/password accounts for the public viewer)
+atc/.viewer-auth.json
+# Viewer TLS keypair + tile cache (generated at runtime)
+atc/.viewer-cert.pem
+atc/.viewer-key.pem
+atc/.viewer-tiles/
+
 # TopGun easter egg: personal marker + dropped-in clips (never committed)
 atc/topgun.txt
 topgun.txt

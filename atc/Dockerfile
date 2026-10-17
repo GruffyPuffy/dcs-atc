@@ -8,7 +8,7 @@ FROM python:3.12-slim
 # gosu: drop from root to the host UID/GID after fixing volume ownership.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        git ca-certificates libgomp1 gosu \
+        git ca-certificates libgomp1 gosu openssl \
     && rm -rf /var/lib/apt/lists/*
 
 # uv (fast, reproducible installs from uv.lock).

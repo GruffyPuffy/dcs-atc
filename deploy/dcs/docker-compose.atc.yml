@@ -34,12 +34,25 @@ services:
       ATC_STATE_HOST: "dcs-server"
       ATC_STATE_PORT: "10309"
       ATC_MAP_PORT: "8090"
+      # Public viewer (read-only debrief replay). ATC_VIEWER=0 disables it.
+      # It binds the container's loopback by default; publish the port below
+      # to reach it from the host/LAN. TLS is on by default (self-signed).
+      # Credentials for the auto-created auth file (first run only): unset
+      # means a random password printed once to the container log.
+      ATC_VIEWER: "${ATC_VIEWER:-1}"
+      ATC_VIEWER_PORT: "18443"
+      ATC_VIEWER_HOST: "0.0.0.0"
+      ATC_VIEWER_USER: "${ATC_VIEWER_USER:-}"
+      ATC_VIEWER_PASSWORD: "${ATC_VIEWER_PASSWORD:-}"
       # Match the host user so volume files are not root-owned.
       PUID: "${PUID:?Set PUID in .env}"
       PGID: "${PGID:?Set PGID in .env}"
     ports:
       # Map view: LAN/VPN only — never forward this to the internet.
       - "8090:8090/tcp"
+      # Public viewer (read-only, login required). This one is safe to
+      # forward to the internet: GET-only + login + TLS.
+      - "18443:18443/tcp"
     volumes:
       # Code, venv, Whisper model cache and voices all persist here.
       - atc-data:/data/atc

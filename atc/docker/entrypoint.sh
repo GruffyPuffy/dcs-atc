@@ -69,7 +69,35 @@ uv run python -m piper.download_voices \
     en_US-amy-medium en_US-ryan-medium en_US-lessac-medium en_GB-alan-medium \
     --download-dir voices || log "voice download failed (will retry next start)"
 
-# --- 4. Run -----------------------------------------------------------------
+# --- 4. Viewer credentials ---------------------------------------------------
+# The public viewer (started by run_server.sh below) needs an auth file. It is
+# created here on a fresh volume only — an existing file is never touched.
+# Set ATC_VIEWER_USER / ATC_VIEWER_PASSWORD in deploy/dcs/.env to choose the
+# account. If unset, a random password is generated and printed ONCE to the
+# log (the username defaults to "viewer") — nothing personal or guessable is
+# ever baked into the image.
+AUTH_FILE="$ATC_DIR/atc/.viewer-auth.json"
+if [[ ! -f "$AUTH_FILE" ]]; then
+    VUSER="${ATC_VIEWER_USER:-viewer}"
+    VPASS="${ATC_VIEWER_PASSWORD:-}"
+    if [[ -z "$VPASS" ]]; then
+        VPASS="$(python3 -c 'import secrets; print(secrets.token_urlsafe(9))')"
+        log "No ATC_VIEWER_PASSWORD set — generated a random one (printed below)."
+        log "Set ATC_VIEWER_USER / ATC_VIEWER_PASSWORD in deploy/dcs/.env to"
+        log "choose your own; this log line is the only place it appears:"
+        log "  viewer login -> user: $VUSER  password: $VPASS"
+    fi
+    log "Creating viewer auth file: $AUTH_FILE (user: $VUSER)"
+    python3 - "$VUSER" "$VPASS" "$AUTH_FILE" <<'PY'
+import json, sys
+user, password, path = sys.argv[1:4]
+with open(path, "w", encoding="utf-8") as f:
+    json.dump({"users": {user: password}}, f)
+    f.write("\n")
+PY
+fi
+
+# --- 5. Run -----------------------------------------------------------------
 # run_server.sh loops on exit code 75 (web-driven restart) and reads the
 # airfield from atc/.control, so the map's Restart/Stop buttons work.
 # The SRS host comes from ATC_SRS_HOST (start_bot.sh reads it); the state host

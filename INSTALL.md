@@ -17,7 +17,7 @@ shared network:
 | --- | --- | --- | --- |
 | `dcs-atc-server` | DCS dedicated server | `aterfax/dcs-world-dedicated-server` | 10308 tcp/udp, 3001 (Webtop, LAN), 10309 (localhost) |
 | `dcs-atc-srs` | SRS server | `omltcat/dcs-srs-server` | 5002 tcp/udp, 8080 (localhost) |
-| `dcs-atc-bot` | ATC bot | built from `atc/Dockerfile` | 8090 (map, LAN/VPN) |
+| `dcs-atc-bot` | ATC bot | built from `atc/Dockerfile` | 8090 (map, LAN/VPN), 18443 (public viewer, login) |
 
 DCS and SRS are always-on (started by `./scripts/dcs.sh install`). The ATC bot
 is optional and started separately (`./scripts/dcs.sh atc-up`) — so you can run
@@ -74,7 +74,15 @@ The container is a thin runtime: on start it clones/updates the repo into a
 persistent volume, syncs the Python env, downloads the Whisper model + Piper
 voices, then runs the bot. So a restart always runs the latest `main`, and
 nothing is baked into the image. It reaches DCS and SRS by their compose service
-names, and serves the map on `http://<host>:8090/` (LAN/VPN only).
+names, and serves the map on `http://<host>:8090/` (LAN/VPN only). It also
+starts the **public viewer** on `https://<host>:18443/` (read-only debrief
+replay, login required — see the *Public viewer* section of the
+[README](README.md)). The viewer restarts with the bot (same supervisor loop),
+so an airfield switch updates its zones too. On a fresh volume the entrypoint
+creates the viewer auth file from `ATC_VIEWER_USER` / `ATC_VIEWER_PASSWORD`
+(set them in `deploy/dcs/.env`); if unset, a random password is generated and
+printed once to the container log (`./scripts/dcs.sh atc-logs`). Disable the
+viewer with `ATC_VIEWER=0` (in the compose `.env`).
 
     ./scripts/dcs.sh atc-logs          # follow the bot log
     ./scripts/dcs.sh atc-update        # recreate (pulls latest on start)
@@ -132,7 +140,10 @@ your debrief from the **debrief** dropdown (see the *Map view* section of the
 The map's **Restart** button writes the chosen airfield to `atc/.control` and
 the bot exits with code 75; `run_server.sh` (the container entrypoint) relaunches
 it on the new airfield. Only code 75 loops (Ctrl+C / crash / **Stop** end it).
-Keep the map on your LAN or VPN — never forward it to the internet.
+Keep the map on your LAN or VPN — never forward it to the internet. To share a
+read-only view with people outside your LAN, run the separate **viewer**
+(`atc/viewer.py`, GET-only + login dialog + credentials file, see the *Public
+viewer* section of the [README](README.md)).
 
 > **Developing the bot?** Run it on the host instead (faster iteration, live
 > code, tests) — see [`CONTRIBUTING.md`](CONTRIBUTING.md).

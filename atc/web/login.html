@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>ATC Viewer — Sign in</title>
+  <style>
+    :root { --bg: #0d1117; --panel: #161b22; --line: #30363d;
+            --text: #e6edf3; --muted: #8b949e; --control: #58a6ff; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; background: var(--bg);
+                 color: var(--text);
+                 font: 13px/1.4 system-ui, -apple-system, Segoe UI, Roboto,
+                       sans-serif; }
+    body { display: flex; align-items: center; justify-content: center; }
+    .login { background: var(--panel); border: 1px solid var(--line);
+             border-radius: 8px; padding: 28px 32px; width: 300px; }
+    .login h1 { font-size: 15px; margin: 0 0 4px; letter-spacing: .04em; }
+    .login p { color: var(--muted); margin: 0 0 18px; font-size: 12px; }
+    .login label { display: block; color: var(--muted); font-size: 12px;
+                   margin: 10px 0 4px; }
+    .login input { width: 100%; background: var(--bg); color: var(--text);
+                   border: 1px solid var(--line); border-radius: 4px;
+                   padding: 7px 9px; font: inherit; }
+    .login input:focus { outline: none; border-color: var(--control); }
+    .login button { width: 100%; margin-top: 18px; background: var(--control);
+                    color: #0d1117; border: none; border-radius: 4px;
+                    padding: 8px 10px; font: inherit; font-weight: 600;
+                    cursor: pointer; }
+    .login button:disabled { opacity: .5; cursor: wait; }
+    .login .error { color: #f85149; font-size: 12px; margin-top: 12px;
+                    min-height: 16px; }
+  </style>
+</head>
+<body>
+  <form class="login" id="form">
+    <h1>ATC Viewer</h1>
+    <p>Read-only flight debriefs. Sign in required.</p>
+    <label for="user">User</label>
+    <input id="user" name="user" autocomplete="username" autofocus>
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password"
+           autocomplete="current-password">
+    <button type="submit">Sign in</button>
+    <div class="error" id="error"></div>
+  </form>
+  <script>
+    const form = document.getElementById('form');
+    const error = document.getElementById('error');
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const button = form.querySelector('button');
+      button.disabled = true;
+      error.textContent = '';
+      try {
+        const res = await fetch('/api/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            user: document.getElementById('user').value,
+            password: document.getElementById('password').value,
+          }),
+        });
+        if (res.ok) {
+          location.href = '/';
+          return;
+        }
+        error.textContent = res.status === 401
+          ? 'Wrong user or password.'
+          : `Sign-in failed (HTTP ${res.status}).`;
+      } catch (err) {
+        error.textContent = 'Server unreachable.';
+      }
+      button.disabled = false;
+    });
+  </script>
+</body>
+</html>
