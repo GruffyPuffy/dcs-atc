@@ -780,6 +780,8 @@ the airfield config:
   Kutaisi often 07). Both `active_runway` (last-resort fallback) and
   `default_runway` live in `airspace.json`.
 - **QNH** — DCS stores it in mmHg; converted to inches of mercury (760 → 29.92).
+- **Wind** — DCS stores it in m/s; ATIS and Tower/Ground speak **knots**
+  (4 m/s → 8 kt). Calm below 0.5 m/s (~1 kt).
 - **Weather** — CAVOK when visibility ≥ 10 km and cloud base ≥ 1500 m, else
   visibility and cloud base are read out.
 

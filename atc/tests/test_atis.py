@@ -3,7 +3,7 @@
 import datetime
 
 from atis import (AtisReport, build_atis, choose_active_runway,
-                  information_letter, qnh_inhg, wind_components)
+                  information_letter, qnh_inhg, wind_components, wind_speed_kt)
 
 
 def test_information_letter_by_hour():
@@ -15,6 +15,12 @@ def test_information_letter_by_hour():
 
 def test_qnh_conversion():
     assert abs(qnh_inhg(760.0) - 29.92) < 0.01
+
+
+def test_wind_speed_kt_from_ms():
+    assert wind_speed_kt(0) == 0
+    assert wind_speed_kt(4) == 8
+    assert wind_speed_kt(5) == 10
 
 
 def test_wind_components_headwind():
@@ -64,6 +70,8 @@ def test_build_atis_cavok(airfield):
     assert "information Oscar" in text
     assert "CAVOK" in text
     assert "QNH 29.92" in text
+    assert "10 knots" in text
+    assert "meters per second" not in text
 
 
 def test_build_atis_zero_cloud_base_is_cavok(airfield):
@@ -78,6 +86,7 @@ def test_build_atis_zero_cloud_base_is_cavok(airfield):
     assert "CAVOK" in text
     assert "clouds 0" not in text
     assert "visibility" not in text
+    assert "8 knots" in text
 
 
 def test_build_atis_low_vis_omits_zero_cloud_base(airfield):

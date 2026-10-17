@@ -1178,8 +1178,9 @@ def test_control_checking_in_is_departure(brain):
 # ---------- Wind / runway ----------
 
 def test_set_wind_and_runway(brain):
+    # DCS reports m/s; Tower/Ground speak knots (5 m/s → 10 kt).
     brain.set_wind(270, 5)
-    assert brain.wind == "270, 5 knots"  # MA SOP form
+    assert brain.wind == "270, 10 knots"  # MA SOP form
     brain.set_wind(0, 0)
     assert brain.wind == "calm"
     brain.set_runway("07")

@@ -12,7 +12,7 @@ def _shared(brain, spoken, log):
         brain=brain, lock=threading.RLock(),
         track_for=lambda who: None,
         transcribe=lambda pcm, who, dur, ctrl: pcm.decode(),
-        speak=lambda text, freq, voice=None, controller=None:
+        speak=lambda text, freq, voice=None, controller=None, **_kw:
             spoken.append((controller, freq, text)),
         log=log.append,
         debug=lambda line: None)

@@ -219,3 +219,66 @@ def test_bust_reset_rearms():
     assert w.update("Colt 1", near=True, low=True, fast=True, now=0.0) is True
     w.reset("Colt 1")
     assert w.update("Colt 1", near=True, low=True, fast=True, now=0.0) is True
+
+
+# Kutaisi tower (the live miss was 172 m CPA between two 2 s samples).
+_TWR = (42.1797, 42.48089)
+
+
+def _offset(lat, lon, north_m, east_m):
+    import math
+    dlat = north_m / 111_320.0
+    dlon = east_m / (111_320.0 * math.cos(math.radians(lat)))
+    return lat + dlat, lon + dlon
+
+
+def test_segment_distance_at_endpoint_is_zero():
+    lat, lon = _TWR
+    assert topgun.segment_distance_m(lat, lon, lat, lon, lat, lon) < 1.0
+
+
+def test_segment_crosses_tower():
+    a = _offset(*_TWR, 0, 300)
+    b = _offset(*_TWR, 0, -300)
+    assert topgun.segment_distance_m(a[0], a[1], b[0], b[1], *_TWR) < 20.0
+
+
+def test_observe_fires_when_samples_straddle_cylinder():
+    # Live miss: 375 m then 264 m, both ~108 ft AGL / 525 kt, CPA 172 m.
+    w = topgun.BustWatch()
+    a = _offset(*_TWR, 0, 375)
+    b = _offset(*_TWR, 0, -264)
+    assert w.observe("Colt 1", a[0], a[1], 108, 525, *_TWR, now=0.0) is False
+    assert w.observe("Colt 1", b[0], b[1], 108, 525, *_TWR, now=2.0) is True
+
+
+def test_observe_does_not_fire_high_flyover():
+    w = topgun.BustWatch()
+    a = _offset(*_TWR, 0, 375)
+    b = _offset(*_TWR, 0, -264)
+    assert w.observe("Colt 1", a[0], a[1], 15_000, 525, *_TWR, now=0.0) is False
+    assert w.observe("Colt 1", b[0], b[1], 15_000, 525, *_TWR, now=2.0) is False
+
+
+def test_observe_does_not_fire_slow():
+    w = topgun.BustWatch()
+    a = _offset(*_TWR, 0, 375)
+    b = _offset(*_TWR, 0, -264)
+    assert w.observe("Colt 1", a[0], a[1], 108, 180, *_TWR, now=0.0) is False
+    assert w.observe("Colt 1", b[0], b[1], 108, 180, *_TWR, now=2.0) is False
+
+
+def test_observe_fires_on_first_sample_inside_cylinder():
+    w = topgun.BustWatch()
+    lat, lon = _TWR
+    assert w.observe("Colt 1", lat, lon, 108, 525, *_TWR, now=0.0) is True
+
+
+def test_observe_reset_clears_previous_sample():
+    w = topgun.BustWatch()
+    a = _offset(*_TWR, 0, 375)
+    w.observe("Colt 1", a[0], a[1], 108, 525, *_TWR, now=0.0)
+    w.reset("Colt 1")
+    b = _offset(*_TWR, 0, -264)
+    # Without the previous sample the 264 m point is outside the cylinder.
+    assert w.observe("Colt 1", b[0], b[1], 108, 525, *_TWR, now=2.0) is False

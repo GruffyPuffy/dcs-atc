@@ -382,7 +382,8 @@ def main() -> None:
 
     def speak(text: str, freq: int = freq_hz, voice=None,
               controller: Controller | None = None,
-              agency: str | None = None, log_chatter: bool = True) -> None:
+              agency: str | None = None, log_chatter: bool = True,
+              callsign: str = "") -> None:
         """TTS the reply in the given voice and transmit it on the frequency.
 
         `log_chatter=False` transmits but does not record the line in the log /
@@ -394,7 +395,10 @@ def main() -> None:
         # drop-in clip instead of synthesising the line (its presence is the
         # switch; see topgun.enabled()).
         if topgun_neg_clip is not None and text == topgun.NEGATIVE_LINE:
-            play_wav(topgun_neg_clip, freq, controller, text=text)
+            # Pin the film line to the pilot so spawn debrief keeps it
+            # (`_filter_chatter` matches the extracted callsign, not "tower").
+            pin = f"{callsign}, {text}" if callsign else text
+            play_wav(topgun_neg_clip, freq, controller, text=pin)
             return
         spoken = text
         for word, phonetic in PRONUNCIATION.items():
@@ -432,8 +436,13 @@ def main() -> None:
         tag = f"[{controller.value}] " if controller else ""
         log(f"{tag}ATC (tx): \"{text}\"")
         if log_chatter:
+            # TopGun denial has no callsign in the film line; prefix so spawn
+            # debrief keeps the clip (filter matches extracted callsign).
+            chatter_text = text
+            if text == topgun.NEGATIVE_LINE and callsign:
+                chatter_text = f"{callsign}, {text}"
             chatter("tx", freq, agency or (controller.value if controller else "atc"),
-                    text, agency or controller)
+                    chatter_text, agency or controller)
 
     def freq_for(controller: Controller) -> float:
         """Frequency (Hz) for a controller role, for the chatter log."""
@@ -842,30 +851,31 @@ def main() -> None:
                             if pos is not None:
                                 _, tdist = bearing_distance(
                                     ac.lat, ac.lon, pos[0], pos[1])
-                                slow = getattr(ac, "speed_kt", 0.0) < topgun.BUST_SPEED_KT
-                                low = (ac.alt_ft - airfield.elevation_ft) < topgun.BUST_AGL_FT
-                                near = tdist <= topgun.BUST_DISTANCE_NM
-                                # The hold timer runs on the *whole* bust
-                                # condition (close AND low AND fast), so a
-                                # wide/high entry that then dives in must still
-                                # hold low+fast for the full duration.
-                                if _bust_watch.update(callsign, near, low, not slow,
-                                                      time.monotonic()):
+                                agl = ac.alt_ft - airfield.elevation_ft
+                                spd = getattr(ac, "speed_kt", 0.0)
+                                # The 2 s poll can skip a 200 m cylinder at
+                                # 500 kt; observe() tests the segment from the
+                                # last sample, interpolated at closest approach.
+                                if tdist <= topgun.BUST_DEBUG_NM:
+                                    log(f"TOPGUN: {callsign} {tdist * 1852:.0f}m "
+                                        f"{agl:.0f}ft AGL {spd:.0f}kt")
+                                if _bust_watch.observe(
+                                        callsign, ac.lat, ac.lon, agl, spd,
+                                        pos[0], pos[1], time.monotonic()):
                                     with lock:
                                         brain.disarm_topgun(callsign)
                                     log(f"TOPGUN: tower busted by {callsign} "
                                         f"({ac.player}) at {tdist:.2f} nm, "
-                                        f"{ac.alt_ft - airfield.elevation_ft:.0f} ft AGL, "
-                                        f"{getattr(ac, 'speed_kt', 0.0):.0f} kt")
+                                        f"{agl:.0f} ft AGL, {spd:.0f} kt")
                                     ctrl = working_controller(callsign)
+                                    pin = f"{callsign}, {topgun.BUST_LINE}"
                                     if topgun_bust_clip is not None:
                                         play_wav(topgun_bust_clip, freq_for(ctrl),
-                                                 controller=ctrl,
-                                                 text=topgun.BUST_LINE)
+                                                 controller=ctrl, text=pin)
                                     else:
-                                        speak(topgun.BUST_LINE,
-                                              freq=freq_for(ctrl),
-                                              controller=ctrl)
+                                        speak(pin, freq=freq_for(ctrl),
+                                              controller=ctrl,
+                                              callsign=callsign)
                     on_final = airfield.is_on_final(ac.lat, ac.lon, ac.heading)
                     if on_final:
                         occupied = airfield.runway_occupied(

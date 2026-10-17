@@ -49,7 +49,7 @@ def test_snapshot_includes_wind_arrow_at_tower(brain, airfield):
     af = service.snapshot()["airfield"]
     assert af["wind"]["dir"] == 30
     assert af["wind"]["speed"] == 8  # 4 m/s from DCS, shown in knots
-    assert af["wind"]["text"] == "030, 4 knots"
+    assert af["wind"]["text"] == "030, 8 knots"
     assert af["tower_pos"] == [airfield.tower_pos[0], airfield.tower_pos[1]]
     assert af["topgun"]["radius_m"] == 200
 

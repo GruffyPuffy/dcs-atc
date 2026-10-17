@@ -24,6 +24,7 @@ checkout is silent and the gag is off until a user opts in.
 
 from __future__ import annotations
 
+import math
 import os
 import re
 from pathlib import Path
@@ -69,17 +70,49 @@ _STALLS = re.compile(
 
 # How close, how low (ft AGL) and how fast (kt) counts as a bust, and how
 # long the state must have held before the sting fires (s).
-# The monitor ticks every 2 s (do not poll DCS faster). At 250 kt that is
-# ~260 m between samples, so 50 m would miss the pass; 200 m still has to
-# actually overfly the tower, not the whole field (old value was 1.5 NM).
-# Hold is 0: a 200 m cylinder at 250 kt is one poll at most. A non-zero hold
-# started the timer on the first in-window sample (elapsed 0) and needed a
-# second tick, which was almost always already outside the cylinder.
+# The monitor ticks every 2 s (do not poll DCS faster). At 500 kt that is
+# ~500 m between samples, so a point-in-cylinder test of 200 m misses a
+# real overflight whose closest approach sits *between* ticks. `BustWatch.observe`
+# tests the segment from the previous sample to this one (interpolated AGL
+# and speed at closest approach). Hold is 0: the first in-window sample (or
+# segment) fires. A non-zero hold started the timer on the first in-window
+# sample (elapsed 0) and needed a second tick, which was almost always
+# already outside the cylinder.
 BUST_RADIUS_M = 200.0
 BUST_DISTANCE_NM = BUST_RADIUS_M / 1852.0
 BUST_AGL_FT = 300.0
 BUST_SPEED_KT = 250.0
 BUST_HOLD_S = 0.0
+# Log an armed close-approach when inside this range (debug the next miss).
+BUST_DEBUG_NM = 0.3
+
+
+def _local_xy(lat: float, lon: float, origin_lat: float,
+              origin_lon: float) -> tuple[float, float]:
+    """East/north metres of (lat, lon) relative to origin (small-area)."""
+    radius_m = 6_371_000.0
+    x = math.radians(lon - origin_lon) * math.cos(math.radians(origin_lat)) * radius_m
+    y = math.radians(lat - origin_lat) * radius_m
+    return x, y
+
+
+def segment_cpa(lat1: float, lon1: float, lat2: float, lon2: float,
+                plat: float, plon: float) -> tuple[float, float]:
+    """Closest approach of segment 1→2 to P: (distance_m, t in [0, 1])."""
+    ax, ay = _local_xy(lat1, lon1, plat, plon)
+    bx, by = _local_xy(lat2, lon2, plat, plon)
+    abx, aby = bx - ax, by - ay
+    ab2 = abx * abx + aby * aby
+    if ab2 < 1.0:
+        return math.hypot(ax, ay), 0.0
+    t = max(0.0, min(1.0, (-ax * abx - ay * aby) / ab2))
+    return math.hypot(ax + t * abx, ay + t * aby), t
+
+
+def segment_distance_m(lat1: float, lon1: float, lat2: float, lon2: float,
+                       plat: float, plon: float) -> float:
+    """Horizontal metres from P to the closest point on segment 1→2."""
+    return segment_cpa(lat1, lon1, lat2, lon2, plat, plon)[0]
 
 
 def negative_clip() -> Path | None:
@@ -177,6 +210,7 @@ class BustWatch:
         self.speed_kt = speed_kt
         self._since: dict[str, float] = {}
         self._fired: set[str] = set()
+        self._prev: dict[str, tuple[float, float, float, float]] = {}
 
     def update(self, callsign: str, near: bool, low: bool, fast: bool,
                now: float) -> bool:
@@ -193,7 +227,28 @@ class BustWatch:
             self._since.pop(callsign, None)
         return False
 
+    def observe(self, callsign: str, lat: float, lon: float, agl_ft: float,
+                speed_kt: float, tower_lat: float, tower_lon: float,
+                now: float) -> bool:
+        """One live sample. True if the path since the last tick passed
+        through the bust cylinder, low and fast at closest approach."""
+        prev = self._prev.get(callsign)
+        self._prev[callsign] = (lat, lon, agl_ft, speed_kt)
+        if prev is None:
+            dist, t = segment_cpa(lat, lon, lat, lon, tower_lat, tower_lon)
+            agl, spd = agl_ft, speed_kt
+        else:
+            dist, t = segment_cpa(
+                prev[0], prev[1], lat, lon, tower_lat, tower_lon)
+            agl = prev[2] + t * (agl_ft - prev[2])
+            spd = prev[3] + t * (speed_kt - prev[3])
+        near = dist <= BUST_RADIUS_M
+        low = agl < self.agl_ft
+        fast = spd >= self.speed_kt
+        return self.update(callsign, near, low, fast, now)
+
     def reset(self, callsign: str) -> None:
         """Allow `callsign` to fire again (e.g. after re-arming)."""
         self._fired.discard(callsign)
         self._since.pop(callsign, None)
+        self._prev.pop(callsign, None)

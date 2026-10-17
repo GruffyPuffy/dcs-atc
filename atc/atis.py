@@ -24,6 +24,13 @@ PHONETIC = ["Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf",
             "Victor", "Whiskey", "Xray", "Yankee", "Zulu"]
 
 MMHG_TO_INHG = 0.0393701
+# DCS weather is m/s; ATIS and Tower speak knots (MA SOP).
+MS_TO_KT = 1.943844
+
+
+def wind_speed_kt(speed_ms: float) -> int:
+    """Round metres-per-second to spoken knots."""
+    return int(round(float(speed_ms) * MS_TO_KT))
 
 
 def information_letter(hour: int) -> str:
@@ -80,8 +87,9 @@ class AtisReport:
 
     def broadcast(self) -> str:
         """The spoken ATIS text (single pass)."""
-        wind = (f"wind {self.wind_dir:03.0f} degrees, {self.wind_speed:.0f} "
-                f"meters per second" if self.wind_speed > 0.5 else "wind calm")
+        wind = (f"wind {self.wind_dir:03.0f} degrees, "
+                f"{wind_speed_kt(self.wind_speed)} knots"
+                if self.wind_speed > 0.5 else "wind calm")
         return (f"{self.airfield} information {self.information}. "
                 f"{self.active_runway} in use. {wind}. "
                 f"QNH {self.qnh_inhg:.2f}. {self.weather_summary()}. "

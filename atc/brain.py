@@ -25,6 +25,7 @@ from enum import Enum
 from pathlib import Path
 
 import topgun
+from atis import wind_speed_kt
 from callsigns import CallsignRegistry, flight_name
 from ctr import AircraftTrack, CtrEvent
 from airspace import bearing_distance
@@ -569,13 +570,16 @@ class AtcBrain:
             self.runway = runway
 
     def set_wind(self, direction: float, speed: float) -> None:
-        """Update the spoken wind (MA SOP: "270, 2 knots"; calm below 1 kt)."""
+        """Update the spoken wind (MA SOP: "270, 2 knots"; calm below ~1 kt).
+
+        `speed` is DCS metres per second; the spoken figure is knots.
+        """
         self.wind_dir = float(direction or 0.0)
         self.wind_speed = float(speed or 0.0)
-        if speed < 0.5:
+        if self.wind_speed < 0.5:
             self.wind = "calm"
         else:
-            self.wind = f"{direction:03.0f}, {speed:.0f} knots"
+            self.wind = f"{direction:03.0f}, {wind_speed_kt(self.wind_speed)} knots"
 
     def set_qnh(self, qnh_inhg: float) -> None:
         """Update the spoken QNH (Master Arms read it as 4 digits, e.g. 2992)."""

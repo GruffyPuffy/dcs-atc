@@ -143,7 +143,8 @@ class ControllerWorker:
                 f"[{tag}] {who} -> {reply!r}"
                 + (f"  [phase={state.phase.value} entry={state.entry_gate!r} "
                    f"exit={state.exit_gate!r}]" if state else ""))
-            self.shared.speak(reply, self.freq_hz, self.voice, self.controller)
+            self.shared.speak(reply, self.freq_hz, self.voice, self.controller,
+                              callsign=callsign or "")
         elif reply == "":
             # A deliberate silent acknowledgement: a handoff ack ("channel 8,
             # push") or a flight check-in ("Colt 1" / "2"). The pilot is doing
