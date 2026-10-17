@@ -10,6 +10,11 @@ const PHASE_COLOR = {
 let map, ctrLayer, staticLayer, aircraftLayer, aiLayer, chartLayer, pathLayer, commLayer;
 let baseLayer;  // the base-map tile layer (OSM or DCS); swapped on config change
 let baseLayerName = '';
+let vectorSpec = null;     // dcsmaps WMS overlay (airbases/towns/navaids)
+let vectorOverlay = null;  // current single-tile ImageOverlay
+let vectorPending = null;  // next image; swapped in only after it loads
+let vectorsOn = true;
+let vectorTimer = null;
 const markers = new Map();  // callsign -> L.marker
 const aiMarkers = new Map();
 const paths = new Map();    // callsign -> L.layerGroup of path segments
@@ -22,6 +27,13 @@ let commPopupKey = null;
 function initMap(center) {
   map = L.map('map', { preferCanvas: true }).setView(center, 11);
   window.map = map;  // handy for debugging in the browser console
+  // WMS vectors sit above the DCS tiles (tilePane 200) and below every ATC
+  // overlay (overlayPane 400): CTR, chart, paths, traffic.
+  map.createPane('dcsVectors');
+  map.getPane('dcsVectors').style.zIndex = 250;
+  map.getPane('dcsVectors').style.pointerEvents = 'none';
+  map.on('moveend', scheduleVectors);
+  map.on('zoomend', scheduleVectors);
   // Clicking the map (not a marker) dismisses any open comm popup for good.
   map.on('click', () => { commPopupKey = null; });
   // The base layer is set from the server payload (OSM or DCS tiles) on the
@@ -40,6 +52,11 @@ function initMap(center) {
   document.getElementById('chart-toggle').addEventListener('change', (e) => {
     if (e.target.checked) chartLayer.addTo(map); else map.removeLayer(chartLayer);
   });
+  document.getElementById('vectors-toggle').addEventListener('change', (e) => {
+    vectorsOn = e.target.checked;
+    if (vectorsOn) refreshVectors();
+    else clearVectors();
+  });
   initChatter();
 }
 
@@ -53,16 +70,97 @@ function drawOverlay(af) {
 // Swap the base-map tile layer (OSM <-> DCS tiles) when the server config says
 // so. Only rebuilds when the choice actually changes.
 function setBaseMap(bm) {
-  if (!bm || !bm.url || bm.name === baseLayerName) return;
-  if (baseLayer) map.removeLayer(baseLayer);
-  baseLayer = L.tileLayer(bm.url, {
-    maxZoom: bm.maxZoom || 19,
-    maxNativeZoom: bm.maxNativeZoom || bm.maxZoom || 19,
-    attribution: bm.attribution || '',
-    tms: !!bm.tms,
-    noWrap: true,
-  }).addTo(map);
-  baseLayerName = bm.name;
+  if (!bm || !bm.url) {
+    setVectorOverlay(null);
+    return;
+  }
+  if (bm.name !== baseLayerName) {
+    if (baseLayer) map.removeLayer(baseLayer);
+    baseLayer = L.tileLayer(bm.url, {
+      maxZoom: bm.maxZoom || 19,
+      maxNativeZoom: bm.maxNativeZoom || bm.maxZoom || 19,
+      attribution: bm.attribution || '',
+      tms: !!bm.tms,
+      noWrap: true,
+    }).addTo(map);
+    baseLayerName = bm.name;
+  }
+  setVectorOverlay(bm.wms || null);
+}
+
+function setVectorOverlay(wms) {
+  const wrap = document.getElementById('vectors-toggle-wrap');
+  if (wrap) wrap.hidden = !wms;
+  const same = !!(wms && vectorSpec
+    && wms.url === vectorSpec.url && wms.layers === vectorSpec.layers);
+  vectorSpec = wms;
+  if (!wms || !vectorsOn) {
+    clearVectors();
+    return;
+  }
+  // Do not refetch on the 2 s poll — only on first enable / pan / zoom.
+  if (!same || (!vectorOverlay && !vectorPending)) refreshVectors();
+}
+
+function scheduleVectors() {
+  if (vectorTimer) clearTimeout(vectorTimer);
+  vectorTimer = setTimeout(refreshVectors, 150);
+}
+
+function clearVectors() {
+  if (vectorPending) {
+    map.removeLayer(vectorPending);
+    vectorPending = null;
+  }
+  if (vectorOverlay) {
+    map.removeLayer(vectorOverlay);
+    vectorOverlay = null;
+  }
+}
+
+function wmsGetMapUrl(wms, bounds, size) {
+  const sw = bounds.getSouthWest();
+  const ne = bounds.getNorthEast();
+  const w = Math.max(64, Math.min(2048, Math.round(size.x)));
+  const h = Math.max(64, Math.min(2048, Math.round(size.y)));
+  const params = new URLSearchParams({
+    SERVICE: 'WMS', VERSION: '1.1.1', REQUEST: 'GetMap',
+    LAYERS: wms.layers, STYLES: '', FORMAT: 'image/png',
+    TRANSPARENT: 'TRUE', SRS: 'EPSG:4326',
+    BBOX: `${sw.lng},${sw.lat},${ne.lng},${ne.lat}`,
+    WIDTH: String(w), HEIGHT: String(h),
+  });
+  const sep = wms.url.includes('?') ? '&' : '?';
+  return `${wms.url}${sep}${params}`;
+}
+
+function refreshVectors() {
+  if (!map || !vectorSpec || !vectorsOn) return;
+  const bounds = map.getBounds();
+  const size = map.getSize();
+  if (size.x < 32 || size.y < 32) return;
+  const url = wmsGetMapUrl(vectorSpec, bounds, size);
+  // Keep the current overlay georeferenced until the new image is ready.
+  // setBounds+setUrl stretched the old pixels across the new view (flash).
+  if (vectorPending) {
+    map.removeLayer(vectorPending);
+    vectorPending = null;
+  }
+  const incoming = L.imageOverlay(url, bounds, {
+    pane: 'dcsVectors', interactive: false, opacity: 1,
+  });
+  vectorPending = incoming;
+  incoming.once('load', () => {
+    if (vectorPending !== incoming) return;
+    if (vectorOverlay) map.removeLayer(vectorOverlay);
+    vectorOverlay = incoming;
+    vectorPending = null;
+  });
+  incoming.once('error', () => {
+    if (vectorPending === incoming) vectorPending = null;
+    map.removeLayer(incoming);
+  });
+  incoming.addTo(map);
 }
 
 function drawAirspace(af) {

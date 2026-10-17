@@ -494,7 +494,7 @@ def _basemap_payload(airfield: Airfield, choice: str | None) -> dict:
     layers = cfg.get("layers") or {}
     name = choice or cfg.get("base") or "osm"
     spec = layers.get(name) or _FALLBACK_LAYERS.get(name) or _FALLBACK_LAYERS["osm"]
-    return {
+    payload = {
         "name": name,
         "url": spec["url"],
         "attribution": spec.get("attribution", ""),
@@ -502,6 +502,10 @@ def _basemap_payload(airfield: Airfield, choice: str | None) -> dict:
         "maxNativeZoom": spec.get("maxNativeZoom", spec.get("maxZoom", 19)),
         "tms": bool(spec.get("tms", False)),
     }
+    wms = spec.get("wms") or {}
+    if wms.get("url") and wms.get("layers"):
+        payload["wms"] = {"url": wms["url"], "layers": wms["layers"]}
+    return payload
 
 
 # Used when airspace.json has no `map` section.
@@ -510,7 +514,10 @@ _FALLBACK_LAYERS = {
             "attribution": "&copy; OpenStreetMap contributors", "maxZoom": 19},
     "dcs": {"url": "http://dcsmaps.com/caucasus/{z}/{x}/{y}.png",
             "attribution": "&copy; dcsmaps.com", "maxZoom": 16,
-            "maxNativeZoom": 12, "tms": True},
+            "maxNativeZoom": 12, "tms": True,
+            "wms": {"url": "http://dcsmaps.com/cgi-bin/mapserv?map=CAUCASUS_MAPFILE",
+                    "layers": "Airbases,Cities,Towns,Roads,Railroad,Landmarks,"
+                              "TACAN,VOR,NDB,DME,DB"}},
 }
 
 

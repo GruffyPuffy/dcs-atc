@@ -1112,6 +1112,10 @@ shows:
     the in-game map). These are in **DCS's own coordinates**, so the base map
     lines up with `airspace.json` and with the aircraft. Native detail is only
     to zoom 12; beyond that the tiles are upscaled (blurry but zoomable).
+    On top of the tiles (and **under** CTR / chart / traffic) the map can
+    fetch Flappie's WMS overlay — airbases, towns, roads, navaids — toggled
+    with **Vectors**. Single-tile so labels are not sliced; config is
+    `map.layers.dcs.wms` in `airspace.json`.
   - **`osm`** — OpenStreetMap. Only a *visualization*: it is the real-world
     base, which need not match DCS geometry (see §9/§13 and `GEOREF.md`).
   The tile layers live in `airspace.json` `map.layers`, so a new source is just

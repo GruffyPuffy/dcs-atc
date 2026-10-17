@@ -185,6 +185,8 @@ def test_basemap_defaults_to_dcs_config(brain, airfield):
     assert "dcsmaps.com" in bm["url"]
     assert bm["tms"] is True
     assert bm["maxNativeZoom"] == 12
+    assert "Airbases" in bm["wms"]["layers"]
+    assert "mapserv" in bm["wms"]["url"]
 
 
 def test_basemap_choice_override(brain, airfield):
@@ -193,6 +195,7 @@ def test_basemap_choice_override(brain, airfield):
     assert bm["name"] == "osm"
     assert "openstreetmap" in bm["url"]
     assert bm["tms"] is False
+    assert "wms" not in bm
 
 
 def test_overlay_payload_when_generated(brain, airfield):

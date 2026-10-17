@@ -19,7 +19,12 @@
         "attribution": "&copy; <a href=\"http://dcsmaps.com\">dcsmaps.com</a>",
         "maxZoom": 16,
         "maxNativeZoom": 12,
-        "tms": true
+        "tms": true,
+        "wms": {
+          "_comment": "Flappie's MapServer overlay (airbases, towns, navaids, roads). Single-tile so labels are not sliced. Drawn under ATC overlays.",
+          "url": "http://dcsmaps.com/cgi-bin/mapserv?map=CAUCASUS_MAPFILE",
+          "layers": "Airbases,Cities,Towns,Roads,Railroad,Landmarks,TACAN,VOR,NDB,DME,DB"
+        }
       }
     }
   },
