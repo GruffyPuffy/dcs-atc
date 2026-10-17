@@ -32,6 +32,11 @@ start_script="$atc_dir/start_bot.sh"
 viewer_port="${ATC_VIEWER_PORT:-18443}"
 viewer_host="${ATC_VIEWER_HOST:-127.0.0.1}"
 viewer_enabled="${ATC_VIEWER:-1}"
+# Public hostname for the self-signed cert's CN (so the browser warning is
+# only about trust, not a hostname mismatch).
+viewer_hostname="${ATC_VIEWER_HOSTNAME:-}"
+hostname_args=()
+[[ -n "$viewer_hostname" ]] && hostname_args=(--tls-hostname "$viewer_hostname")
 
 viewer_pid=""
 start_viewer() {
@@ -45,7 +50,7 @@ start_viewer() {
   (
     cd "$atc_dir"
     exec uv run python viewer.py --airfield "$airfield" \
-      --port "$viewer_port" --host "$viewer_host"
+      --port "$viewer_port" --host "$viewer_host" "${hostname_args[@]}"
   ) &
   viewer_pid=$!
   echo "[run_server] viewer on port $viewer_port (pid $viewer_pid)"

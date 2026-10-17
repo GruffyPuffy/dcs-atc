@@ -44,6 +44,10 @@ services:
       ATC_VIEWER_HOST: "0.0.0.0"
       ATC_VIEWER_USER: "${ATC_VIEWER_USER:-}"
       ATC_VIEWER_PASSWORD: "${ATC_VIEWER_PASSWORD:-}"
+      # Public hostname for the viewer's self-signed cert (optional; set to
+      # your DNS name in deploy/dcs/.env so the browser warning is only
+      # about trust, not a hostname mismatch).
+      ATC_VIEWER_HOSTNAME: "${ATC_VIEWER_HOSTNAME:-}"
       # Match the host user so volume files are not root-owned.
       PUID: "${PUID:?Set PUID in .env}"
       PGID: "${PGID:?Set PGID in .env}"

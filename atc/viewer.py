@@ -255,19 +255,36 @@ def _retained(callsign: str, path: list, comms: list) -> dict:
     }
 
 
-def _self_signed_cert(cert: Path, key: Path, hostname: str) -> bool:
-    """Generate a throwaway self-signed cert (openssl must be installed)."""
+def _self_signed_cert(cert: Path, key: Path, hostname: str,
+                      san: str | None = None) -> bool:
+    """Generate a throwaway self-signed cert (openssl must be installed).
+
+    `san` adds extra subjectAltName entries (comma-separated), e.g. the bind
+    host, so 127.0.0.1 keeps working alongside the public hostname.
+    """
+    cmd = ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+           "-keyout", str(key), "-out", str(cert), "-days", "3650",
+           "-subj", f"/CN={hostname}"]
+    if san:
+        names = [san] + ([hostname] if hostname != san else [])
+        cmd += ["-addext",
+                "subjectAltName=" + ", ".join(
+                    n if n.startswith("DNS:") or n.startswith("IP:")
+                    else (f"IP:{n}" if _is_ip(n) else f"DNS:{n}")
+                    for n in names)]
     try:
-        subprocess.run(
-            ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
-             "-keyout", str(key), "-out", str(cert), "-days", "3650",
-             "-subj", f"/CN={hostname}"],
-            check=True, capture_output=True)
+        subprocess.run(cmd, check=True, capture_output=True)
         return True
     except (OSError, subprocess.CalledProcessError) as exc:
         print(f"[!] Could not generate a self-signed certificate: {exc}",
               file=sys.stderr)
         return False
+
+
+def _is_ip(text: str) -> bool:
+    parts = text.split(".")
+    return (len(parts) == 4
+            and all(p.isdigit() and 0 <= int(p) <= 255 for p in parts))
 
 
 def _load_auth_file(path: Path | str) -> dict[str, str]:
@@ -567,7 +584,8 @@ def start_viewer(airfield, port: int, host: str = "127.0.0.1",
                  debrief_dir: Path | str | None = None,
                  basemap: str | None = None,
                  credentials: dict[str, str] | None = None,
-                 tls: bool = False) -> ThreadingHTTPServer | None:
+                 tls: bool = False,
+                 tls_hostname: str | None = None) -> ThreadingHTTPServer | None:
     """Start the read-only viewer. Returns None if the port is busy."""
     debrief_dir = Path(debrief_dir) if debrief_dir else DEBRIEF_DIR
     service = ViewerService(airfield, debrief_dir, basemap,
@@ -582,11 +600,16 @@ def start_viewer(airfield, port: int, host: str = "127.0.0.1",
         cert = debrief_dir.parent / ".viewer-cert.pem"
         key = debrief_dir.parent / ".viewer-key.pem"
         if not (cert.is_file() and key.is_file()):
-            if not _self_signed_cert(cert, key, host or "localhost"):
+            # Name the cert for the public hostname when given (a bind host
+            # of 0.0.0.0 is useless in a browser warning); include the bind
+            # host as a SAN too so 127.0.0.1 keeps working.
+            name = tls_hostname or host or "localhost"
+            if not _self_signed_cert(cert, key, name, san=host):
                 print("[!] Viewer continuing WITHOUT TLS — the password will "
                       "cross the network in the clear.", file=sys.stderr)
             else:
-                print(f"[*] Generated self-signed certificate: {cert}")
+                print(f"[*] Generated self-signed certificate: {cert} "
+                      f"(CN={name})")
         if cert.is_file() and key.is_file():
             context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
             context.load_cert_chain(cert, key)
@@ -638,6 +661,10 @@ def main() -> None:
     parser.add_argument("--no-tls", dest="tls", action="store_false",
                         help="serve plain HTTP (the password crosses the "
                              "network in the clear; LAN/testing only)")
+    parser.add_argument("--tls-hostname", default=None,
+                        help="public hostname for the self-signed "
+                             "certificate's CN (your DNS name); the bind "
+                             "host is added as a SAN too")
     args = parser.parse_args()
 
     auth_path = (Path(args.auth_file) if args.auth_file
@@ -664,7 +691,8 @@ def main() -> None:
                           debrief_dir=args.debrief_dir,
                           basemap=args.base_map,
                           credentials=credentials,
-                          tls=args.tls)
+                          tls=args.tls,
+                          tls_hostname=args.tls_hostname)
     if server is None:
         raise SystemExit("viewer could not start")
     try:
