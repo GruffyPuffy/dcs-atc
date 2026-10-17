@@ -1286,6 +1286,7 @@ class AtcBrain:
                      r"\brunway in sight\b", low):
             return self._say("roger", callsign, agency=self.tower_short)
         if re.search(r"\b(runway in sight|runway insight|visual)\b", low):
+            pilot.phase = Phase.LANDING
             return self._say("cleared_overhead", callsign,
                              flight=self._formation_prefix(pilot))
         # Arrival check-in at the entry point: "Tower, Adder11, Entry East" ->
@@ -1299,14 +1300,32 @@ class AtcBrain:
             pilot.cleared_inbound = True
             return self._say("report_runway_in_sight", callsign)
         # Overhead-break calls. "overhead break" / "initial" is the request for
-        # the break clearance; "in the break" is a position report.
-        if re.search(r"\b(overhead break|initial)\b", low):
+        # the break clearance. "in the break" and "turning final" are optional
+        # position reports (MA: in the break if traffic nearby; turning final
+        # is good practice). None of them is required — "on final" still
+        # clears to land if they skip the pattern calls.
+        if re.search(r"\b(overhead break|initial)\b", low) \
+                and not re.search(r"\bcleared\b", low):
             pilot.phase = Phase.LANDING
             return self._say("cleared_overhead", callsign,
                              flight=self._formation_prefix(pilot))
-        if re.search(r"\b(in the break|the break|overhead)\b", low):
+        # Readback of the break clearance ("cleared for right overhead break")
+        # must not look like "in the break". Correct readback is silent.
+        if pilot.phase == Phase.LANDING and re.search(r"\bcleared\b", low) \
+                and re.search(r"\b(overhead|break|brake|runway)\b", low) \
+                and not re.search(r"\b(to land|on final|in the break)\b", low):
+            return ""
+        if re.search(r"\b(?:in the (?:break|brake)|on the (?:break|brake)|"
+                     r"in break|breaking)\b", low):
+            # Position report only (MA: if traffic nearby). Not a landing
+            # request and not a cue to skip "turning final" — stay silent.
             pilot.phase = Phase.LANDING
-            return self._say("break_ack", callsign)
+            return ""
+        # MA: lead may call "turning final". Not a landing clearance — and
+        # must not match the bare "final" in the on-final rule.
+        if re.search(r"\bturn(?:ing)?(?:\s+to|\s+onto)?\s+final\b", low):
+            pilot.phase = Phase.LANDING
+            return ""
         # Readback of the takeoff clearance once already cleared ("right turn
         # out, cleared for takeoff, 33, Colt 1"). Must come before the "final"
         # check, so a readback containing "turn" is not misread as a landing.
@@ -1339,7 +1358,14 @@ class AtcBrain:
         if pilot.phase == Phase.LANDING and re.search(
                 r"\b(cleared|clear to land|copy|roger|wilco|readback)\b", low):
             return ""
+        # Readback of "report on final" (the in-the-break cue), not the
+        # position report. "reporting on final" / "on final" still land.
+        if re.search(r"\breport on final\b", low) \
+                and not re.search(r"\breporting\b", low):
+            return ""
         # "on final" is a landing clearance (distinct from a general inbound call).
+        # Bare "final" is accepted so a clipped "Adder 1 final" still works;
+        # "turning final" already returned above.
         if re.search(r"\b(on final|short final|final)\b", low):
             # Cross-check: only clear to land if actually on final.
             if track is not None and self.airfield is not None \

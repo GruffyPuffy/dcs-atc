@@ -91,7 +91,7 @@
     "help_departure": "{callsign}, {help_prefix}: you are cleared for takeoff runway {runway}. After departure turn {turn} {gate}, {altitude} or below, then contact {control} on channel {channel}.",
     "help_airborne": "{callsign}, {help_prefix}: contact {control} on channel {channel} and report your position and intentions.",
     "help_inbound": "{callsign}, {help_prefix}: report entering the control zone, then report runway in sight.",
-    "help_landing": "{callsign}, {help_prefix}: runway {runway} is active. Report on final for landing clearance.",
+    "help_landing": "{callsign}, {help_prefix}: runway {runway} is active. Optional: in the break, turning final. Report on final for landing clearance.",
     "help_escape": "Say reset to start over, or cancel to undo a clearance.",
     "trainer_echo_on": "{callsign}, {agency}, trainer echo on. I will echo our exchanges to your in-game message feed.",
     "trainer_echo_off": "{callsign}, {agency}, trainer echo off.",

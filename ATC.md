@@ -180,6 +180,9 @@ step on the next controller's first call.
 | "Descend to 1500 feet, Colt 1" | **readback** | *(silent if still high)* — then, once at 1500 ft, "Colt 1, Control, contact Tower on channel 7." unprompted. Already at 1500 on the readback → handoff immediately. |
 | "Tower, Colt 1, Entry East" | **entry** | "Colt 1, Tower, report runway in sight." |
 | "Tower, Colt 1, runway in sight" | **runway in sight** | "2-ship Colt 1, Tower, wind calm, cleared for left overhead break runway 25." (the "2-ship" prefix appears once a formation size has been heard) | |
+| "cleared for left overhead break runway 25, Colt 1" | **readback** | *(silent)* |
+| "Colt 1, in the break" | **in the break** | *(silent)* (optional) |
+| "Colt 1, turning final" | **turning final** | *(silent)* (optional) |
 | "Tower, Colt 1, on final" | **final** | "Colt 1, Tower, wind calm, runway 25, cleared to land." |
 | "Tower, Colt 1, runway vacated" / "…rolling off runway 25" | **vacated** | "Colt 1, Tower, contact Ground on channel 6." (normally Tower pushes you to Ground **unprompted** once you roll off the runway — see §7; both MA's "rolling off" and the standard "vacated" are accepted) |
 | "Ground, Colt 1, rolling off runway 25, requesting taxi to parking" | **taxi to parking** | "Colt 1, Ground, cleared taxi to Ramp North via Alpha November." |
@@ -210,6 +213,7 @@ follows this rule:
 | Line-up | takeoff clearance | the takeoff clearance itself |
 | Control join | the descent | the descent instruction |
 | Control descent | Tower handoff | the handoff |
+| Overhead-break clearance | in the break / on final | *(silent)* |
 
 An **incomplete** readback is never silently accepted: it gets an honest
 "readback incomplete — I did not get your {item}. Continue." (the phase still
@@ -859,10 +863,15 @@ Frequencies and controller names come from `airspace.json`; CLI flags
   departure is told *"fly runway heading"*. The exit is chosen once, at "ready
   to copy clearance", so Ground's exit and Tower's turnout always agree.
 - "runway in sight" / "overhead break" / "initial" → overhead-break clearance.
-- "in the break" → acknowledged: *"roger, report on final"*.
+  A correct readback is **silent** (same as takeoff/landing).
+- "in the break" → **silent** position report (optional; MA: if other traffic).
+- "turning final" → **silent** position report (optional; MA good practice).
+- Skipping either call is fine: **"on final"** still gets the landing
+  clearance. Neither call is a landing request; Tower does not "roger".
 - "Entry East" (arrival check-in at the entry point) → *"report runway in
   sight"*.
-- "inbound" / "on final" → distance-aware inbound reply (see §4).
+- "inbound" / "on final" → distance-aware inbound reply (see §4). "on final"
+  is the landing clearance.
 - "runway vacated" / "rolling off runway 25" (after landing) → handoff:
   *"contact Ground on channel 6"*.
 

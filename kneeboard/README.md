@@ -50,6 +50,7 @@ trainee learns the correct form rather than the wiki's slips:
 | *"4-ship Adder11"* on the break/landing | *"2-ship Adder11"* | the example is a two-ship throughout |
 | *"rolling off runway 25"* | *"runway 25 vacated"* | standard phraseology |
 | *"Tower on 7, Adder11"* (single-aircraft form) | *"Adder1, channel 7, push"* | the example is a 2-ship, so use the flight form |
+| (no pattern calls on the Mission Procedures dialog) | *"Adder11, in the break"* then *"turning final"* | MA Landing Procedures: call in the break if traffic; turning final is good practice. Optional — "on final" still gets the landing clearance |
 | *"Control, Adder11, two-ship Hornets, inbound…"* | *"Adder11, two-ship Hornets, inbound…"* | Control was already contacted; no re-address |
 
 Everything else is verbatim from the wiki.

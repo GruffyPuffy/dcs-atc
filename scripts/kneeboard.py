@@ -152,6 +152,8 @@ PAGES = [
                 ("P", "Adder11, runway in sight"),
                 ("TWR", "2-ship Adder11, wind 270, 2 knots, cleared for left overhead break runway 25"),
                 ("P", "Cleared for left overhead break runway 25, Adder11"),
+                ("P", "Adder11, in the break"),
+                ("P", "Adder11, turning final"),
             ]),
             ("Landing", [
                 ("P", "Adder11 on final"),

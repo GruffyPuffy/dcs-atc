@@ -139,7 +139,7 @@ def test_light_path_return_and_landing(airfield, brain):
     assert "report runway in sight" in r.lower()
     r = sc.say("Colt 1, runway in sight", Controller.TOWER)
     assert "overhead break" in r.lower()
-    assert sc.phase() == Phase.INBOUND
+    assert sc.phase() == Phase.LANDING
     sc.on_final("25")
     r = sc.say("Colt 1, on final", Controller.TOWER)
     assert "cleared to land" in r.lower()

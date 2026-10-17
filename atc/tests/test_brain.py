@@ -162,10 +162,63 @@ def test_formation_digit_form(brain):
     assert "4-ship Colt 1" in reply
 
 
-def test_tower_in_the_break_acknowledged(brain):
+def test_tower_in_the_break_is_silent(brain):
     reply = brain.handle("Tower, Colt 1, in the break",
                          controller=Controller.TOWER)
-    assert "report on final" in reply
+    assert reply == ""
+    assert brain.pilots["Colt 1"].phase == Phase.LANDING
+    assert not brain.pilots["Colt 1"].cleared_landing
+
+
+def test_tower_break_clearance_readback_is_silent(brain):
+    brain.handle("Tower, Colt 1, runway in sight", controller=Controller.TOWER)
+    reply = brain.handle(
+        "cleared for right overhead break, runway 07, Colt 1",
+        controller=Controller.TOWER)
+    assert reply == ""
+
+
+def test_tower_break_clearance_readback_tolerates_stt_brake(brain):
+    brain.handle("Tower, Colt 1, runway in sight", controller=Controller.TOWER)
+    reply = brain.handle(
+        "cleared for right overhead brake, runway 07, Colt 1",
+        controller=Controller.TOWER)
+    assert reply == ""
+
+
+def test_tower_turning_final_is_silent(brain):
+    brain.handle("Tower, Colt 1, runway in sight", controller=Controller.TOWER)
+    assert brain.handle("Colt 1, turning final",
+                        controller=Controller.TOWER) == ""
+    assert brain.pilots["Colt 1"].phase == Phase.LANDING
+    assert not brain.pilots["Colt 1"].cleared_landing
+
+
+def test_tower_pattern_calls_are_optional_before_final(brain):
+    # Skip in-the-break and turning-final; on final still clears.
+    brain.handle("Tower, Colt 1, runway in sight", controller=Controller.TOWER)
+    reply = brain.handle("Tower, Colt 1, on final", controller=Controller.TOWER)
+    assert "cleared to land" in reply
+
+
+def test_tower_pattern_then_final(brain):
+    brain.handle("Tower, Colt 1, runway in sight", controller=Controller.TOWER)
+    brain.handle("cleared for left overhead break runway 25, Colt 1",
+                 controller=Controller.TOWER)
+    assert brain.handle("Colt 1, in the break",
+                        controller=Controller.TOWER) == ""
+    assert brain.handle("Colt 1, turning final",
+                        controller=Controller.TOWER) == ""
+    reply = brain.handle("Colt 1, on final", controller=Controller.TOWER)
+    assert "cleared to land" in reply
+
+
+def test_tower_report_on_final_readback_is_silent(brain):
+    brain.handle("Tower, Colt 1, in the break", controller=Controller.TOWER)
+    assert brain.handle("report on final, Colt 1",
+                        controller=Controller.TOWER) == ""
+    reply = brain.handle("Colt 1, on final", controller=Controller.TOWER)
+    assert "cleared to land" in reply
 
 
 # ---------- Master Arms Mission Procedures flow ----------
