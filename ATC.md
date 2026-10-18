@@ -171,6 +171,7 @@ step on the next controller's first call.
 | "Cleared taxi Sierra Echo and hold short runway 25, Colt 1" | **readback** | *(silent — the next step is the hold-short report)* |
 | "Colt 1, holding short runway 25" | **hold short** (after taxi) | "Colt 1, Ground, contact Tower on channel 7." |
 | "Tower, Colt 1, at runway 25, ready for departure" | **departure** (after taxi/holding) | "Colt 1, Tower, line up and wait runway 25." |
+| "Tower, Colt 1, airborne" / "…wheels up" / "…off the ground" | **departure report** (after takeoff) | "Colt 1, Tower, contact Control on channel 8." ("wheels up" is the MA call; "wheels up on the go" is a touch-and-go report and is **not** matched — see §7) |
 | "Tower, Colt 1, ready for departure" (**while an arrival**) | **wrong call** | "Colt 1, Tower, negative, report runway in sight for landing." (never clears a takeoff for a pilot who is inbound/landing) |
 | "Line up and wait 25, Colt 1" | **readback** | *(silent)* — then, once the aircraft is actually **lined up** (at the threshold, pointing down the runway, stationary), the monitor issues "cleared for takeoff runway 25" unprompted. The clearance does **not** follow the readback alone: the pilot has only acknowledged the instruction, they may still be taxiing on. (A right turnout is spoken, a left turnout is the default and is not, and a straight-out departure gets "fly runway heading".) |
 | "Control, Colt 1, at 1500 ft" | **departure check-in** | "Colt 1, Control, radar contact, climb to Angels 15." |
@@ -939,8 +940,8 @@ The bot issues the standard Master Arms handoffs as the flight progresses:
 - Ground → Tower: *"contact Tower on channel 7"* (`contact_tower`).
 - Tower → Control (departures): *"contact Control on channel 8"* — Tower
   initiates this **unprompted** once the aircraft is past the runway (MA SOP:
-  "expect instructions to switch to control"); reporting "airborne" also works
-  (`contact_control`).
+  "expect instructions to switch to control"); reporting "airborne" or
+  "wheels up" also works (`contact_control`).
 - Tower → Ground (after landing): *"contact Ground on channel 6"*
   (`contact_ground`).
 
@@ -998,7 +999,7 @@ and the bot's reply. Frequencies (AM): **ATIS 270.500**, **Ground 250.000**,
 | 7 | Ground | "Colt 1, holding short runway 25." | "Colt 1, Ground, contact Tower on channel 7." |
 | 8 | Tower | "Tower, Colt 1, at runway 25, ready for departure." | "Colt 1, Tower, line up and wait runway 25." |
 | 9 | Tower | "Line up and wait 25, Colt 1." | *(silent)* — then, once you are lined up on the runway, "Colt 1, Tower, cleared for takeoff runway 25." |
-| 10 | Tower | "Tower, Colt 1, airborne." | "Colt 1, Tower, contact Control on channel 8." |
+| 10 | Tower | "Tower, Colt 1, airborne." *(or "wheels up")* | "Colt 1, Tower, contact Control on channel 8." |
 | 11 | Control | "Control, Colt 1, at 1500 ft." | "Colt 1, Control, radar contact, climb to Angels 15." |
 | 12 | Control | "Climbing to Angels 15, Colt 1." | *(silent)* — then, once at Angels 15, "Colt 1, Control, contact Stingray on channel 3." |
 

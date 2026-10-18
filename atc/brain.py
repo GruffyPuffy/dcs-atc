@@ -1274,8 +1274,12 @@ class AtcBrain:
         # Departure handoff: once airborne, Tower hands the flight to Control.
         # "rolling" alone is NOT a departure call — a landing pilot says
         # "rolling off runway 25" (handled below), so require a departure word.
+        # "wheels up" is the MA departure report; guard it against landing
+        # phrases ("wheels up on the go" after a touch-and-go is not one).
         if re.search(r"\b(airborne|departing|leaving|departed|on the way out|"
-                     r"taking off)\b", low):
+                     r"taking off|wheels up|off the ground)\b", low) \
+                and not re.search(r"\b(vacated|rolling off|rolling out|"
+                                  r"touch and go|on the go|go around)\b", low):
             pilot.phase = Phase.AIRBORNE
             return self._say("contact_control", callsign)
         # Readback of "report runway in sight" ("Report runway in sight, Adder11")

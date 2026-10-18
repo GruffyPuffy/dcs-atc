@@ -620,6 +620,28 @@ def test_tower_airborne_hands_off_to_control(brain):
     assert brain.pilots["Colt 1"].phase == Phase.AIRBORNE
 
 
+def test_tower_wheels_up_hands_off_to_control(brain):
+    # MA departure report variant: "wheels up" behaves like "airborne".
+    reply = brain.handle("Tower, Colt 1, wheels up", controller=Controller.TOWER)
+    assert "Control" in reply
+    assert brain.pilots["Colt 1"].phase == Phase.AIRBORNE
+
+
+def test_tower_off_the_ground_hands_off_to_control(brain):
+    reply = brain.handle("Tower, Colt 1, off the ground",
+                         controller=Controller.TOWER)
+    assert "Control" in reply
+    assert brain.pilots["Colt 1"].phase == Phase.AIRBORNE
+
+
+def test_tower_wheels_up_on_the_go_is_not_departure(brain):
+    # "wheels up on the go" is a touch-and-go report, not a departure: it
+    # must NOT hand the flight to Control.
+    reply = brain.handle("Tower, Colt 1, wheels up on the go",
+                         controller=Controller.TOWER)
+    assert brain.pilots["Colt 1"].phase != Phase.AIRBORNE
+
+
 def test_tower_on_final_clears_to_land(brain, airfield):
     import math
     thr = airfield.runway_threshold("25")
