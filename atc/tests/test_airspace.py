@@ -308,3 +308,35 @@ def test_gudauta_holding_points():
     from airspace import Airspace
     af = Airspace.load().get("Gudauta")
     assert set(af.holding_points) == {"Holding D", "Holding E", "Holding A/X"}
+
+
+def test_pattern_zones_geometry_one_per_runway(airfield):
+    """BOTH slices (left+right) per runway end, inside abeam..20°-from-final."""
+    zones = airfield.pattern_zones_geometry()
+    assert len(zones) == 2 * len(airfield.runways)
+    for rwy in airfield.runways:
+        sides = {z["side"] for z in zones if z["runway"] == rwy}
+        assert sides == {"left", "right"}
+    for z in zones:
+        assert z["radius_nm"] == 3.0
+        inbound = (airfield.runway_heading(z["runway"]) + 180) % 360
+        # the slice sweeps between abeam (90°) and 20° inside the final cone,
+        # so every edge angle is an offset within [20°, 90°] of the approach.
+        for a in (z["start_deg"], z["end_deg"]):
+            off = abs(((a - inbound + 180) % 360) - 180)
+            assert 20 <= off <= 90
+
+
+def test_pattern_zones_geometry_left_vs_right(airfield):
+    """Left slices sit left of the centreline; right slices right of it."""
+    zones = airfield.pattern_zones_geometry()
+    for z in zones:
+        inbound = (airfield.runway_heading(z["runway"]) + 180) % 360
+        # unwrap both edges relative to inbound before averaging
+        offs = [((a - inbound + 180) % 360) - 180
+                for a in (z["start_deg"], z["end_deg"])]
+        mid_off = sum(offs) / 2
+        if z["side"] == "left":
+            assert mid_off < 0
+        else:
+            assert mid_off > 0

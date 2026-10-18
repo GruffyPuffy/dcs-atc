@@ -247,6 +247,31 @@ function drawAirspace(af) {
     }).bindTooltip(`Final approach check · runway ${f.runway} `
       + `(${f.radius_nm} NM, ±30°)`).addTo(staticLayer);
   }
+  // Pattern turn slices: one short-arc sector per runway end (pattern side),
+  // from abeam back to the edge of the final cone. Future landing-clearance
+  // arming zones — rendered for testing, both sides shown.
+  const PATTERN_COLORS = { left: '#e3b341', right: '#39d2c0' };
+  for (const zone of checks.pattern || []) {
+    const c = zone.center;
+    const pts = [c];
+    const steps = 12;
+    let end = zone.end_deg;
+    if (end < zone.start_deg) end += 360;  // handle wrap past north
+    for (let i = 0; i <= steps; i++) {
+      const deg = zone.start_deg + (end - zone.start_deg) * (i / steps);
+      const rad = deg * Math.PI / 180;
+      const dLat = (zone.radius_nm * 1852 * Math.cos(rad)) / 111320;
+      const dLon = (zone.radius_nm * 1852 * Math.sin(rad))
+        / (111320 * Math.cos(c[0] * Math.PI / 180));
+      pts.push([c[0] + dLat, c[1] + dLon]);
+    }
+    const color = PATTERN_COLORS[zone.side] || '#e3b341';
+    L.polygon(pts, {
+      color, weight: 1, dashArray: '5 3',
+      fillColor: color, fillOpacity: 0.12,
+    }).bindTooltip(`Pattern slice · runway ${zone.runway} `
+      + `(${zone.side}, ${zone.radius_nm} NM)`).addTo(staticLayer);
+  }
   if (checks.runway) {
     L.polygon(checks.runway.corners, {
       color: '#f85149', weight: 1, dashArray: '4 4',

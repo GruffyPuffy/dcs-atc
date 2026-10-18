@@ -881,13 +881,25 @@ def main() -> None:
                         occupied = airfield.runway_occupied(
                             all_units, exclude=ac.player)
                         with lock:
-                            call = brain.check_final(callsign, on_final, occupied)
+                            call = brain.check_final(callsign, on_final,
+                                                     occupied, all_units)
                         if call:
                             log(f"RUNWAY OCCUPIED: {callsign} ({ac.player})")
                             speak_to_pilot(callsign, call)
                     else:
                         with lock:
                             brain.check_final(callsign, False, False)
+                    # Radar-driven landing clearance: once the arrival has
+                    # rolled out of the pattern turn and is established on
+                    # final, Tower clears them to land unprompted (the OHB
+                    # and pattern calls are status, not a request).
+                    with lock:
+                        land_call = brain.check_landing_clearance(
+                            callsign, tr, all_units, speaker=ac.player)
+                    if land_call:
+                        log(f"CLEARED TO LAND (radar): {callsign} "
+                            f"({ac.player})")
+                        speak_to_pilot(callsign, land_call)
                     # Altitude bust: above the CTR ceiling while still under
                     # Tower/Ground control (not handed to Control).
                     with lock:

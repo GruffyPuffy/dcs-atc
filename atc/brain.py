@@ -52,10 +52,22 @@ EXIT_REPORT_RADIUS_NM = 1.5
 # ft); further out -> an intermediate step-down (5000 ft) first.
 DESCENT_FINAL_NM = 15.0
 DESCENT_INTERMEDIATE_FT = 5000
+# Above this altitude the final descent (1500 ft) is never issued directly,
+# even inside the distance gate: the pilot gets the 5000 step-down first.
+# An arrival abeam the entry gate can be "close" in a straight line while
+# still high (debrief 2026-10-18 21:17:59: 6.5 NM north at Angels 14).
+DESCENT_STEPDOWN_MAX_FT = 10000
 # Pattern altitude Control descends an arrival to, and the slop for "you are
 # there" (altimeter / radar, not a hard deck).
 PATTERN_ALT_FT = 1500
 PATTERN_ALT_SLOP_FT = 200
+# The radar-driven landing clearance is a BACKSTOP for a silent pilot: it
+# must fire EARLY enough to be useful — before the typical "on final" call
+# point (~2 NM), not at it. A post-break final is flown from ~3 NM, so 3 NM
+# gives the voice call the whole final to happen (and win), while a silent
+# pilot is cleared with ~1 minute to run before the threshold (debrief
+# 2026-10-18 21:24: the 2 NM backstop would have fired during the flare).
+RADAR_CLEAR_NM = 3.0
 # Departure climb target (Angels 15) and slop for the unprompted Stingray
 # handoff. Control does not simulate AWACS, but MA SOP still pushes the flight
 # to Stingray on channel 3 once they are there.
@@ -141,6 +153,13 @@ class PilotState:
     # Tower has issued the overhead-break clearance (debrief 2026-10-18: the
     # pilot's readback "right overhead brake" must not re-trigger the request).
     break_cleared: bool = False
+    # The aircraft has actually flown through a pattern turn slice (downwind/
+    # base) since the break clearance — the radar OBSERVED the OHB turn, not
+    # just heard about it. The radar-driven landing clearance requires this:
+    # an arrival sitting on the centreline (straight-in geometry) must never
+    # look "established on final" before it has broken (debrief 2026-10-18
+    # 20:49:55: cleared to land 1 s after the RWIS report, 8 NM out).
+    pattern_flown: bool = False
     go_around_issued: bool = False
     descend_issued: bool = False  # Control has issued the descent to 1500 ft
     descend_intermediate: bool = False  # Control issued the far-out step-down
@@ -967,11 +986,25 @@ class AtcBrain:
         self._note_formation(pilot, low)
         reply = self._dispatch(callsign, pilot, low, track, controller, traffic,
                                speaker)
-        if reply:
+        if reply and not self._is_meta_reply(reply):
             # Remember the last clearance so the pilot can ask for it again
-            # ("say again") — a trainer aid for missed readbacks.
+            # ("say again") — a trainer aid for missed readbacks. Meta replies
+            # ("say again", "readback incomplete") are NOT stored: storing one
+            # made a later "repeat" replay the "say again" itself, an endless
+            # loop that hid the real clearance (debrief 2026-10-18 12:44:32).
             pilot.last_reply = reply
         return reply
+
+    def _is_meta_reply(self, reply: str) -> bool:
+        """True for housekeeping replies that must not shadow the clearance.
+
+        "say again" and "readback incomplete" are feedback about a readback,
+        not clearances. If they replaced `last_reply`, a follow-up "repeat"
+        would replay the feedback instead of the clearance the pilot asked
+        for. `last_clearance` (set when a clearance is issued) is unaffected.
+        """
+        return ("say again" in reply.lower()
+                or "readback incomplete" in reply.lower())
     def _dispatch(self, callsign: str, pilot: PilotState, low: str,
                   track: AircraftTrack | None,
                   controller: Controller,
@@ -1130,6 +1163,7 @@ class AtcBrain:
         pilot.cleared_inbound = False
         pilot.cleared_landing = False
         pilot.break_cleared = False
+        pilot.pattern_flown = False
         pilot.go_around_issued = False
         pilot.descend_issued = False
         pilot.descend_intermediate = False
@@ -1171,6 +1205,7 @@ class AtcBrain:
         pilot.phase = back
         pilot.cleared_landing = False
         pilot.break_cleared = False
+        pilot.pattern_flown = False
         pilot.descend_issued = False
         pilot.descend_intermediate = False
         pilot.awaiting_takeoff = False
@@ -1416,13 +1451,22 @@ class AtcBrain:
         # Readback of "report runway in sight" ("Report runway in sight, Adder11")
         # is NOT the runway-in-sight report itself — only the actual report (said
         # when the runway is genuinely in sight) triggers the break clearance.
-        # Must come before the runway-in-sight branch.
+        # Must come before the runway-in-sight branch. STT also drops the "in"
+        # ("report runway sight", debrief 2026-10-18 13:06:55), so accept the
+        # mangled form too — "runway sight" is never a position report.
         if re.search(r"\b(report|reporting|wilco|roger|copy)\b.*"
-                     r"\brunway in sight\b", low):
+                     r"\brunway (?:in )?sight\b", low):
             return self._say("roger", callsign, agency=self.tower_short)
         if re.search(r"\b(runway in sight|runway insight|visual)\b", low):
             pilot.phase = Phase.LANDING
             pilot.break_cleared = True
+            # Master Arms: the break clearance is valid for the whole flight
+            # (same as the landing clearance — see the OHB branch below).
+            for wing in self._flight_members(callsign):
+                wing_state = self.pilots.get(wing)
+                if wing_state is not None and wing_state.phase in (
+                        Phase.INBOUND, Phase.LANDING):
+                    wing_state.break_cleared = True
             return self._say("cleared_overhead", callsign,
                              flight=self._formation_prefix(pilot))
         # Arrival check-in at the entry point: "Tower, Adder11, Entry East" ->
@@ -1448,6 +1492,15 @@ class AtcBrain:
                 # writes "brake"). Silence, same as a full readback.
                 return ""
             pilot.break_cleared = True
+            # Master Arms: the break clearance is valid for the whole flight.
+            # Mark same-flight wingmen already in the arrival flow as covered,
+            # so their own pattern calls/radar flow work without an
+            # individual break clearance (mirrors _issue_landing_clearance).
+            for wing in self._flight_members(callsign):
+                wing_state = self.pilots.get(wing)
+                if wing_state is not None and wing_state.phase in (
+                        Phase.INBOUND, Phase.LANDING):
+                    wing_state.break_cleared = True
             return self._say("cleared_overhead", callsign,
                              flight=self._formation_prefix(pilot))
         # Readback of the break clearance ("cleared for right overhead break")
@@ -1525,10 +1578,27 @@ class AtcBrain:
         # Bare "final" is accepted so a clipped "Adder 1 final" still works;
         # "turning final" already returned above.
         if re.search(r"\b(on final|short final|final)\b", low):
+            # After the clearance (voice or radar), "on final" is just a
+            # status report — the pilot confirming what we already cleared.
+            # Stay silent (Master Arms: no extra comms after the readback).
+            if pilot.cleared_landing:
+                return ""
+            # Zones check: a pilot still in the pattern turn (inside a slice)
+            # has NOT rolled out yet — their "on final" does not match the
+            # radar picture. The SOP answer to a position report that does
+            # not match reality is the position challenge (ATC.md §"on final"
+            # not on final); no invented "continue" call.
+            if track is not None and self.airfield is not None \
+                    and self.airfield.in_pattern_turn(track.lat, track.lon,
+                                                      self.runway) \
+                    and not self.airfield.is_established_final(
+                        track.lat, track.lon, track.heading, self.runway):
+                return self._challenge(callsign, self.tower_short, track)
             # Cross-check: only clear to land if actually on final.
             if track is not None and self.airfield is not None \
                     and not self.airfield.is_on_final(track.lat, track.lon,
-                                                      track.heading):
+                                                      track.heading,
+                                                      self.runway):
                 return self._challenge(callsign, self.tower_short, track)
             # Traffic: if the runway is occupied, sequence instead of clearing.
             if self._runway_busy(traffic, exclude=speaker):
@@ -1537,22 +1607,7 @@ class AtcBrain:
                 pilot.awaiting_landing = True
                 pilot.landing_ready_announced = False
                 return self._say("continue_approach", callsign)
-            pilot.phase = Phase.LANDING
-            pilot.cleared_landing = True
-            # Cleared: no longer waiting on the runway to clear.
-            pilot.awaiting_landing = False
-            pilot.landing_ready_announced = False
-            # Master Arms: the landing clearance is valid for the whole flight
-            # ("they don't need individual clearances"). Mark same-flight
-            # wingmen who are already in the arrival flow as covered, so their
-            # own "on final" gets silence instead of a duplicate clearance.
-            for wing in self._flight_members(callsign):
-                wing_state = self.pilots.get(wing)
-                if wing_state is not None and wing_state.phase in (
-                        Phase.INBOUND, Phase.LANDING):
-                    wing_state.cleared_landing = True
-            return self._say("cleared_land", callsign,
-                             flight=self._formation_prefix(pilot))
+            return self._issue_landing_clearance(callsign, pilot)
         if re.search(r"\binbound\b|\bon approach\b|\blanding\b|\bentry\b", low):
             pilot.phase = Phase.INBOUND
             pilot.cleared_inbound = True
@@ -1603,6 +1658,18 @@ class AtcBrain:
                 # Step the descent by distance: far out -> an intermediate
                 # altitude; close to the entry -> the final 1500 ft. The
                 # handoff to Tower waits until the final descent has been given.
+                # A pilot still above the step-down altitude gets silence here
+                # (the descent plan is acknowledged; see _descend_reply) — but
+                # their readback is remembered, so the handoff monitor fires
+                # at pattern altitude without another call.
+                if pilot.descend_readback:
+                    # Already read back the descent plan; still descending.
+                    # Stay silent unless at pattern altitude already.
+                    if self._at_pattern_alt(track):
+                        pilot.phase = Phase.LANDING
+                        return self._say("contact_tower_from_control",
+                                         callsign)
+                    return ""
                 return self._descend_reply(callsign, pilot, track)
             if not self._at_pattern_alt(track):
                 pilot.descend_readback = True
@@ -1699,10 +1766,15 @@ class AtcBrain:
         # Airborne pilots (post-departure, before/at the handoff to Control)
         # also say just "Control, callsign" when switching frequency — that is
         # a frequency-change check-in, not an inbound check-in. Don't flip
-        # Airborne -> Inbound on it; just answer.
+        # Airborne -> Inbound on it; just answer. The same guard covers a
+        # check-in right AFTER the Tower handoff (debrief 2026-10-18 12:55:33):
+        # once the join has been issued (cleared_inbound) a bare check-in must
+        # not re-arm the join flow by flipping Landing -> Inbound.
         if re.search(r"\bcontrol\b(?!\s+zone)", low):
-            pilot.phase = (Phase.AIRBORNE
-                           if pilot.phase == Phase.AIRBORNE else Phase.INBOUND)
+            if pilot.phase == Phase.AIRBORNE or pilot.cleared_inbound:
+                return self._say("control_ack", callsign,
+                                 agency=self.control_short)
+            pilot.phase = Phase.INBOUND
             return self._say("control_ack", callsign,
                              agency=self.control_short)
         return None
@@ -1917,25 +1989,57 @@ class AtcBrain:
 
     def _descend_reply(self, callsign: str, pilot: PilotState,
                        track: AircraftTrack | None) -> str:
-        """The arrival descent, stepped by distance to the entry gate.
+        """The arrival descent, stepped by distance AND altitude.
 
         A real controller steps an arrival down rather than dropping it to the
         final altitude 35 miles out. Far from the entry -> an intermediate
         step-down (5000 ft); within `DESCENT_FINAL_NM` -> the final altitude
         (1500 ft). Without a live position we issue the final descent (the
         documented Master Arms example).
+
+        Two gates keep the step-down honest (debriefs 2026-10-18):
+
+        - **Distance**: outside `DESCENT_FINAL_NM` of the gate -> the 5000
+          step-down first.
+        - **Altitude**: inside the distance gate but still HIGH — above
+          `DESCENT_STEPDOWN_MAX_FT` — the straight-line gate distance lies
+          (the pilot may be *abeam* the gate, not inbound to it: debrief
+          21:17:59, checked in 6.5 NM north at Angels 14, 11 NM from gate
+          West, and got the final descent with no step-down at all). Too
+          high for the final -> the 5000 step-down first.
+
+        In both cases the pilot's readback is remembered
+        (`descend_readback`), so the monitors issue the final descent once
+        they are actually low and close, and the Tower handoff follows at
+        pattern altitude without another call.
         """
         gate = pilot.entry_gate or self._pick_entry_gate(track, None, pilot)
         distance = self._distance_to_gate(track, gate)
-        if distance is not None and distance > DESCENT_FINAL_NM:
+        too_far = (distance is not None and distance > DESCENT_FINAL_NM)
+        too_high = (track is not None
+                    and track.alt_ft > DESCENT_STEPDOWN_MAX_FT)
+        if too_far or too_high:
             if pilot.descend_intermediate:
                 # Already stepped down; this is the readback. Stay silent — the
-                # next instruction (the final descent) follows once closer, so
-                # the controller does not acknowledge (see check_arrival_descent).
+                # next instruction (the final descent) follows once closer and
+                # lower, so the controller does not acknowledge (see
+                # check_arrival_descent).
+                pilot.descend_readback = True
                 return ""
             pilot.descend_intermediate = True
             return self._say("control_descend_step", callsign,
                              altitude=f"{DESCENT_INTERMEDIATE_FT} feet")
+        if (track is not None
+                and track.alt_ft > DESCENT_INTERMEDIATE_FT):
+            # Inside the distance gate, below the step-down ceiling, but
+            # still above the step-down altitude itself: the descent to
+            # 5000 is in progress. Stay silent — the monitor issues the
+            # final descent once 5000 is reached. The pilot HAS
+            # acknowledged the descent plan, so remember the readback: the
+            # handoff monitor (check_descent_handoff) can then fire as
+            # soon as they reach pattern altitude, without another call.
+            pilot.descend_readback = True
+            return ""
         pilot.descend_issued = True
         return self._say("control_descend", callsign)
 
@@ -2015,19 +2119,26 @@ class AtcBrain:
 
     def check_arrival_descent(self, callsign: str,
                               track: AircraftTrack | None) -> str | None:
-        """Issue the final arrival descent once the aircraft is close enough.
+        """Issue the final arrival descent once close enough AND low enough.
 
-        After the intermediate step-down (issued far out), Control calls the
-        final "descend to 1500 feet" when the aircraft reaches the entry area —
-        so the pilot is not left at the intermediate altitude. Fires once.
+        After the intermediate step-down (issued far out or high), Control
+        calls the final "descend to 1500 feet" when the aircraft reaches the
+        entry area — so the pilot is not left at the intermediate altitude.
+        Fires once. Both gates matter (debriefs 2026-10-18): an aircraft
+        inside the distance gate but still above 5000 ft has not finished
+        the step-down (20:46:38), and one abeam the gate at 14 000 ft was
+        never stepped down at all (21:17:59).
         """
         pilot = self._pilot(callsign)
         if (pilot.phase != Phase.INBOUND or pilot.descend_issued
-                or not pilot.descend_intermediate):
+                or not (pilot.descend_intermediate
+                        or pilot.descend_readback)):
             return None
         gate = pilot.entry_gate or self._pick_entry_gate(track, None, pilot)
         distance = self._distance_to_gate(track, gate)
         if distance is not None and distance <= DESCENT_FINAL_NM:
+            if track is not None and track.alt_ft > DESCENT_INTERMEDIATE_FT:
+                return None
             pilot.descend_issued = True
             return self._say("control_descend", callsign)
         return None
@@ -2161,8 +2272,99 @@ class AtcBrain:
             return self._say("ctr_warning", callsign, agency=agency)
         return None
 
+    def check_landing_clearance(self, callsign: str,
+                                track: AircraftTrack | None,
+                                traffic: list | None = None,
+                                speaker: str = "") -> str | None:
+        """Issue the landing clearance by radar, unprompted, once established.
+
+        The overhead break (and the pilot's pattern calls) are STATUS
+        information, not a clearance request: Tower watches the aircraft and
+        clears it to land once it has rolled out of the turn and is
+        established on final (inside the tight final cone, outside the pattern
+        turn slices — see `Airfield.is_established_final`). This mirrors how
+        the takeoff clearance works (`check_lineup`): the pilot's calls arm
+        the flow, the radar delivers the clearance.
+
+        Fires once per approach (re-arms on a go-around / touch-and-go, when
+        the phase returns to Inbound). Without a live track we do nothing —
+        the pilot's "on final" call remains the fallback path.
+
+        The phase gate accepts both arrival phases: INBOUND (straight-in or
+        radar arrival) and LANDING (post-OHB — the break clearance puts the
+        pilot in Landing while they fly the pattern, but `cleared_landing` is
+        still false until this issues the actual clearance).
+
+        **Only for the OHB flow** (`pilot.break_cleared`): the radar may clear
+        an aircraft that Tower has sent into the pattern once it rolls out.
+        A straight-in arrival also sits on the extended centreline — often
+        already inside the cone at the handoff (debrief 2026-10-18 19:21:08:
+        "cleared to land" fired 13 s after the handoff, 12 NM out at Entry
+        West, before the break) — but that arrival has not been given the
+        pattern, so its clearance still comes from the SOP "on final" call.
+
+        And the radar must have **seen the turn**: the clearance requires
+        `pattern_flown` — the aircraft was observed inside a pattern turn
+        slice since the break clearance. Being pointed at the runway is not
+        enough (debrief 2026-10-18 20:49:55: the RWIS report at 8 NM put the
+        aircraft on the centreline, and the clearance fired 1 s later, before
+        the break). The slices are the radar evidence that the OHB happened.
+        """
+        pilot = self._pilot(callsign)
+        if (track is None or self.airfield is None
+                or pilot.phase not in (Phase.INBOUND, Phase.LANDING)
+                or not pilot.break_cleared or pilot.cleared_landing):
+            return None
+        # Radar observation: note slice passage while the aircraft flies the
+        # pattern (checked every tick, before the established-final test —
+        # the slices and the final cone do not overlap, so a single tick
+        # cannot be both).
+        if self.airfield.in_pattern_turn(track.lat, track.lon, self.runway):
+            pilot.pattern_flown = True
+            return None
+        if not pilot.pattern_flown:
+            return None
+        if not self.airfield.is_established_final(track.lat, track.lon,
+                                                  track.heading, self.runway):
+            return None
+        # Timing window: give the pilot the chance to SAY "on final" first
+        # (the SOP call). The radar clearance is the backstop, not the
+        # opener: it fires once the aircraft is inside RADAR_CLEAR_NM —
+        # close enough that staying silent any longer would leave them
+        # un-cleared on short final — but well before that they had room
+        # to make the call and get the clearance from the voice path.
+        if track.distance_nm > RADAR_CLEAR_NM:
+            return None
+        if self._runway_busy(traffic, exclude=speaker):
+            # Occupied: hold the clearance (the go-around monitor in
+            # check_final covers the "someone is on the runway" case; here we
+            # simply wait until it clears, like check_runway_clear does).
+            return None
+        return self._issue_landing_clearance(callsign, pilot)
+
+    def _issue_landing_clearance(self, callsign: str,
+                                 pilot: PilotState) -> str:
+        """Advance the pilot to Landing and speak the landing clearance.
+
+        Shared by the radar path (`check_landing_clearance`) and the voice
+        path ("on final"). Marks same-flight wingmen as covered: the Master
+        Arms landing clearance is valid for the whole flight.
+        """
+        pilot.phase = Phase.LANDING
+        pilot.cleared_landing = True
+        pilot.awaiting_landing = False
+        pilot.landing_ready_announced = False
+        for wing in self._flight_members(callsign):
+            wing_state = self.pilots.get(wing)
+            if wing_state is not None and wing_state.phase in (
+                    Phase.INBOUND, Phase.LANDING):
+                wing_state.cleared_landing = True
+        return self._say("cleared_land", callsign,
+                         flight=self._formation_prefix(pilot))
+
     def check_final(self, callsign: str, on_final: bool,
-                    runway_occupied: bool) -> str | None:
+                    runway_occupied: bool,
+                    traffic: list | None = None) -> str | None:
         """Runway-occupancy check for an aircraft on final approach.
 
         Returns a go-around call, or None. Only fires once per approach (until
@@ -2174,8 +2376,22 @@ class AtcBrain:
             return None
         if runway_occupied and not pilot.go_around_issued:
             pilot.go_around_issued = True
-            return self._say("go_around", callsign)
+            key = ("go_around_traffic" if self._traffic_on_runway(traffic)
+                   else "go_around")
+            return self._say(key, callsign)
         return None
+
+    def _traffic_on_runway(self, traffic: list | None = None) -> bool:
+        """True if any tracked unit is actually on the runway corridor.
+
+        Uses the same geometry as sequencing (`runway_occupied`), so the
+        go-around reason matches what blocked the landing. `traffic` is the
+        live unit list from the caller; empty means unknown, and the generic
+        "runway is occupied" wording is used.
+        """
+        if self.airfield is None or not traffic:
+            return False
+        return self.airfield.runway_occupied(traffic)
 
     def check_altitude(self, callsign: str, track: AircraftTrack) -> str | None:
         """Warn a pilot who has climbed above the CTR ceiling while still in a
@@ -2213,7 +2429,10 @@ class AtcBrain:
         A pilot in the Departure or Landing phase is legitimately on the runway. So is a pilot
         in **Lineup** — "line up and wait" *explicitly* puts them on the runway,
         so warning them to "vacate immediately" would be wrong (and did, before
-        this was added).
+        this was added). So is a pilot in **Holding** — the Ground->Tower
+        handoff fires while the pilot is still at the holding point, and
+        taxiing forward from there to line up clips the runway pavement
+        without ever being an incursion (debrief 2026-10-18 12:51:21).
         """
         pilot = self._pilot(callsign)
         if not on_runway:
@@ -2229,8 +2448,8 @@ class AtcBrain:
         # handoff fires at touchdown (phase becomes Taxi while still rolling
         # out), which otherwise looked like an uncleared incursion. Scoped to
         # Landing/Taxi so it does not persist into a later departure.
-        if pilot.phase in (Phase.LINEUP, Phase.DEPARTURE, Phase.AIRBORNE,
-                           Phase.LANDING) or (
+        if pilot.phase in (Phase.HOLDING, Phase.LINEUP, Phase.DEPARTURE,
+                           Phase.AIRBORNE, Phase.LANDING) or (
                 pilot.cleared_landing
                 and pilot.phase in (Phase.LANDING, Phase.TAXI)):
             return None

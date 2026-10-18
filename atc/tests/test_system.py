@@ -541,7 +541,13 @@ def test_takeoff_readback_is_silent(airfield, brain):
 
 
 def test_descent_handoff_waits_until_at_1500(airfield, brain):
-    """Control does not push to Tower on the descend readback if still high."""
+    """Control does not push to Tower on the descend readback if still high.
+
+    The final descent itself also waits: an arrival still above the
+    step-down altitude (5000 ft) gets silence on the readback (debrief
+    2026-10-18 20:46:38 — "descend to 1500" at 8000 ft), the descent is
+    issued once 5000 is reached, and the Tower handoff fires at 1500.
+    """
     sc = _scenario(airfield, brain).at_gate("East")
     sc.alt = 8000.0
     sc.say("Kutaisi Control, Colt 1, inbound 10 miles east at Angels 8",
@@ -550,6 +556,16 @@ def test_descent_handoff_waits_until_at_1500(airfield, brain):
     r = sc.say("Descend to 1500 feet, Colt 1", Controller.CONTROL)
     assert r == ""
     assert sc.phase() == Phase.INBOUND
+    assert brain.check_descent_handoff("Colt 1", sc._track()) is None
+    # Still above 5000: no final descent yet.
+    assert brain.check_arrival_descent("Colt 1", sc._track()) is None
+    # At 5000: Control issues the final descent.
+    sc.alt = 5000.0
+    descend = brain.check_arrival_descent("Colt 1", sc._track())
+    assert descend and "1500" in descend
+    # The pilot reads it back; the handoff still waits for 1500.
+    sc.alt = 3000.0
+    assert sc.say("Descend to 1500 feet, Colt 1", Controller.CONTROL) == ""
     assert brain.check_descent_handoff("Colt 1", sc._track()) is None
     sc.alt = 1500.0
     call = brain.check_descent_handoff("Colt 1", sc._track())

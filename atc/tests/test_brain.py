@@ -1134,6 +1134,42 @@ def test_go_around_resets_when_not_on_final(brain):
     assert "go around" in again
 
 
+def test_go_around_names_traffic_when_unit_on_runway(brain, airfield):
+    # A tracked unit actually on the runway -> the go-around says "traffic".
+    thr = airfield.runway_threshold("25")
+    blocker = _Unit("AI-1", thr[0], thr[1], airfield.elevation_ft + 10)
+    reply = brain.check_final("Colt 1", on_final=True, runway_occupied=True,
+                              traffic=[blocker])
+    assert "go around" in reply.lower()
+    assert "traffic" in reply.lower()
+
+
+def test_go_around_generic_when_no_traffic_list(brain):
+    # No traffic list (unknown) -> the generic "runway is occupied" wording.
+    reply = brain.check_final("Colt 1", on_final=True, runway_occupied=True,
+                              traffic=[])
+    assert "go around" in reply.lower()
+    assert "occupied" in reply.lower()
+
+
+def test_go_around_generic_when_traffic_not_on_runway(brain, airfield):
+    # The blocker sits on the parallel taxiway (outside the narrow corridor),
+    # yet sequencing said occupied (e.g. a hold-short edge case): the call must
+    # not claim "traffic on the runway" it cannot see.
+    thr = airfield.runway_threshold("25")
+    hdg = airfield.runway_heading("25")
+    import math
+    perp = math.radians((hdg + 90) % 360)
+    lat = thr[0] + math.degrees(0.1 * 1852 * math.cos(perp) / 6_371_000)
+    lon = thr[1] + math.degrees(0.1 * 1852 * math.sin(perp)
+                                / (6_371_000 * math.cos(math.radians(thr[0]))))
+    taxi_unit = _Unit("AI-1", lat, lon, airfield.elevation_ft + 10)
+    reply = brain.check_final("Colt 1", on_final=True, runway_occupied=True,
+                              traffic=[taxi_unit])
+    assert "go around" in reply.lower()
+    assert "occupied" in reply.lower()
+
+
 # ---------- Traffic sequencing (players + AI) ----------
 
 class _Unit:
@@ -1838,3 +1874,465 @@ def test_control_never_reissues_join_after_handoff(brain):
     assert "join via" not in reply
     assert "contact Tower" in reply
     assert brain.pilots["Colt 1"].phase == Phase.LANDING
+
+
+# ---------- Regressions from the 2026-10-18 pancake debrief ----------
+
+def test_bare_control_checkin_after_handoff_does_not_rearm_join(brain):
+    # A bare "Control, Adder 1" right after the Tower handoff is a
+    # frequency-change check-in, not an inbound call: it must not flip
+    # Landing -> Inbound and re-arm the join flow (12:55:33 in the debrief).
+    brain.handle("Control, Colt 1, inbound 35 miles southeast",
+                 controller=Controller.CONTROL)
+    brain.handle("150 to join via Entry East, Colt 1",
+                 controller=Controller.CONTROL)
+    brain.handle("Descend to 1500 feet, Colt 1", controller=Controller.CONTROL)
+    assert brain.pilots["Colt 1"].phase == Phase.LANDING
+    reply = brain.handle("Control, Colt 1", controller=Controller.CONTROL)
+    assert reply and "Control" in reply
+    assert brain.pilots["Colt 1"].phase == Phase.LANDING
+
+
+def test_first_bare_control_checkin_still_starts_inbound(brain):
+    # The guard must not break the legitimate first check-in: a bare
+    # "Kutaisi Control, Colt 1" before any join starts the arrival flow.
+    reply = brain.handle("Control, Colt 1", controller=Controller.CONTROL)
+    assert reply and "Control" in reply
+    assert brain.pilots["Colt 1"].phase == Phase.INBOUND
+
+
+def test_no_vacate_warning_while_holding(brain):
+    # The Ground->Tower handoff fires while the pilot is still at the holding
+    # point; taxiing forward from there clips the runway pavement. A pilot in
+    # Holding is not an incursion — no "vacate immediately" (12:51:21).
+    brain.handle("Ground, Colt 1, requesting taxi", controller=Controller.GROUND)
+    brain.handle("Colt 1, holding short runway 25", controller=Controller.GROUND)
+    assert brain.pilots["Colt 1"].phase == Phase.HOLDING
+    for _ in range(INCURSION_POLLS):
+        warned = brain.check_incursion("Colt 1", on_runway=True)
+    assert warned is None
+
+
+def test_real_incursion_still_warns(brain):
+    # The Holding exemption must not mask a genuine incursion: an uncleared
+    # pilot (never taxied, never cleared) parked on the runway still gets the
+    # warning after the debounce streak.
+    for _ in range(INCURSION_POLLS):
+        warned = brain.check_incursion("Colt 1", on_runway=True)
+    assert warned is not None
+    assert "vacate" in warned.lower()
+
+
+def test_mangled_runway_in_sight_readback_acknowledged(brain):
+    # STT drops the "in": "report runway sight" is the readback of "report
+    # runway in sight", not a position report — acknowledge, not "say again"
+    # (13:06:55 in the debrief).
+    brain.handle("Tower, Colt 1, at entry west", controller=Controller.TOWER)
+    reply = brain.handle("report runway sight, Colt 1",
+                         controller=Controller.TOWER)
+    assert reply and "roger" in reply.lower()
+    # The exact form still reads back the same way.
+    reply = brain.handle("report runway in sight, Colt 1",
+                         controller=Controller.TOWER)
+    assert reply and "roger" in reply.lower()
+
+
+def test_repeat_after_wrong_exit_replays_the_clearance(brain):
+    # A wrong-exit readback gets "say again" — but that reply must not replace
+    # the stored clearance, or a follow-up "repeat copy clearance" replays the
+    # "say again" itself and the pilot can never recover (12:44:32).
+    brain.handle("Ground, Colt 1, ready to copy clearance",
+                 controller=Controller.GROUND)
+    brain.handle("Ground, Colt 1, after departure, turn right, exit north,"
+                 " 1000 feet or below", controller=Controller.GROUND)
+    reply = brain.handle("Repeat copy clearance, Colt 1",
+                         controller=Controller.GROUND)
+    assert "exit" in reply.lower()
+    assert "say again" not in reply.lower()
+
+
+def test_say_again_still_replays_clearance(brain):
+    # The meta-reply guard must not break the normal path: "say again" with a
+    # real clearance on record still replays that clearance.
+    brain.handle("Ground, Colt 1, ready to copy clearance",
+                 controller=Controller.GROUND)
+    reply = brain.handle("say again, Colt 1", controller=Controller.GROUND)
+    assert "exit" in reply.lower()
+
+
+# ---------- Zones-based landing clearance (radar-driven) ----------
+
+import math as _math
+
+from ctr import AircraftTrack as _Track
+
+
+def _track_on(airfield, bearing_from_thr, dist_nm, alt_ft=1500, heading=None):
+    """A live track at a polar position around the active runway threshold."""
+    thr = airfield.runway_threshold(airfield.active_runway)
+    hdg = airfield.runway_heading(airfield.active_runway)
+    rad = _math.radians(bearing_from_thr)
+    lat = thr[0] + _math.degrees(dist_nm * 1852 * _math.cos(rad) / 6_371_000)
+    lon = thr[1] + _math.degrees(
+        dist_nm * 1852 * _math.sin(rad)
+        / (6_371_000 * _math.cos(_math.radians(thr[0]))))
+    return _Track(callsign="Colt 1", inside=True, lat=lat, lon=lon,
+                  alt_ft=alt_ft, distance_nm=dist_nm, relative="x",
+                  heading=heading if heading is not None else hdg)
+
+
+def _inbound_bearing(airfield):
+    """Bearing from the threshold that points straight down final."""
+    return (airfield.runway_heading(airfield.active_runway) + 180) % 360
+
+
+def test_pattern_turn_slices_reach_the_final_cone(airfield):
+    # The slices (abeam ±90° to ±30°) must meet the final cone exactly: a
+    # position 29° off the inbound course is inside a slice, 31° is not —
+    # and 31° is inside the tight established-final cone (±30°... boundary).
+    # Use clearly separated angles instead of the exact boundary.
+    inbound = _inbound_bearing(airfield)
+    assert airfield.in_pattern_turn(0, 0) is False  # no airfield position
+    # abeam (90°) and base (45°) are in the turn; final (0°) is not.
+    t_abeam = _track_on(airfield, (inbound + 90) % 360, 2.0)
+    t_base = _track_on(airfield, (inbound + 45) % 360, 2.0)
+    t_final = _track_on(airfield, inbound, 4.0)
+    assert airfield.in_pattern_turn(t_abeam.lat, t_abeam.lon)
+    assert airfield.in_pattern_turn(t_base.lat, t_base.lon)
+    assert not airfield.in_pattern_turn(t_final.lat, t_final.lon)
+    # Either side counts (STT mangles left/right).
+    t_left = _track_on(airfield, (inbound - 45) % 360, 2.0)
+    assert airfield.in_pattern_turn(t_left.lat, t_left.lon)
+    # Outside the slice radius: not in the turn.
+    t_far = _track_on(airfield, (inbound + 45) % 360, 10.0)
+    assert not airfield.in_pattern_turn(t_far.lat, t_far.lon)
+
+
+def test_established_final_is_tighter_than_is_on_final(airfield):
+    # A base turner at 45° off is inside the loose is_on_final cone (±40°)?
+    # No — 45 > 40, so use 35°: loose cone accepts, tight cone (±30°) and the
+    # slices (30..90) both reject... 35 is inside the slice range, so
+    # established-final must be False while is_on_final is True.
+    inbound = _inbound_bearing(airfield)
+    hdg = airfield.runway_heading(airfield.active_runway)
+    t = _track_on(airfield, (inbound + 35) % 360, 4.0)
+    assert airfield.is_on_final(t.lat, t.lon, hdg)
+    assert not airfield.is_established_final(t.lat, t.lon, hdg)
+    # Dead ahead: established.
+    t = _track_on(airfield, inbound, 4.0)
+    assert airfield.is_established_final(t.lat, t.lon, hdg)
+
+
+def test_radar_clears_to_land_once_established(brain, airfield):
+    # The OHB and pattern calls are status; the clearance comes from radar
+    # once the aircraft has flown the turn (observed in a slice) and rolled
+    # out established on final.
+    inbound = _inbound_bearing(airfield)
+    brain.handle("Tower, Colt 1, at entry west", controller=Controller.TOWER)
+    brain.handle("Tower, Colt 1, runway in sight", controller=Controller.TOWER)
+    assert brain.pilots["Colt 1"].phase == Phase.LANDING
+    assert not brain.pilots["Colt 1"].cleared_landing
+    # Abeam / base turn: no clearance yet, but the radar OBSERVES the turn.
+    t = _track_on(airfield, (inbound + 90) % 360, 2.0)
+    assert brain.check_landing_clearance("Colt 1", t) is None
+    t = _track_on(airfield, (inbound + 45) % 360, 2.0)
+    assert brain.check_landing_clearance("Colt 1", t) is None
+    assert not brain.pilots["Colt 1"].cleared_landing
+    assert brain.pilots["Colt 1"].pattern_flown
+    # Established on final: the radar holds off (the pilot gets the chance
+    # to say "on final" first) until inside the backstop range.
+    t = _track_on(airfield, inbound, 4.0)
+    assert brain.check_landing_clearance("Colt 1", t) is None
+    t = _track_on(airfield, inbound, 2.9)
+    reply = brain.check_landing_clearance("Colt 1", t)
+    assert reply and "cleared to land" in reply.lower()
+    assert brain.pilots["Colt 1"].cleared_landing
+    # Fires once.
+    assert brain.check_landing_clearance("Colt 1", t) is None
+
+
+def test_radar_clearance_waits_for_a_free_runway(brain, airfield):
+    # Runway occupied: the radar holds the clearance (the go-around monitor
+    # handles the occupied-runway warning); it fires once the runway clears.
+    inbound = _inbound_bearing(airfield)
+    brain.handle("Tower, Colt 1, at entry west", controller=Controller.TOWER)
+    brain.handle("Tower, Colt 1, runway in sight", controller=Controller.TOWER)
+    # Fly the pattern first (the radar must observe the turn).
+    t = _track_on(airfield, (inbound + 90) % 360, 2.0)
+    brain.check_landing_clearance("Colt 1", t)
+    thr = airfield.runway_threshold(airfield.active_runway)
+    blocker = _Unit("AI-1", thr[0], thr[1], airfield.elevation_ft + 10)
+    t = _track_on(airfield, inbound, 2.9)
+    assert brain.check_landing_clearance("Colt 1", t, traffic=[blocker]) is None
+    assert not brain.pilots["Colt 1"].cleared_landing
+    reply = brain.check_landing_clearance("Colt 1", t, traffic=[])
+    assert reply and "cleared to land" in reply.lower()
+
+
+def test_premature_on_final_while_turning_base_challenged(brain, airfield):
+    # A pilot calling "on final" while still in the turn (inside a slice) is
+    # reporting a position the radar does not show: the SOP answer is the
+    # position challenge ("negative. I show you ..."), not a clearance.
+    inbound = _inbound_bearing(airfield)
+    brain.handle("Tower, Colt 1, at entry west", controller=Controller.TOWER)
+    brain.handle("Tower, Colt 1, runway in sight", controller=Controller.TOWER)
+    t = _track_on(airfield, (inbound + 45) % 360, 2.0)
+    reply = brain.handle("Colt 1, on final", t, controller=Controller.TOWER)
+    assert "negative" in reply.lower()
+    assert "cleared" not in reply.lower()
+    assert not brain.pilots["Colt 1"].cleared_landing
+
+
+def test_on_final_after_radar_clearance_is_silent(brain, airfield):
+    # After the radar has cleared the flight, the pilot's "on final" is a
+    # status report — no duplicate clearance.
+    inbound = _inbound_bearing(airfield)
+    brain.handle("Tower, Colt 1, at entry west", controller=Controller.TOWER)
+    brain.handle("Tower, Colt 1, runway in sight", controller=Controller.TOWER)
+    t = _track_on(airfield, (inbound + 90) % 360, 2.0)
+    brain.check_landing_clearance("Colt 1", t)  # fly the pattern
+    t = _track_on(airfield, inbound, 2.9)
+    assert brain.check_landing_clearance("Colt 1", t)
+    assert brain.handle("Colt 1, on final", t,
+                        controller=Controller.TOWER) == ""
+
+
+def test_straight_in_on_final_still_cleared_by_voice(brain, airfield):
+    # A pilot who skips the OHB and flies straight-in never enters a slice:
+    # their "on final" call (established position) still gets the clearance.
+    inbound = _inbound_bearing(airfield)
+    brain.handle("Tower, Colt 1, at entry west", controller=Controller.TOWER)
+    t = _track_on(airfield, inbound, 8.0)
+    reply = brain.handle("Colt 1, on final", t, controller=Controller.TOWER)
+    assert "cleared to land" in reply.lower()
+    assert brain.pilots["Colt 1"].cleared_landing
+
+
+def test_radar_clearance_requires_the_break_clearance(brain, airfield):
+    # Debrief 2026-10-18 19:21:08: an arrival from Entry West sits on the
+    # extended centreline, so "established final" was true at the handoff and
+    # the radar cleared to land 13 s later — before the overhead break. The
+    # radar clearance is for the OHB flow only: it must not fire until Tower
+    # has cleared the pilot for the break AND the radar has observed the
+    # pattern turn (a slice passage).
+    inbound = _inbound_bearing(airfield)
+    brain.handle("Tower, Colt 1, at entry west", controller=Controller.TOWER)
+    t = _track_on(airfield, inbound, 12.0)
+    assert brain.check_landing_clearance("Colt 1", t) is None
+    assert not brain.pilots["Colt 1"].cleared_landing
+    # Break clearance alone is not enough: on the centreline, established,
+    # but the radar has not seen the turn yet.
+    brain.handle("Tower, Colt 1, runway in sight", controller=Controller.TOWER)
+    assert brain.check_landing_clearance("Colt 1", t) is None
+    # Fly the pattern (slice passage), roll out: the clearance fires at the
+    # backstop range.
+    t = _track_on(airfield, (inbound + 90) % 360, 2.0)
+    brain.check_landing_clearance("Colt 1", t)
+    t = _track_on(airfield, inbound, 2.9)
+    reply = brain.check_landing_clearance("Colt 1", t)
+    assert reply and "cleared to land" in reply.lower()
+
+
+def test_landing_geometry_uses_the_active_runway(brain, airfield):
+    # The brain's runway (set by wind/ATIS or the mission) may differ from
+    # airfield.active_runway: every positional check must use brain.runway.
+    # Debrief 2026-10-18: the flight flew runway 07 while active_runway was
+    # 25, so a default-runway check silently looked at the wrong runway end.
+    brain.set_runway("07")
+    inbound = _inbound_bearing(airfield)  # helper uses active_runway: rebuild
+    thr = airfield.runway_threshold("07")
+    hdg = airfield.runway_heading("07")
+    inbound7 = (hdg + 180) % 360
+    rad = _math.radians(inbound7)
+    lat = thr[0] + _math.degrees(4 * 1852 * _math.cos(rad) / 6_371_000)
+    lon = thr[1] + _math.degrees(
+        4 * 1852 * _math.sin(rad)
+        / (6_371_000 * _math.cos(_math.radians(thr[0]))))
+    t = _Track(callsign="Colt 1", inside=True, lat=lat, lon=lon,
+               alt_ft=1500, distance_nm=4, relative="x", heading=hdg)
+    assert airfield.is_established_final(lat, lon, hdg, "07")
+    assert not airfield.is_established_final(lat, lon, hdg)  # default = 25
+    # The brain's radar monitor uses brain.runway: established on 07.
+    brain.handle("Tower, Colt 1, at entry west", controller=Controller.TOWER)
+    brain.handle("Tower, Colt 1, runway in sight", controller=Controller.TOWER)
+    # Fly the pattern (slice passage) before the established-final tick.
+    rad_s = _math.radians(inbound7 + 90)
+    lat_s = thr[0] + _math.degrees(2 * 1852 * _math.cos(rad_s) / 6_371_000)
+    lon_s = thr[1] + _math.degrees(
+        2 * 1852 * _math.sin(rad_s)
+        / (6_371_000 * _math.cos(_math.radians(thr[0]))))
+    t_slice = _Track(callsign="Colt 1", inside=True, lat=lat_s, lon=lon_s,
+                     alt_ft=1500, distance_nm=2, relative="x", heading=hdg)
+    brain.check_landing_clearance("Colt 1", t_slice)
+    t_close = _Track(callsign="Colt 1", inside=True, lat=lat, lon=lon,
+                     alt_ft=1500, distance_nm=1.9, relative="x", heading=hdg)
+    reply = brain.check_landing_clearance("Colt 1", t_close)
+    assert reply and "runway 07" in reply.lower()
+
+
+def test_break_clearance_covers_wingmen(brain, airfield):
+    # Master Arms: the break clearance is valid for the whole flight. The
+    # wingman's radar flow (check_landing_clearance) arms on break_cleared,
+    # so the lead's break clearance must mark same-flight wingmen too —
+    # via either the OHB request or the "runway in sight" path.
+    inbound = _inbound_bearing(airfield)
+    brain.set_active_pilots(["Colt 1", "Colt 2"])
+    brain.handle("Tower, Colt 2, at entry west", controller=Controller.TOWER)
+    brain.handle("Tower, Colt 1, at entry west", controller=Controller.TOWER)
+    brain.handle("Tower, Colt 1, runway in sight", controller=Controller.TOWER)
+    assert brain.pilots["Colt 2"].break_cleared
+    # The lead's landing clearance covers the wing: their "on final" is
+    # silent (kneeboard RTB dialog: the wing only follows).
+    t_lead = _track_on(airfield, inbound, 4.0)
+    assert brain.handle("Colt 1, on final", t_lead,
+                        controller=Controller.TOWER)
+    t_wing = _track_on(airfield, inbound, 4.5)
+    assert brain.handle("Colt 2, on final", t_wing,
+                        controller=Controller.TOWER) == ""
+    assert brain.pilots["Colt 2"].cleared_landing
+
+
+def test_radar_clearance_not_fired_at_rwis_distance(brain, airfield):
+    # Debrief 2026-10-18 20:49:55: the pilot reported "runway in sight" 8 NM
+    # out on the centreline (the entry-to-field line IS the final corridor)
+    # and the radar cleared to land one second later — before the break.
+    # The radar must have OBSERVED the pattern turn: no slice passage, no
+    # clearance, no matter how perfect the final geometry looks.
+    inbound = _inbound_bearing(airfield)
+    brain.handle("Tower, Colt 1, at entry west", controller=Controller.TOWER)
+    t = _track_on(airfield, inbound, 8.2)
+    brain.handle("Colt 1, runway in sight", t, controller=Controller.TOWER)
+    assert brain.pilots["Colt 1"].break_cleared
+    assert brain.check_landing_clearance("Colt 1", t) is None
+    # Even closer, still on the centreline, no slice passage: no clearance.
+    t = _track_on(airfield, inbound, 3.0)
+    assert brain.check_landing_clearance("Colt 1", t) is None
+    # Fly through a slice, roll out: the clearance fires at the backstop.
+    t = _track_on(airfield, (inbound + 90) % 360, 2.0)
+    brain.check_landing_clearance("Colt 1", t)
+    t = _track_on(airfield, inbound, 2.9)
+    reply = brain.check_landing_clearance("Colt 1", t)
+    assert reply and "cleared to land" in reply.lower()
+
+
+def test_final_descent_waits_for_the_step_down_altitude(brain, airfield):
+    # Debrief 2026-10-18 20:46:38: the pilot got "descend to 1500" while still
+    # at 8000 ft — the distance gate had shrunk but the step-down to 5000 was
+    # never completed. The final descent waits for the altitude.
+    gate = airfield.gates["West"]
+    far = _Track(callsign="Colt 1", inside=False,
+                 lat=gate[0] + _math.degrees(20 * 1852 / 6_371_000),
+                 lon=gate[1], alt_ft=15000, distance_nm=20, relative="x")
+    brain.handle("Control, Colt 1, one ship Hornet, inbound, 25 miles north",
+                 far, controller=Controller.CONTROL)
+    brain.handle("turn heading 213 to join via entry west, Colt 1", far,
+                 controller=Controller.CONTROL)
+    # The checkin assigns the best gate for the position; pin the spoken one
+    # so the descent distances are measured against the gate we fly to.
+    brain.pilots["Colt 1"].entry_gate = "West"
+    assert brain.pilots["Colt 1"].descend_intermediate
+    # Readback while still high (8000 ft): silent, no final descent — but the
+    # readback is remembered so the handoff monitor can fire at pattern alt.
+    near_high = _Track(callsign="Colt 1", inside=False,
+                       lat=gate[0] + _math.degrees(10 * 1852 / 6_371_000),
+                       lon=gate[1], alt_ft=8000, distance_nm=10, relative="x")
+    assert brain.handle("descend and maintain 5000 feet, Colt 1", near_high,
+                        controller=Controller.CONTROL) == ""
+    assert not brain.pilots["Colt 1"].descend_issued
+    assert brain.pilots["Colt 1"].descend_readback
+    # At 5000 ft the monitor issues the final descent.
+    near_ok = _Track(callsign="Colt 1", inside=False,
+                     lat=gate[0] + _math.degrees(10 * 1852 / 6_371_000),
+                     lon=gate[1], alt_ft=5000, distance_nm=10, relative="x")
+    reply = brain.check_arrival_descent("Colt 1", near_ok)
+    assert reply and "1500" in reply
+    assert brain.pilots["Colt 1"].descend_issued
+
+
+def test_radar_backstop_gives_the_voice_call_a_window(brain, airfield):
+    # The radar clearance is the backstop, not the opener: after rollout it
+    # holds off so the pilot can say "on final" (the SOP call) and get the
+    # clearance from the voice path. Only inside RADAR_CLEAR_NM does the
+    # radar speak — so a silent pilot is still cleared before short final.
+    inbound = _inbound_bearing(airfield)
+    brain.handle("Tower, Colt 1, at entry west", controller=Controller.TOWER)
+    brain.handle("Tower, Colt 1, runway in sight", controller=Controller.TOWER)
+    brain.check_landing_clearance(
+        "Colt 1", _track_on(airfield, (inbound + 90) % 360, 2.0))
+    # Established at 3.5 NM: the radar waits.
+    t = _track_on(airfield, inbound, 3.5)
+    assert brain.check_landing_clearance("Colt 1", t) is None
+    assert not brain.pilots["Colt 1"].cleared_landing
+    # The pilot says "on final": cleared immediately by voice.
+    reply = brain.handle("Colt 1, on final", t, controller=Controller.TOWER)
+    assert "cleared to land" in reply.lower()
+    # The radar backstop never fires afterwards.
+    assert brain.check_landing_clearance("Colt 1", t) is None
+
+
+def test_radar_backstop_covers_a_silent_pilot(brain, airfield):
+    # A pilot who never says "on final" is still cleared before short final.
+    inbound = _inbound_bearing(airfield)
+    brain.handle("Tower, Colt 1, at entry west", controller=Controller.TOWER)
+    brain.handle("Tower, Colt 1, runway in sight", controller=Controller.TOWER)
+    brain.check_landing_clearance(
+        "Colt 1", _track_on(airfield, (inbound + 90) % 360, 2.0))
+    for dist in (3.5,):
+        assert brain.check_landing_clearance(
+            "Colt 1", _track_on(airfield, inbound, dist)) is None
+    reply = brain.check_landing_clearance(
+        "Colt 1", _track_on(airfield, inbound, 2.9))
+    assert reply and "cleared to land" in reply.lower()
+
+
+def test_step_down_issued_when_high_even_inside_the_gate(brain, airfield):
+    # Debrief 2026-10-18 21:17:59: the pilot checked in 6.5 NM north at
+    # Angels 14 — abeam the entry gate, so the straight-line gate distance
+    # (11 NM) was inside the final-descent gate and Control skipped the
+    # 5000 step-down entirely. The step-down is gated on distance AND
+    # altitude: too high -> 5000 first, regardless of the distance.
+    thr = airfield.runway_threshold(airfield.active_runway)
+    lat_n = thr[0] + _math.degrees(6.5 * 1852 / 6_371_000)
+    t = _Track(callsign="Colt 1", inside=True, lat=lat_n, lon=thr[1],
+               alt_ft=14000, distance_nm=6.5, relative="6 miles north")
+    brain.handle("Control, Colt 1, one ship Hornet, inbound, seven miles"
+                 " north of Kutaisi, at angels 14", t,
+                 controller=Controller.CONTROL)
+    # The checkin assigns the best gate for the position; the scenario flies
+    # to Entry West, so pin it (the pilot reads back the assigned gate).
+    brain.pilots["Colt 1"].entry_gate = "West"
+    reply = brain.handle("turn left heading 215 to join via entry west,"
+                         " Colt 1", t, controller=Controller.CONTROL)
+    assert "5000" in reply
+    assert brain.pilots["Colt 1"].descend_intermediate
+    assert not brain.pilots["Colt 1"].descend_issued
+    # At the gate and down to 5000: the monitor issues the final descent.
+    gate = airfield.gates["West"]
+    t2 = _Track(callsign="Colt 1", inside=False, lat=gate[0], lon=gate[1],
+                alt_ft=5000, distance_nm=14, relative="at entry west")
+    reply = brain.check_arrival_descent("Colt 1", t2)
+    assert reply and "1500" in reply
+    assert brain.pilots["Colt 1"].descend_issued
+    # The descent readback at pattern altitude hands off to Tower.
+    t3 = _Track(callsign="Colt 1", inside=True, lat=gate[0], lon=gate[1],
+                alt_ft=1500, distance_nm=14, relative="at entry west")
+    reply = brain.handle("descend to 1500 feet, Colt 1", t3,
+                         controller=Controller.CONTROL)
+    assert "contact Tower" in reply
+    assert brain.pilots["Colt 1"].phase == Phase.LANDING
+
+
+def test_final_descent_direct_when_low_and_close(brain, airfield):
+    # The altitude gate must not break the normal close-and-low case: an
+    # arrival inside the gate at/below 5000 gets the final descent directly
+    # on the join readback (the documented MA example).
+    gate = airfield.gates["West"]
+    t = _Track(callsign="Colt 1", inside=False, lat=gate[0], lon=gate[1],
+               alt_ft=5000, distance_nm=10, relative="at entry west")
+    brain.handle("Control, Colt 1, one ship Hornet, inbound, 10 miles west",
+                 t, controller=Controller.CONTROL)
+    brain.pilots["Colt 1"].entry_gate = "West"
+    reply = brain.handle("turn heading 213 to join via entry west, Colt 1",
+                         t, controller=Controller.CONTROL)
+    assert "1500" in reply
+    assert brain.pilots["Colt 1"].descend_issued

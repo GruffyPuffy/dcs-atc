@@ -445,6 +445,42 @@ class Airfield:
             zones.append({"runway": rwy, "corners": corners})
         return zones
 
+    def pattern_zones_geometry(self, runway: str | None = None,
+                               radius_nm: float = 3.0) -> list[dict]:
+        """The pattern "turn slices" for the map, BOTH sides of every runway.
+
+        Mirrors the planned positional landing-clearance arming: a short-arc
+        sector around each runway end, from abeam (90° off) back to the edge of
+        the final cone (30° off) — the slices meet the final-approach wedge
+        exactly, no overlap and no gap. Rendered for both sides because the
+        future arming logic will accept either (STT often mangles left/right,
+        and break directions vary) — the side only affects which slice the
+        pilot naturally flies through.
+
+        Returns [{runway, side, center, radius_nm, start_deg, end_deg}, ...]
+        where angles are bearings FROM the runway end on the approach side
+        (0 = dead ahead on final, ±90 = abeam).
+        """
+        zones: list[dict] = []
+        for rwy in self.runways:
+            thr = self.runway_threshold(rwy)
+            rwy_hdg = self.runway_heading(rwy)
+            if thr is None or rwy_hdg is None:
+                continue
+            inbound = (rwy_hdg + 180) % 360
+            for side, offs in (("left", (-90.0, -30.0)),
+                               ("right", (30.0, 90.0))):
+                zones.append({
+                    "runway": rwy,
+                    "side": side,
+                    "center": [thr[0], thr[1]],
+                    "radius_nm": radius_nm,
+                    "start_deg": (inbound + offs[0]) % 360,
+                    "end_deg": (inbound + offs[1]) % 360,
+                    "heading": rwy_hdg,
+                })
+        return zones
+
     def runway_threshold(self, runway: str | None = None) -> tuple[float, float] | None:
         """Threshold (lat, lon) for a runway (default: the active runway)."""
         return self.runways.get(runway or self.active_runway)
@@ -642,6 +678,65 @@ class Airfield:
         if abs((heading - rwy_hdg + 180) % 360 - 180) > max_offset_deg:
             return False
         return speed_kt is None or speed_kt <= max_speed_kt
+
+    def in_pattern_turn(self, lat: float, lon: float, runway: str | None = None,
+                        radius_nm: float = 3.0) -> bool:
+        """True if the position is inside a pattern "turn slice".
+
+        The slices are the short-arc sectors around the threshold from abeam
+        (90° off the inbound course) back to the edge of the final cone
+        (30° off) — see `pattern_zones_geometry`. Either side counts: STT
+        mangles left/right and the break direction varies, so the *position*
+        alone decides whether the aircraft is still in the turn.
+
+        Inside a slice the aircraft is turning base — NOT established on
+        final — so a landing clearance must not be issued yet (the zones
+        exist to tell "on final after the break" apart from "still turning").
+        """
+        thr = self.runway_threshold(runway)
+        rwy_hdg = self.runway_heading(runway)
+        if thr is None or rwy_hdg is None:
+            return False
+        if _haversine_nm(lat, lon, thr[0], thr[1]) > radius_nm:
+            return False
+        inbound = (rwy_hdg + 180) % 360
+        # Bearing FROM the threshold TO the aircraft, expressed as offset from
+        # the inbound course (0 = dead ahead on final, ±90 = abeam).
+        bearing_to_ac = _bearing(thr[0], thr[1], lat, lon)
+        off = (bearing_to_ac - inbound + 180) % 360 - 180
+        return 29.0 <= abs(off) <= 91.0
+
+    def is_established_final(self, lat: float, lon: float, heading: float,
+                             runway: str | None = None,
+                             max_nm: float = 5.0,
+                             max_offset_deg: float = 30.0) -> bool:
+        """True if the aircraft is established on final approach.
+
+        Like `is_on_final` but with the tighter ±30° cone that meets the
+        pattern slices exactly: inside the cone AND outside the turn slices
+        means the aircraft has rolled out and is flying the final. A base
+        turner (inside a slice) is not established, even though the loose
+        `is_on_final` cone (±40°) would accept them.
+
+        The default range is **pattern range** (5 NM): a post-break final is
+        flown from ~3 NM in, so anything further out is still inbound — an
+        arrival reporting "runway in sight" 8 NM out on the centreline (debrief
+        2026-10-18 20:49:55) must not read as established, or the radar clears
+        to land before the break. The voice path (`is_on_final`) keeps the
+        wider 12 NM cone for straight-in arrivals.
+        """
+        thr = self.runway_threshold(runway)
+        rwy_hdg = self.runway_heading(runway)
+        if thr is None or rwy_hdg is None:
+            return False
+        if _haversine_nm(lat, lon, thr[0], thr[1]) > max_nm:
+            return False
+        bearing_to_thr = _bearing(lat, lon, thr[0], thr[1])
+        offset = abs((bearing_to_thr - rwy_hdg + 180) % 360 - 180)
+        if offset > max_offset_deg:
+            return False
+        hdg_offset = abs((heading - rwy_hdg + 180) % 360 - 180)
+        return hdg_offset <= max_offset_deg
 
     def is_on_final(self, lat: float, lon: float, heading: float,
                     runway: str | None = None, max_nm: float = 12.0,

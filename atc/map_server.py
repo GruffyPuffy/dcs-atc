@@ -450,6 +450,7 @@ def _airspace_payload(airfield: Airfield, basemap: str | None = None) -> dict:
             "runway": airfield.runway_corridor_geometry(),
             "lineup": airfield.lineup_zone_geometry(),
             "exit": airfield.exit_zone_geometry(radius_nm=EXIT_REPORT_RADIUS_NM),
+            "pattern": airfield.pattern_zones_geometry(),
         },
         "overlay": _overlay_payload(airfield),
         # Base map layer (OSM or DCS tiles) chosen by config/CLI.
