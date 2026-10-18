@@ -146,3 +146,82 @@ def test_replay_takeoff_readback_does_not_loop(springfield):
                Controller.TOWER)
     assert "say again" not in (r or "").lower()
     assert sc.phase() == Phase.DEPARTURE
+
+
+# ---- Multiplayer: a lead's landing clearance covers the wingmen (MA SOP) ----
+# "The landing clearance is valid for the wingmen as well. They don't need
+# individual clearances." Emulated with two Scenarios sharing one traffic list
+# (one radar picture), each with its own speaker/callsign.
+
+@pytest.fixture
+def adder_flight(gudauta):
+    """Lead Adder 1 + wingman Adder 2 sharing one radar picture."""
+    registry = CallsignRegistry.from_mission(
+        [{"name": "Adder11"}, {"name": "Adder12"}])
+    brain = AtcBrain(
+        tower=gudauta.tower, runway="33", phraseology=Phraseology.load(),
+        callsigns=registry, ground=gudauta.ground, control=gudauta.control,
+        gates=list(gudauta.gates), gate_locator=gudauta.nearest_gate,
+        airfield=gudauta)
+    gudauta.set_active_runway("33")
+    brain.set_runway("33")
+    traffic: list = []  # shared: both flights see the same picture
+    lead = Scenario(gudauta, brain, callsign="Adder 1", speaker="Lead",
+                    traffic=traffic)
+    wing = Scenario(gudauta, brain, callsign="Adder 2", speaker="Wing",
+                    traffic=traffic)
+    return lead, wing
+
+
+def _fly_to_final(sc, runway="33"):
+    """Inbound -> join readback -> descent readback -> handed to Tower."""
+    sc.set_alt(12000).on_final(runway, nm=30)
+    sc.say(f"Control, {sc.callsign}, inbound 30 miles south at Angels 12",
+           Controller.CONTROL)
+    sc.say(f"150 to join via the entry, {sc.callsign}", Controller.CONTROL)
+    sc.say(f"Descend to 1500 feet, {sc.callsign}", Controller.CONTROL)
+    sc.on_final(runway, nm=5)
+
+
+def test_mp_lead_landing_clearance_covers_wingman(adder_flight):
+    """Lead on final gets the clearance; the wingman's own final is silent."""
+    lead, wing = adder_flight
+    _fly_to_final(lead)
+    _fly_to_final(wing)
+
+    # Lead reports final -> the full landing clearance.
+    r = lead.say("Tower, Adder 1, on final", Controller.TOWER)
+    assert "cleared to land" in r.lower()
+    assert lead.phase() == Phase.LANDING
+
+    # The wingman is covered: their final gets NO duplicate clearance.
+    r = wing.say("Tower, Adder 2, on final", Controller.TOWER)
+    assert r == ""
+    # ...but the SOP semantics still apply: the wingman IS cleared to land
+    # (the post-landing handoff and go-around logic treat them as cleared).
+    assert wing.phase() == Phase.LANDING
+    assert wing.brain.pilots["Adder 2"].cleared_landing is True
+
+
+def test_mp_wingman_alone_still_gets_own_clearance(adder_flight):
+    """No lead clearance -> the wingman's final gets a normal clearance."""
+    lead, wing = adder_flight
+    _fly_to_final(wing)
+    r = wing.say("Tower, Adder 2, on final", Controller.TOWER)
+    assert "cleared to land" in r.lower()
+
+
+def test_mp_wingman_outside_the_flow_not_covered(adder_flight):
+    """A flight-mate who never joined the arrival flow is not cleared by proxy.
+
+    Only pilots already in the arrival flow (inbound/landing) are covered —
+    a wingman who is still parked or departing must not silently become
+    'cleared to land'.
+    """
+    lead, wing = adder_flight
+    _fly_to_final(lead)
+    lead.say("Tower, Adder 1, on final", Controller.TOWER)
+    # The wingman never called inbound; they are not in the pilots book at all
+    # (or idle), so no coverage.
+    assert "Adder 2" not in wing.brain.pilots \
+        or wing.brain.pilots["Adder 2"].cleared_landing is False

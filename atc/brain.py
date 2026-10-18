@@ -557,6 +557,21 @@ class AtcBrain:
         n = pilot.formation
         return f"{n}-ship " if n >= 2 else ""
 
+    def _flight_members(self, callsign: str) -> list[str]:
+        """Every known pilot whose callsign belongs to the same flight.
+
+        "Adder 1" and "Adder 2" (or "Adder11"/"Adder12") share the flight name
+        "Adder" (`flight_name`). Used for the SOP rule that a lead's landing
+        clearance covers the wingmen: they do not need individual clearances.
+        Only *known* pilots count (someone who has actually transmitted), so a
+        quiet wingman is not cleared by proxy before they ever call.
+        """
+        flight = flight_name(callsign)
+        if not flight:
+            return [callsign]
+        return [cs for cs in self.pilots
+                if flight_name(cs) == flight and cs != callsign]
+
     def _pilot(self, callsign: str) -> PilotState:
         state = self.pilots.get(callsign)
         if state is None:
@@ -1359,8 +1374,18 @@ class AtcBrain:
         # additional comms" — so the bot stays SILENT (no "roger"). The branch
         # still exists so the readback is not misrouted to another intent.
         # "" is the deliberate-silence convention (see workers._handle).
+        # A wingman covered by the lead's clearance (same flight, lead already
+        # cleared to land) is in the same boat: their "on final" needs no
+        # individual clearance, so it is acknowledged with silence too.
         if pilot.phase == Phase.LANDING and re.search(
                 r"\b(cleared|clear to land|copy|roger|wilco|readback)\b", low):
+            return ""
+        if pilot.phase == Phase.INBOUND and pilot.cleared_landing \
+                and re.search(r"\b(on final|short final|final)\b", low):
+            # Covered by the lead's clearance: the wingman is effectively
+            # cleared, so advance them to Landing (the post-landing handoff
+            # and go-around logic then treat them like any cleared arrival).
+            pilot.phase = Phase.LANDING
             return ""
         # Readback of "report on final" (the in-the-break cue), not the
         # position report. "reporting on final" / "on final" still land.
@@ -1388,6 +1413,15 @@ class AtcBrain:
             # Cleared: no longer waiting on the runway to clear.
             pilot.awaiting_landing = False
             pilot.landing_ready_announced = False
+            # Master Arms: the landing clearance is valid for the whole flight
+            # ("they don't need individual clearances"). Mark same-flight
+            # wingmen who are already in the arrival flow as covered, so their
+            # own "on final" gets silence instead of a duplicate clearance.
+            for wing in self._flight_members(callsign):
+                wing_state = self.pilots.get(wing)
+                if wing_state is not None and wing_state.phase in (
+                        Phase.INBOUND, Phase.LANDING):
+                    wing_state.cleared_landing = True
             return self._say("cleared_land", callsign,
                              flight=self._formation_prefix(pilot))
         if re.search(r"\binbound\b|\bon approach\b|\blanding\b|\bentry\b", low):
