@@ -10,7 +10,7 @@ Scenario harness: `tests/scenario.py`.
 
 import pytest
 
-from brain import Controller, Phase
+from brain import Controller, INCURSION_POLLS, Phase
 from scenario import Scenario
 
 
@@ -1150,7 +1150,9 @@ def test_runway_incursion_warns_when_uncleared(airfield, brain):
     sc = _scenario(airfield, brain).park("Ramp South")
     sc.say("Ground, Colt 1, requesting taxi", Controller.GROUND)  # -> Taxi
     sc.at_runway("25", along_nm=0.5)  # now sitting on the runway
-    call = brain.check_incursion("Colt 1", on_runway=True)
+    call = None
+    for _ in range(INCURSION_POLLS):
+        call = brain.check_incursion("Colt 1", on_runway=True)
     assert call is not None and "without clearance" in call.lower()
 
 
@@ -1172,10 +1174,16 @@ def test_runway_incursion_silent_while_lined_up(airfield, brain):
 def test_runway_incursion_fires_once(airfield, brain):
     sc = _scenario(airfield, brain).park("Ramp South")
     sc.say("Ground, Colt 1, requesting taxi", Controller.GROUND)
-    assert brain.check_incursion("Colt 1", on_runway=True) is not None
+    call = None
+    for _ in range(INCURSION_POLLS):
+        call = brain.check_incursion("Colt 1", on_runway=True)
+    assert call is not None
     assert brain.check_incursion("Colt 1", on_runway=True) is None
     brain.check_incursion("Colt 1", on_runway=False)  # re-arm
-    assert brain.check_incursion("Colt 1", on_runway=True) is not None
+    call = None
+    for _ in range(INCURSION_POLLS):
+        call = brain.check_incursion("Colt 1", on_runway=True)
+    assert call is not None
 
 
 def test_runway_incursion_silent_after_airborne_call(airfield, brain):
@@ -1188,3 +1196,106 @@ def test_runway_incursion_silent_after_airborne_call(airfield, brain):
     sc.say("Tower, Colt 1, airborne", Controller.TOWER)      # -> Airborne
     assert brain.pilots["Colt 1"].phase == Phase.AIRBORNE
     assert brain.check_incursion("Colt 1", on_runway=True) is None
+
+
+# ---------- Debrief regressions: 2026-10-18 ma--pancake Adder-1 sortie ----------
+# Every test here maps to a transmission that botched a real training flight
+# (see the debrief comms log at 12:50-12:56). Do not fold in new behaviour.
+
+def test_debrief_descending_and_maintaining_5000_is_accepted(airfield, brain):
+    # "Colt 1, descending and maintaining 5,000 feet" (STT: inflected verb,
+    # comma in the figure) was rejected -> two "say again" loops.
+    sc = _scenario(airfield, brain)
+    sc.lat = airfield.ctr.center_lat + 0.58
+    sc.lon = airfield.ctr.center_lon
+    sc.say("Kutaisi Control, Colt 1, inbound 35 miles north at Angels 12",
+           Controller.CONTROL)
+    r = sc.say("150 to join via Entry East, Colt 1", Controller.CONTROL)
+    assert "descend and maintain 5000" in r.lower()
+    reply = sc.say("descending and maintaining 5,000 feet, Colt 1",
+                   Controller.CONTROL)
+    assert "say again" not in (reply or "").lower()
+    # Still stepped down (intermediate); the final descent follows on radar.
+    assert brain.pilots["Colt 1"].descend_intermediate is True
+
+
+def test_debrief_right_overhead_brake_readback_is_silent(airfield, brain):
+    # "right overhead brake, Colt 1" (STT homophone) — and the pilot said no
+    # "cleared" — was answered "say again" three times.
+    sc = _scenario(airfield, brain).at_gate("East")
+    sc.say("Tower, Colt 1, runway in sight", Controller.TOWER)
+    assert sc.say("right overhead brake, Colt 1", Controller.TOWER) == ""
+
+
+def test_debrief_bare_overhead_brake_without_cleared_is_accepted(airfield, brain):
+    # The MA reply is "cleared ... overhead break"; the pilot's readback is
+    # often just "right overhead break" — no "cleared". Not a new request.
+    sc = _scenario(airfield, brain).at_gate("East")
+    sc.say("Tower, Colt 1, runway in sight", Controller.TOWER)
+    reply = sc.say("cleared for the right overhead brake, Colt 1",
+                   Controller.TOWER)
+    assert reply == ""
+
+
+def test_debrief_runway_seven_taxi_readback_is_correct(airfield, brain):
+    # "runway seven" (words, no leading zero) failed the check against
+    # clearance "runway 07" -> "readback incomplete, I did not get your runway".
+    sc = _scenario(airfield, brain).park("Ramp South")
+    brain.set_runway("07")
+    sc.say("Ground, Colt 1, requesting taxi", Controller.GROUND)
+    r = sc.say("runway 7, Colt 1", Controller.GROUND)
+    assert "say again" not in (r or "").lower()
+    assert "did not get" not in (r or "").lower()
+
+
+def test_debrief_turning_base_is_silent(airfield, brain):
+    # "turning base" was met with "say again" every leg of the pattern.
+    sc = _scenario(airfield, brain).at_gate("East")
+    sc.say("Tower, Colt 1, runway in sight", Controller.TOWER)
+    sc.say("right overhead break, Colt 1", Controller.TOWER)
+    assert sc.say("turning base, Colt 1", Controller.TOWER) == ""
+    assert sc.say("downwind, Colt 1", Controller.TOWER) == ""
+
+
+def test_debrief_wrong_exit_say_again_not_did_not_get(airfield, brain):
+    # A readback that names a DIFFERENT exit must not be answered "I did not
+    # get your exit" — the pilot did read back an exit.
+    sc = _scenario(airfield, brain).park("Ramp South")
+    sc.say("Ground, Colt 1, ready to copy clearance", Controller.GROUND)
+    clearance = brain.pilots["Colt 1"].last_clearance
+    # swap the exit gate in the readback for another configured gate
+    gates = [g for g in brain.gates
+             if g.lower() not in (clearance or "").lower()]
+    assume = gates[0] if gates else "North"
+    text = f"after departure, turn right, exit {assume.lower()}, 1500, Colt 1"
+    r = sc.say(text, Controller.GROUND)
+    assert "did not get" not in (r or "").lower()
+    assert "say again" in (r or "").lower()
+
+
+def test_debrief_bare_control_checkin_after_takeoff_stays_airborne(airfield,
+                                                                   brain):
+    # "Control, Adder one" right after departure flipped Airborne -> Inbound,
+    # killing the climb clearance.
+    sc = _scenario(airfield, brain).at_threshold("25")
+    sc.say("Tower, Colt 1, ready for departure", Controller.TOWER)
+    sc.say("Line up and wait 25, Colt 1", Controller.TOWER)   # -> Departure
+    sc.say("right turn out, cleared for takeoff 25, Colt 1", Controller.TOWER)
+    sc.say("Tower, Colt 1, airborne", Controller.TOWER)       # -> Airborne
+    sc.say("Control, Colt 1, at 1500 feet", Controller.CONTROL)
+    assert brain.pilots["Colt 1"].phase == Phase.AIRBORNE
+    # A BARE check-in after the climb was issued must NOT flip to Inbound.
+    sc.say("Control, Colt 1", Controller.CONTROL)
+    assert brain.pilots["Colt 1"].phase == Phase.AIRBORNE
+
+
+def test_debrief_wrong_frequency_ready_call_gets_handoff_again(airfield, brain):
+    # "Kutaisi Tower, ready to takeoff" on GROUND's frequency (pilot never
+    # switched) got "say again" twice; a real ground controller re-issues the
+    # handoff.
+    sc = _scenario(airfield, brain).park("Ramp South")
+    sc.say("Ground, Colt 1, requesting taxi", Controller.GROUND)
+    sc.holding("Holding A/N")  # taxi out to the holding point first
+    sc.say("Ground, Colt 1, holding short runway 25", Controller.GROUND)
+    r = sc.say("Kutaisi Tower, Colt 1, ready to takeoff", Controller.GROUND)
+    assert "contact tower" in (r or "").lower()

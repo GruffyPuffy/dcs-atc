@@ -62,6 +62,51 @@ PATTERN_ALT_SLOP_FT = 200
 ANGELS_HANDOFF_FT = 15000
 ANGELS_HANDOFF_SLOP_FT = 500
 
+# How many consecutive polls with the aircraft on the runway before the
+# "vacate immediately" incursion warning fires (~2 s poll cadence -> 10 s).
+# A pilot creeping forward to line up right after the Ground->Tower handoff
+# clips the pavement briefly; warning them then is noise, not safety.
+INCURSION_POLLS = 5
+
+# Spoken number words -> digits, for readback verification. STT writes what
+# it hears: "runway seven", "QNH two nine nine six", "5,000 feet" (with a
+# comma). The verifiers compare against digits, so normalise first.
+_NUMBER_WORDS = {
+    "zero": "0", "one": "1", "two": "2", "three": "3", "four": "4",
+    "five": "5", "six": "6", "seven": "7", "eight": "8", "nine": "9",
+    "niner": "9",
+}
+
+
+def _normalise_spoken_numbers(text: str) -> str:
+    """STT-friendly number normalisation for readback matching.
+
+    - number words -> digits ("runway seven" -> "runway 7")
+    - digit groups with separators -> plain digits ("5,000" -> "5000",
+      "1,500" -> "1500")
+    - "two nine nine six" (a spoken digit *sequence*) -> "2996" so a QNH
+      readback matches "2992"-style figures.
+    """
+    text = re.sub(r"\b(\d{1,3}),(\d{3})\b", r"\1\2", text)
+    text = re.sub(r"\b(" + "|".join(_NUMBER_WORDS) + r")\b",
+                  lambda m: _NUMBER_WORDS[m.group(1)], text)
+    # A run of single digits separated by spaces is one spoken figure
+    # ("two nine nine six" -> "2996"). Only merge runs of 2+ to avoid
+    # fusing unrelated single digits.
+    text = re.sub(r"\b(\d)(\s+\d){1,}\b",
+                  lambda m: re.sub(r"\s+", "", m.group(0)), text)
+    return text
+
+
+def _stem(word: str) -> str:
+    """A regex fragment matching a verb in its common spoken forms.
+
+    STT transcribes inflections: "descending", "maintaining", "cleared".
+    `\bword\b` misses them ("descend" does not match "descending"), so match
+    the stem with optional suffixes instead.
+    """
+    return rf"\b{word}(?:ing|ed|s)?\b"
+
 
 class Controller(str, Enum):
     """Which controlling agency is being addressed (see ATC.md §11)."""
@@ -93,6 +138,9 @@ class PilotState:
     phase: Phase = Phase.IDLE
     cleared_inbound: bool = False
     cleared_landing: bool = False
+    # Tower has issued the overhead-break clearance (debrief 2026-10-18: the
+    # pilot's readback "right overhead brake" must not re-trigger the request).
+    break_cleared: bool = False
     go_around_issued: bool = False
     descend_issued: bool = False  # Control has issued the descent to 1500 ft
     descend_intermediate: bool = False  # Control issued the far-out step-down
@@ -102,6 +150,7 @@ class PilotState:
     stingray_handoff_announced: bool = False
     altitude_warned: bool = False  # warned about busting the CTR ceiling
     incursion_warned: bool = False  # warned about being on the runway uncleared
+    incursion_streak: int = 0  # consecutive on-runway polls (debounce)
     exit_gate: str = ""  # assigned departure exit point
     entry_gate: str = ""  # assigned arrival entry point
     # Held because the runway was occupied; the bot calls the pilot back when it
@@ -696,10 +745,18 @@ class AtcBrain:
         ("...hold short runway zero seven" + "Ford one" -> "0741"), so an exact
         set match would wrongly report the runway as missing. Accept a spoken
         number that *starts with* the clearance number.
+
+        Leading zeros are also tolerated: STT writes the spoken word ("seven"
+        -> "7") while the clearance says "07", so compare with zeros stripped.
         """
-        return any(s == number
-                   or (len(s) > len(number) and s.startswith(number))
-                   for s in spoken)
+        bare = number.lstrip("0") or "0"
+        for s in spoken:
+            s_bare = s.lstrip("0") or "0"
+            if s == number or s_bare == bare:
+                return True
+            if len(s) > len(number) and s.startswith(number):
+                return True
+        return False
 
     def _readback_item(self, low: str, clearance: str) -> str | None:
         """The label of the first item the pilot failed to read back, or None.
@@ -725,7 +782,37 @@ class AtcBrain:
         missing_gate = [g for g in gates if g.lower() not in low]
         if not missing_num and not missing_gate:
             return None
+        # A gate WAS named, just a different one ("after departure, turn right,
+        # exit north" when Exit East was cleared): the pilot did read back an
+        # exit — saying "I did not get your exit" is confusing. The honest
+        # controller response is to say the clearance again, so label it as a
+        # full "say again" of the clearance instead of a missing item.
+        if missing_gate and any(re.search(rf"\b(?:exit|entry)\s+{re.escape(g)}\b",
+                                          low, re.IGNORECASE) for g in self.gates):
+            return "clearance"
         return self._item_label(clearance, missing_num, missing_gate)
+
+    def _completes_clearance(self, low: str, pilot: PilotState) -> bool:
+        """True if a short follow-up ("runway 07") supplies the item a prior
+        readback was missing. Mirrors _readback_item's matching: numbers must
+        match a clearance number (leading zeros tolerated), gates must be named
+        with Exit/Entry.
+        """
+        clearance = self.callsigns.strip(pilot.last_clearance
+                                         or pilot.last_reply)
+        if not clearance:
+            return False
+        spoken = self._numbers(low)
+        if all(self._number_read_back(n, spoken)
+               for n in self._numbers(clearance)):
+            return True
+        for g in self.gates:
+            if re.search(rf"\b(?:exit|entry)\s+{re.escape(g)}\b",
+                         clearance, re.IGNORECASE) \
+                    and re.search(rf"\b(?:exit|entry)\s+{re.escape(g)}\b",
+                                  low, re.IGNORECASE):
+                return True
+        return False
 
     def _check_readback(self, callsign, pilot, low, clearance, controller,
                         ok_key=None):
@@ -749,6 +836,10 @@ class AtcBrain:
             pilot.readback_fails = 0
             return self._say(ok_key, callsign, agency=agency) if ok_key else ""
         pilot.readback_fails += 1
+        if item == "clearance":
+            # A wrong item was read back (e.g. a different exit): the honest
+            # response is the clearance again, not "I did not get your exit".
+            return self._say("say_again", callsign, agency=agency)
         return self._say("readback_incomplete", callsign, agency=agency,
                          item=item)
 
@@ -764,6 +855,10 @@ class AtcBrain:
             pilot.readback_fails = 0
             return ""
         pilot.readback_fails += 1
+        if item == "clearance":
+            # Wrong-item readback: the clearance itself follows right away, a
+            # "say again" here would be noise.
+            return ""
         return self._say("readback_incomplete", callsign,
                          agency=self._agency(controller), item=item) + " "
 
@@ -1034,6 +1129,7 @@ class AtcBrain:
         pilot.phase = Phase.IDLE
         pilot.cleared_inbound = False
         pilot.cleared_landing = False
+        pilot.break_cleared = False
         pilot.go_around_issued = False
         pilot.descend_issued = False
         pilot.descend_intermediate = False
@@ -1074,6 +1170,7 @@ class AtcBrain:
         }.get(pilot.phase, Phase.IDLE)
         pilot.phase = back
         pilot.cleared_landing = False
+        pilot.break_cleared = False
         pilot.descend_issued = False
         pilot.descend_intermediate = False
         pilot.awaiting_takeoff = False
@@ -1089,6 +1186,13 @@ class AtcBrain:
     def _handle_ground(self, callsign: str, pilot: PilotState,
                        low: str, track: AircraftTrack | None,
                        traffic: list | None = None) -> str | None:
+        # A handed-off pilot still on Ground ("Kutaisi Tower, ready to takeoff"
+        # landed on Ground's frequency — the pilot dialled the wrong channel).
+        # Re-issue the handoff instead of "say again"; any Ground-freq call in
+        # the Holding phase is a wrong frequency by definition (Ground has
+        # already told them to contact Tower).
+        if pilot.phase == Phase.HOLDING:
+            return self._say("contact_tower", callsign)
         # Readback of the runway-in-use/QNH info ("25 in use, QNH 2992") ->
         # "readback correct, advise when ready for clearance". Without this the
         # line has no trigger (none of {information, taxi, clearance}) and the
@@ -1155,7 +1259,8 @@ class AtcBrain:
         # parking readback may name only the ramp ("Ramp North, Alpha November")
         # with no keyword, so a named parking area also counts.
         if pilot.phase == Phase.TAXI and (
-                re.search(r"\b(clear|cleared|copy|roger|via|taxi)\b", low)
+                re.search(r"\b(clear|cleared|copy|roger|via|taxi|"
+                          r"hold short|runway)\b", low)
                 or self._spoken_parking(low)) \
                 and not re.search(r"\bholding\b", low):
             return self._check_readback(callsign, pilot, low,
@@ -1198,6 +1303,17 @@ class AtcBrain:
             # challenged), but it is not named in the reply — the kneeboard
             # dialog does not name it.
             return self._say("contact_tower", callsign)
+        # Bare runup/hold-short follow-up: a pilot who got "say again" on a
+        # readback may answer with just the missing item ("runway 07", 12:50:10
+        # in the pancake debrief). If that item actually completes the previous
+        # clearance, accept it instead of another "say again" that stalled the
+        # flow and left the pilot re-asking.
+        if (pilot.phase in (Phase.TAXI, Phase.CLEARANCE)
+                and pilot.readback_fails > 0
+                and self._completes_clearance(low, pilot)):
+            pilot.readback_fails = 0
+            return self._say("roger", callsign, agency=self.ground_short)
+
         # Initial check-in: "Ground, Adder11" -> "Adder11, Ground". A position/
         # formation report ("two-ship Hornets on Ramp South") gets the runway and
         # QNH. MA SOP: if the pilot did NOT listen to ATIS (no "with information
@@ -1306,6 +1422,7 @@ class AtcBrain:
             return self._say("roger", callsign, agency=self.tower_short)
         if re.search(r"\b(runway in sight|runway insight|visual)\b", low):
             pilot.phase = Phase.LANDING
+            pilot.break_cleared = True
             return self._say("cleared_overhead", callsign,
                              flight=self._formation_prefix(pilot))
         # Arrival check-in at the entry point: "Tower, Adder11, Entry East" ->
@@ -1323,26 +1440,38 @@ class AtcBrain:
         # position reports (MA: in the break if traffic nearby; turning final
         # is good practice). None of them is required — "on final" still
         # clears to land if they skip the pattern calls.
-        if re.search(r"\b(overhead break|initial)\b", low) \
+        if re.search(r"\b(overhead br(eak|ake)|initial)\b", low) \
                 and not re.search(r"\bcleared\b", low):
             pilot.phase = Phase.LANDING
+            if pilot.break_cleared:
+                # Readback of the break clearance without "cleared" (STT also
+                # writes "brake"). Silence, same as a full readback.
+                return ""
+            pilot.break_cleared = True
             return self._say("cleared_overhead", callsign,
                              flight=self._formation_prefix(pilot))
         # Readback of the break clearance ("cleared for right overhead break")
         # must not look like "in the break". Correct readback is silent.
         if pilot.phase == Phase.LANDING and re.search(r"\bcleared\b", low) \
                 and re.search(r"\b(overhead|break|brake|runway)\b", low) \
-                and not re.search(r"\b(to land|on final|in the break)\b", low):
+                and not re.search(r"\b(to land|on final|in the br(eak|ake))\b", low):
+            pilot.break_cleared = True
             return ""
-        if re.search(r"\b(?:in the (?:break|brake)|on the (?:break|brake)|"
-                     r"in break|breaking)\b", low):
+        if re.search(r"\b(?:in the br(eak|ake)|on the br(eak|ake)|"
+                     r"in br(eak|ake)|br(?:eak|ak)ing)\b", low):
             # Position report only (MA: if traffic nearby). Not a landing
             # request and not a cue to skip "turning final" — stay silent.
             pilot.phase = Phase.LANDING
             return ""
-        # MA: lead may call "turning final". Not a landing clearance — and
-        # must not match the bare "final" in the on-final rule.
-        if re.search(r"\bturn(?:ing)?(?:\s+to|\s+onto)?\s+final\b", low):
+        # Pattern position reports (MA: optional, no reply). Pilots fly and
+        # report the circuit differently — "turning base", "on downwind",
+        # "upwind", "crosswind" — and none of them is a landing request or a
+        # cue to skip "on final". One family, so adding a variant later is a
+        # one-word change. "turning final" is included here (it must not fall
+        # through to the bare-"final" landing clearance below).
+        if re.search(r"\b(up ?wind|cross ?wind|down ?wind|"
+                     r"base (?:leg|turn)?|turn(?:ing)?\s+(?:to\s+|onto\s+)?"
+                     r"base|turn(?:ing)?(?:\s+to|\s+onto)?\s+final)\b", low):
             pilot.phase = Phase.LANDING
             return ""
         # Readback of the takeoff clearance once already cleared ("right turn
@@ -1468,7 +1597,8 @@ class AtcBrain:
         # this readback branch. Only a genuine readback ("150 to join via Entry
         # East") gets here.
         if pilot.phase == Phase.INBOUND and re.search(
-                r"\b(join|via|heading|turn|descend|descent|1500?)\b", low):
+                r"\b(join|via|heading|turn|descend\w*|descent|maintain\w*|"
+                r"level(?:ling|ling off)?|1500?|5000?)\b", low):
             if not pilot.descend_issued:
                 # Step the descent by distance: far out -> an intermediate
                 # altitude; close to the entry -> the final 1500 ft. The
@@ -1566,8 +1696,13 @@ class AtcBrain:
         # NOTE: exclude "control zone" — a departure readback ("remain below
         # 1500 ft until clear of the control zone") contains "control" and was
         # wrongly treated as an arrival check-in, flipping the phase to Inbound.
+        # Airborne pilots (post-departure, before/at the handoff to Control)
+        # also say just "Control, callsign" when switching frequency — that is
+        # a frequency-change check-in, not an inbound check-in. Don't flip
+        # Airborne -> Inbound on it; just answer.
         if re.search(r"\bcontrol\b(?!\s+zone)", low):
-            pilot.phase = Phase.INBOUND
+            pilot.phase = (Phase.AIRBORNE
+                           if pilot.phase == Phase.AIRBORNE else Phase.INBOUND)
             return self._say("control_ack", callsign,
                              agency=self.control_short)
         return None
@@ -2070,8 +2205,12 @@ class AtcBrain:
     def check_incursion(self, callsign: str, on_runway: bool) -> str | None:
         """Warn a pilot who is on the runway without a takeoff/landing clearance.
 
-        Fires once per incursion (re-arms when off the runway). A pilot in the
-        Departure or Landing phase is legitimately on the runway. So is a pilot
+        Fires once per incursion (re-arms when off the runway), but only after
+        the aircraft has stayed on the runway across several polls: a pilot
+        taxiing forward to line up after the "contact Tower" handoff often
+        clips the runway pavement while still in the Holding phase, and a real
+        tower does not yell "vacate immediately" at them for that.
+        A pilot in the Departure or Landing phase is legitimately on the runway. So is a pilot
         in **Lineup** — "line up and wait" *explicitly* puts them on the runway,
         so warning them to "vacate immediately" would be wrong (and did, before
         this was added).
@@ -2079,6 +2218,7 @@ class AtcBrain:
         pilot = self._pilot(callsign)
         if not on_runway:
             pilot.incursion_warned = False
+            pilot.incursion_streak = 0
             return None
         # A pilot in Departure or Landing is legitimately on the runway. So is
         # one in Lineup ("line up and wait" puts them there) and one in
@@ -2095,6 +2235,9 @@ class AtcBrain:
                 and pilot.phase in (Phase.LANDING, Phase.TAXI)):
             return None
         if pilot.incursion_warned:
+            return None
+        pilot.incursion_streak += 1
+        if pilot.incursion_streak < INCURSION_POLLS:
             return None
         pilot.incursion_warned = True
         return self._say("runway_incursion", callsign)

@@ -2,7 +2,7 @@
 
 import dataclasses
 
-from brain import AtcBrain, Controller, Phase, Phraseology
+from brain import (AtcBrain, Controller, INCURSION_POLLS, Phase, Phraseology)
 from ctr import AircraftTrack
 
 
@@ -930,8 +930,11 @@ def test_a_wiped_identity_would_warn_an_empty_uncleared_record(brain):
     assert brain.pilots["Ford 1"].phase is not Phase.IDLE
     # The cleared pilot is (correctly) not an incursion...
     assert brain.check_incursion("Ford 1", True) is None
-    # ...but the raw player name is a different, uncleared pilot.
-    assert brain.check_incursion("Caveman", True) is not None
+    # ...but the raw player name is a different, uncleared pilot. The warning
+    # needs a few consecutive on-runway polls (debounce), so call repeatedly.
+    for _ in range(INCURSION_POLLS):
+        warned = brain.check_incursion("Caveman", True)
+    assert warned is not None
 
 
 def test_sync_speakers_keeps_duplicate_callsigns_distinct(brain):
