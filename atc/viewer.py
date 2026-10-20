@@ -44,12 +44,39 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 
+
+class _ViewerHTTPServer(ThreadingHTTPServer):
+    """A threading server hardened against stalled clients.
+
+    - `daemon_threads`: worker threads never block shutdown, and a pile-up
+      of dead connections cannot accumulate as live threads.
+    - `timeout` + overridable `handle_error`: the accept loop reaps a
+      request thread that stalls (a client that opens a TCP connection but
+      never completes the TLS handshake would otherwise block a thread
+      forever — enough of those and the server stops accepting, seen as
+      "connects but the handshake times out").
+    """
+
+    daemon_threads = True
+    timeout = 30
+
+    def handle_error(self, request, client_address) -> None:
+        # A timed-out or aborted connection is routine (browsers preload,
+        # scanners poke); anything else still deserves the traceback.
+        import sys
+        exc = sys.exception()
+        if isinstance(exc, (TimeoutError, ConnectionError, ssl.SSLError)):
+            return
+        super().handle_error(request, client_address)
+
 # Read-only reuse of the map server's payload helpers and constants. Nothing
 # here mutates bot state; importing must not start servers or threads.
 from map_server import (DEBRIEF_DIR, OVERLAYS, WEB, _airspace_payload,
                         _basemap_payload, _debrief_slug, TrackHistory)
 
 MS_TO_KT = 1.943844  # DCS weather is m/s; the map shows knots (same as bot)
+# How long the newest-debrief scan result may be reused (see newest_debrief).
+_NEWEST_CACHE_S = 5.0
 
 # A debrief filename is exactly: tracks_<slug>[_<slug>...]_<stamp>.json
 # Validating the whole shape (not just "ends with .json") means the viewer can
@@ -81,8 +108,19 @@ def _resolve_debrief(name: str, debrief_dir: Path) -> Path | None:
     return path
 
 
-def newest_debrief(debrief_dir: Path) -> Path | None:
-    """The most recently modified debrief that actually has a trail."""
+def newest_debrief(debrief_dir: Path, _cache: dict = {}) -> Path | None:
+    """The most recently modified debrief that actually has a trail.
+
+    Cached for a few seconds: the viewer polls this on every `/api/atc`
+    request, and the scan re-reads and JSON-parses **every** debrief file.
+    With several people watching the same map that is a lot of redundant
+    disk/CPU work per tick — and a new debrief appearing a few seconds late
+    is invisible to a human.
+    """
+    now = time.monotonic()
+    cached, at = _cache.get("value"), _cache.get("at", 0.0)
+    if cached is not None and now - at < _NEWEST_CACHE_S:
+        return cached
     best: tuple[float, Path] | None = None
     for path in debrief_dir.glob("tracks_*.json"):
         try:
@@ -93,7 +131,10 @@ def newest_debrief(debrief_dir: Path) -> Path | None:
             continue
         if best is None or mtime > best[0]:
             best = (mtime, path)
-    return best[1] if best else None
+    result = best[1] if best else None
+    if result != cached:
+        _cache["value"], _cache["at"] = result, now
+    return result
 
 
 def list_debriefs(debrief_dir: Path) -> list[dict]:
@@ -603,7 +644,7 @@ def start_viewer(airfield, port: int, host: str = "127.0.0.1",
     service = ViewerService(airfield, debrief_dir, basemap,
                             credentials or {}, tls=tls)
     try:
-        server = ThreadingHTTPServer((host, port), make_handler(service))
+        server = _ViewerHTTPServer((host, port), make_handler(service))
     except OSError as error:
         print(f"[!] Viewer disabled: cannot bind {host}:{port} ({error})",
               file=sys.stderr)
