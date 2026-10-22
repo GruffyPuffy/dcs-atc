@@ -1315,3 +1315,33 @@ def test_debrief_wrong_frequency_ready_call_gets_handoff_again(airfield, brain):
     sc.say("Ground, Colt 1, holding short runway 25", Controller.GROUND)
     r = sc.say("Kutaisi Tower, Colt 1, ready to takeoff", Controller.GROUND)
     assert "contact tower" in (r or "").lower()
+
+
+# ---------- Regressions from the 2026-10-22 Mags debrief ----------
+
+def test_departure_handoff_has_no_bogus_exit_note(airfield, brain):
+    """The "not near Exit X" note must not fire on a normal departure.
+
+    The handoff happens seconds after liftoff, when the assigned gate is 5-8 NM
+    away by definition. Measuring the gate distance against a 1.5 NM radius made
+    the note fire on *every* departure (debrief 2026-10-22: "note: you are not
+    near Exit East" 47 s after takeoff, 1.1 NM from the runway).
+    """
+    sc = _scenario(airfield, brain).park("Ramp South")
+    sc.say("Colt 1, ready to copy clearance", Controller.GROUND)
+    gate = brain.pilots["Colt 1"].exit_gate
+    sc.say(f"After departure Exit {gate}, 1500 ft or below, Colt 1",
+           Controller.GROUND)
+    sc.say("Colt 1, requesting taxi", Controller.GROUND)
+    sc.at_threshold("25")
+    sc.say("Colt 1, holding short runway 25", Controller.GROUND)
+    sc.say("Tower, Colt 1, at runway 25, ready for departure",
+           Controller.TOWER)
+    sc.say("Line up and wait 25, Colt 1", Controller.TOWER)
+    # The pilot does NOT report "airborne": Tower's handoff monitor drives the
+    # transition (as in the 2026-10-22 sortie), which is where the note fired.
+    sc.at_gate(gate).set_alt(airfield.elevation_ft + 1500)
+    reply = brain.check_departure_handoff("Colt 1", sc._track())
+    assert reply is not None
+    assert "contact Control" in reply
+    assert "not near" not in reply.lower()

@@ -397,12 +397,30 @@ def test_repeated_readback_attempts_are_safe(brain):
                              controller=Controller.GROUND)
         assert "readback incomplete" in reply.lower()
         assert brain.pilots["Colt 1"].phase == Phase.CLEARANCE  # unchanged
-    # A correct readback is silent and still leaves the phase at CLEARANCE
-    # (the pilot proceeds to taxi when ready).
+    # A readback that FIXES the flagged miss is confirmed ("readback correct"),
+    # so the pilot knows the correction landed. A clean first readback is still
+    # silent (see test_ground_clearance_readback_correct). Either way the phase
+    # stays at CLEARANCE: the pilot proceeds to taxi when ready.
     reply = brain.handle("After departure turn right West, 1500 ft or below, Colt 1",
                          controller=Controller.GROUND)
-    assert reply == ""
+    assert "readback correct" in reply.lower()
     assert brain.pilots["Colt 1"].phase == Phase.CLEARANCE
+
+
+def test_corrected_readback_is_confirmed_once(brain):
+    """The confirmation is for the *fix*: a repeat of the correct readback is
+    silent again, because there is no longer an outstanding miss."""
+    brain.handle("Ground, Colt 1, ready to copy clearance",
+                 controller=Controller.GROUND)
+    brain.handle("After departure turn right West, Colt 1",
+                 controller=Controller.GROUND)  # missing the altitude
+    corrected = brain.handle(
+        "After departure turn right West, 1500 ft or below, Colt 1",
+        controller=Controller.GROUND)
+    assert "readback correct" in corrected.lower()
+    assert brain.handle(
+        "After departure turn right West, 1500 ft or below, Colt 1",
+        controller=Controller.GROUND) == ""
 
 
 def test_readback_numbers_accept_spoken_digits():
@@ -411,6 +429,35 @@ def test_readback_numbers_accept_spoken_digits():
     assert "2992" in AtcBrain._numbers("qnh two niner niner two")
     assert "1500" in AtcBrain._numbers("one five zero zero feet")
     assert "070" in AtcBrain._numbers("heading zero seven zero")
+
+
+def test_readback_numbers_accept_compound_number_words():
+    # A pilot may say "angels fifteen" or "angels thirty two" instead of
+    # spelling the digits. Before this, the word tables held only single digits,
+    # so those folded to *nothing* and the readback looked empty (debrief
+    # 2026-10-22: "angels fifteen" compared against a "15" clearance as if the
+    # pilot had said nothing at all).
+    from brain import AtcBrain
+    assert "15" in AtcBrain._numbers("angels fifteen")
+    assert "32" in AtcBrain._numbers("angels thirty two")
+    assert "240" in AtcBrain._numbers("flight level two four zero")
+    assert "21000" in AtcBrain._numbers("angels two one thousand")
+    # The digit-by-digit form still works and agrees with the compound form.
+    assert AtcBrain._numbers("angels one five") == AtcBrain._numbers("angels fifteen")
+
+
+def test_compound_number_readback_is_accepted():
+    # End to end: a clearance of "Angels 15" is satisfied by "angels fifteen".
+    brain = AtcBrain()
+    brain.handle("Colt 1, Ground, ready to copy clearance",
+                 controller=Controller.GROUND)
+    clearance = brain.handle("Colt 1, Ground, ready to copy clearance",
+                             controller=Controller.GROUND)
+    assert "15" in clearance
+    reply = brain.handle(
+        "After departure Exit East, 1500 ft or below, Colt 1",
+        controller=Controller.GROUND)
+    assert reply == ""  # complete readback: silence, not "say again"
 
 
 def test_readback_ignores_the_callsign_number(brain):
@@ -2336,3 +2383,334 @@ def test_final_descent_direct_when_low_and_close(brain, airfield):
                          t, controller=Controller.CONTROL)
     assert "1500" in reply
     assert brain.pilots["Colt 1"].descend_issued
+
+
+# ---------- Regressions from the 2026-10-22 Mags debrief ----------
+#
+# The live sortie logged 30 bare "say again" replies out of 61 ATC
+# transmissions, and the pilot was never cleared to land. Each test below pins
+# one fix for that sortie, written against the *recorded* pilot phrases so the
+# exact failures cannot come back.
+
+def _airborne(brain, callsign="Colt 1", phase=Phase.AIRBORNE):
+    """Put a known pilot in a phase, creating the state if needed."""
+    pilot = brain._pilot(callsign)
+    pilot.phase = phase
+    return pilot
+
+
+def test_bare_tower_checkin_is_acknowledged(brain):
+    # Seven consecutive "Tower, Epic 4" calls were answered "say again" in the
+    # sortie, so the pilot could not even establish contact on Tower.
+    reply = brain.handle("Tower, Colt 1", controller=Controller.TOWER)
+    assert reply and "Tower" in reply
+    assert "say again" not in reply.lower()
+
+
+def test_bare_tower_checkin_with_full_name_is_acknowledged(brain):
+    reply = brain.handle("Kutaisi Tower, Colt 1", controller=Controller.TOWER)
+    assert reply and "Tower" in reply
+
+
+def test_tower_checkin_does_not_swallow_a_request(brain):
+    # The acknowledgement must not steal a real call: "ready for departure"
+    # still gets the line-up.
+    reply = brain.handle("Tower, Colt 1, ready for departure",
+                         controller=Controller.TOWER)
+    assert "line up and wait" in reply.lower()
+
+
+def test_spoken_channel_readback_is_silent(brain):
+    # STT writes "channel seven", never "channel 7": the old digit-only guard
+    # let every real frequency-change readback fall through to "say again".
+    for text in ("Colt 1, channel seven, push",
+                 "Stingray, channel three, Colt 1",
+                 "Colt 1 pushing channel three",
+                 "Colt 1, switching to channel 3",
+                 "Colt 1, channel 8, push"):
+        assert brain.handle(text, controller=Controller.CONTROL) == "", text
+
+
+def test_spoken_channel_readback_is_silent_in_handed_off_phases(brain):
+    # The silent-ack guard used to sit *after* controller dispatch, so Ground's
+    # and Control's "re-issue the handoff" branches answered first and repeated
+    # "contact Tower on channel 7" over the pilot's acknowledgement — twice in a
+    # row in the 2026-10-22 sortie (22:06:45 and 22:06:55). The guard now runs
+    # before dispatch, so a readback in a handed-off phase stays silent.
+    for controller, phase, text in (
+            (Controller.GROUND, Phase.HOLDING, "Colt 1, channel seven push"),
+            (Controller.GROUND, Phase.HOLDING, "Colt 1, channel seven, push."),
+            (Controller.TOWER, Phase.AIRBORNE, "Colt 1, channel 8, push"),
+            (Controller.CONTROL, Phase.AIRBORNE, "Colt 1, channel three, push"),
+            (Controller.CONTROL, Phase.LANDING, "Colt 1, channel seven, push"),
+            (Controller.TOWER, Phase.LANDING, "Colt 1, channel six, push")):
+        _airborne(brain, callsign="Colt 1", phase=phase)
+        assert brain.handle(text, controller=controller) == "", text
+
+
+def test_channel_change_request_still_answered_in_handed_off_phase(brain):
+    # Moving the guard must not swallow a genuine request for a frequency
+    # change: "request push" is a question and still gets the handoff.
+    _airborne(brain, callsign="Colt 1", phase=Phase.HOLDING)
+    reply = brain.handle("Colt 1, request push", controller=Controller.GROUND)
+    assert "Tower" in reply
+    assert "say again" not in reply.lower()
+
+
+def test_channel_change_request_gets_the_handoff(brain):
+    # "request Stingray" was answered with a bare ack six times in a row. The
+    # pilot was airborne with Control, so the answer is the Stingray push.
+    _airborne(brain)
+    reply = brain.handle("Control, Colt 1, request Stingray",
+                         controller=Controller.CONTROL)
+    assert "Stingray" in reply
+    assert "say again" not in reply.lower()
+
+
+def test_channel_request_for_an_arrival_gets_tower(brain):
+    _airborne(brain, phase=Phase.INBOUND)
+    reply = brain.handle("Control, Colt 1, request channel change",
+                         controller=Controller.CONTROL)
+    assert "Tower" in reply
+
+
+def test_help_is_reachable_without_the_trainer_prefix(brain):
+    # Help calls in the sortie were swallowed as check-ins or "say again".
+    # With a callsign it always works; a bare "help" needs the pilot to be
+    # placeable (solo mode), which the trainer enables for a single pilot.
+    for text in ("Control, Colt 1, help", "Colt 1, help"):
+        reply = brain.handle(text, controller=Controller.CONTROL)
+        assert reply and "suggests" in reply.lower(), text
+
+
+def test_bare_help_works_for_a_placeable_pilot(brain):
+    # A solo pilot who says just "help" is attributed to their own callsign.
+    brain.solo_mode = True
+    brain.set_active_pilots(["Colt 1"])
+    brain.remember_speaker("Caveman", "Colt 1")
+    reply = brain.handle("help", controller=Controller.CONTROL, speaker="Caveman")
+    assert reply and "suggests" in reply.lower()
+
+
+def test_help_still_works_with_the_trainer_prefix(brain):
+    reply = brain.handle("trainer, Colt 1, help", controller=Controller.GROUND)
+    assert reply and "suggests" in reply.lower()
+
+
+def test_help_on_control_does_not_say_contact_control(brain):
+    # help_airborne told a pilot already on Control to "contact Control".
+    _airborne(brain)
+    reply = brain.handle("Control, Colt 1, help", controller=Controller.CONTROL)
+    assert "contact Control" not in reply
+    assert "Stingray" in reply
+
+
+def test_help_airborne_on_tower_still_points_at_control(brain):
+    _airborne(brain)
+    reply = brain.handle("Tower, Colt 1, help", controller=Controller.TOWER)
+    assert "Control" in reply
+
+
+def test_control_does_not_reissue_join_after_handing_off(brain):
+    # Once Control has handed the flight to Tower, a later Control call must
+    # repeat the handoff, not re-clear a join (which undid the handoff).
+    pilot = _airborne(brain, phase=Phase.LANDING)
+    reply = brain.handle("Control, Colt 1, inbound, Kutaisi",
+                         controller=Controller.CONTROL)
+    assert "contact Tower" in reply
+    assert "join via" not in reply
+    assert pilot.phase == Phase.LANDING
+
+
+def test_departure_checkin_with_control_stays_airborne(brain):
+    # The post-takeoff check-in must not flip a departure into Inbound.
+    pilot = _airborne(brain, phase=Phase.LINEUP)
+    brain.handle("Control, Colt 1, established Angels 15",
+                 controller=Controller.CONTROL)
+    assert pilot.phase == Phase.AIRBORNE
+
+
+def test_request_landing_on_control_gets_tower_handoff(brain):
+    # "request landing" got "say again" while "on final" got the handoff.
+    reply = brain.handle("Control, Colt 1, request landing",
+                         controller=Controller.CONTROL)
+    assert "Tower" in reply
+
+
+def test_exit_note_is_silent_for_a_departure_tracking_its_gate(brain, airfield):
+    # The note fired on EVERY departure: the handoff happens seconds after
+    # liftoff, when the assigned gate is 5-8 NM away by definition.
+    from ctr import AircraftTrack
+    pilot = _airborne(brain)
+    pilot.exit_gate = "East"
+    target = airfield.gates["East"]
+    track = AircraftTrack(callsign="Colt 1", inside=False, lat=target[0],
+                          lon=target[1], alt_ft=2000.0, distance_nm=8.0,
+                          relative="8 miles east", heading=90.0)
+    assert brain._exit_deviation_note(pilot, track) == ""
+
+
+def test_exit_note_fires_when_heading_for_a_different_gate(brain, airfield):
+    from ctr import AircraftTrack
+    pilot = _airborne(brain)
+    pilot.exit_gate = "East"
+    # Over the *West* gate while cleared for Exit East: genuinely off track.
+    target = airfield.gates["West"]
+    track = AircraftTrack(callsign="Colt 1", inside=False, lat=target[0],
+                          lon=target[1], alt_ft=2000.0, distance_nm=8.0,
+                          relative="8 miles west", heading=270.0)
+    assert "Exit East" in brain._exit_deviation_note(pilot, track)
+
+
+def test_arrival_completes_after_control_handoff(brain, airfield):
+    """End-to-end: the sortie that ended with no landing clearance now closes.
+
+    Reproduces the 2026-10-22 arrival: Control hands off, the pilot misses the
+    first Tower call, and Tower must still acknowledge and clear them to land.
+    """
+    from scenario import Scenario
+    sc = Scenario(airfield, brain, callsign="Colt 1", speaker="Caveman")
+    sc.on_final("25", nm=2.0)
+    sc.set_alt(1400.0)
+    pilot = _airborne(brain, phase=Phase.INBOUND)
+    pilot.entry_gate = "East"
+    pilot.descend_issued = True
+    pilot.descend_readback = True
+
+    # Control hands the arrival to Tower.
+    reply = brain.handle("Control, Colt 1, request landing", sc._track(),
+                         controller=Controller.CONTROL)
+    assert "contact Tower" in reply
+    assert pilot.phase == Phase.LANDING
+
+    # Tower acknowledges the check-in (previously "say again", which stranded
+    # the pilot with no way to reach Tower).
+    assert brain.handle("Tower, Colt 1", sc._track(),
+                        controller=Controller.TOWER) == "Colt 1, Tower."
+
+    # "on final" completes the arrival.
+    reply = brain.handle("Tower, Colt 1, on final", sc._track(),
+                         controller=Controller.TOWER)
+    assert "cleared to land" in reply
+    assert pilot.cleared_landing
+
+
+# ---------- Phrasing tolerance across agencies (2026-10-22 follow-up) ----------
+#
+# A pilot does not read the manual. The debrief showed the bot only understood
+# one canonical wording per request ("requesting taxi", not "ready to taxi"),
+# which produced "say again" for perfectly normal phraseology on every agency.
+# These pin the wordings a real controller answers without hesitation.
+
+def test_ground_accepts_ready_to_taxi(brain):
+    # The MA kneeboard says "requesting taxi", but "ready to taxi" is just as
+    # standard and was answered "say again" (or a bare check-in ack).
+    brain.handle("Ground, Colt 1, ready to copy clearance",
+                 controller=Controller.GROUND)
+    for text in ("Ground, Colt 1, ready to taxi", "Colt 1, ready to taxi",
+                 "Colt 1, ready for taxi", "Colt 1, we're ready to taxi"):
+        brain._pilot("Colt 1").phase = Phase.CLEARANCE
+        reply = brain.handle(text, controller=Controller.GROUND)
+        assert "cleared taxi" in reply.lower(), text
+
+
+def test_ground_accepts_start_up_and_bare_taxi(brain):
+    for text, expected in (("Colt 1, ready for start up", "taxi"),
+                           ("Colt 1, request start up", "taxi"),
+                           ("Colt 1, taxi", "taxi")):
+        brain._pilot("Colt 1").phase = Phase.CLEARANCE
+        reply = brain.handle(text, controller=Controller.GROUND)
+        assert expected in reply.lower(), (text, reply)
+
+
+def test_request_taxi_clearance_gets_the_taxi_clearance(brain):
+    # "clearance" must not hijack it into a fresh departure clearance.
+    brain.handle("Ground, Colt 1, ready to copy clearance",
+                 controller=Controller.GROUND)
+    reply = brain.handle("Colt 1, request taxi clearance",
+                         controller=Controller.GROUND)
+    assert "cleared taxi" in reply.lower()
+    assert "after departure" not in reply.lower()
+
+
+def test_tower_answers_holding_short_report(brain, airfield):
+    # A pilot who switches to Tower and reports holding short gets the line-up,
+    # not "say again".
+    from scenario import Scenario
+    sc = Scenario(airfield, brain, callsign="Colt 1", speaker="Caveman")
+    sc.holding("Holding A/N")
+    brain._pilot("Colt 1").phase = Phase.HOLDING
+    reply = brain.handle("Tower, Colt 1, holding short runway 25", sc._track(),
+                         controller=Controller.TOWER)
+    assert "line up and wait" in reply.lower()
+
+
+def test_tower_accepts_landing_variants(brain):
+    for text in ("Tower, Colt 1, request to land", "Tower, Colt 1, ready to land",
+                 "Tower, Colt 1, requesting landing", "Tower, Colt 1, request landing"):
+        brain._pilot("Colt 1").phase = Phase.INBOUND
+        reply = brain.handle(text, controller=Controller.TOWER)
+        assert reply and "say again" not in reply.lower(), text
+
+
+def test_control_accepts_climb_and_rtb_variants(brain):
+    # Each call on a fresh pilot: the second call in a sequence is a readback of
+    # the first (correctly silent), which would mask what we are testing here.
+    for text in ("Control, Colt 1, request climb",
+                 "Control, Colt 1, ready to climb",
+                 "Control, Colt 1, climbing to Angels 15"):
+        brain.pilots.pop("Colt 1", None)
+        brain._pilot("Colt 1").phase = Phase.AIRBORNE
+        reply = brain.handle(text, controller=Controller.CONTROL)
+        assert reply is not None and "say again" not in reply.lower(), text
+    for text in ("Control, Colt 1, RTB", "Colt 1, returning to base"):
+        brain.pilots.pop("Colt 1", None)
+        brain._pilot("Colt 1").phase = Phase.AIRBORNE
+        reply = brain.handle(text, controller=Controller.CONTROL)
+        assert reply is not None and "say again" not in reply.lower(), text
+
+
+def test_control_acknowledges_a_direction_report(brain):
+    # "marking bull, 077 for 41" is a picture call, not a clearance request.
+    brain._pilot("Colt 1").phase = Phase.AIRBORNE
+    reply = brain.handle("Control, Colt 1, marking bull, 077 for 41",
+                         controller=Controller.CONTROL)
+    assert reply and "say again" not in reply.lower()
+
+
+def test_ground_accepts_parking_variants(brain):
+    for text in ("Ground, Colt 1, request taxi to parking",
+                 "Colt 1, request parking", "Colt 1, taxi to the ramp"):
+        brain._pilot("Colt 1").phase = Phase.TAXI
+        brain._pilot("Colt 1").parking_cleared = False
+        reply = brain.handle(text, controller=Controller.GROUND)
+        assert "taxi" in reply.lower(), text
+        assert "say again" not in reply.lower(), text
+
+
+def test_departure_handoff_is_radar_driven_not_a_pilot_report(brain, airfield):
+    """Tower pushes a departure to Control on radar, with no pilot call.
+
+    MA SOP: after takeoff the pilot "expect[s] instructions to switch to
+    control" — Tower initiates it. The phase only advances once the aircraft is
+    actually off the runway (a departure readback alone does not do it).
+    """
+    from ctr import AircraftTrack
+    pilot = brain._pilot("Colt 1")
+    pilot.phase = Phase.DEPARTURE
+    pilot.exit_gate = "West"
+    # Still over the runway: no handoff yet (a readback is not airborne).
+    thr = airfield.runway_threshold("25")
+    on_rwy = AircraftTrack(callsign="Colt 1", inside=True, lat=thr[0], lon=thr[1],
+                           alt_ft=airfield.elevation_ft + 10, distance_nm=0.2,
+                           relative="on runway", heading=250.0)
+    assert brain.check_departure_handoff("Colt 1", on_rwy) is None
+    assert pilot.phase == Phase.DEPARTURE
+    # Clear of the runway: the handoff fires unprompted.
+    sc_track = AircraftTrack(
+        callsign="Colt 1", inside=False, lat=airfield.gates["West"][0],
+        lon=airfield.gates["West"][1], alt_ft=2000.0, distance_nm=8.0,
+        relative="8 miles west", heading=250.0)
+    reply = brain.check_departure_handoff("Colt 1", sc_track)
+    assert reply is not None and "contact Control" in reply
+    assert pilot.phase == Phase.AIRBORNE

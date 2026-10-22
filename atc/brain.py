@@ -41,10 +41,18 @@ DEFAULT_PHRASEOLOGY = Path(__file__).with_name("phraseology.json")
 # should not be handed off).
 ENTRY_REPORT_RADIUS_NM = 5.0
 # How close a departure must be to its assigned exit gate when Tower hands it to
-# Control; further away gets a trainer note (the handoff still happens). Kept
-# small: the gate is a point on the CTR boundary, so a wide radius would accept
-# almost any departure direction.
+# Control. The handoff fires as soon as the aircraft is clear of the runway, so
+# the gate (a point on the CTR boundary, 5-8 NM out) is *always* far away then:
+# comparing against a small radius made the trainer note fire on every single
+# departure (debrief 2026-10-22: "note: you are not near Exit East" 47 s after
+# takeoff, 1.1 NM from the runway). The note now compares the distance to the
+# assigned gate against the nearest gate: only a departure whose exit gate is
+# not the nearest one *at all* is genuinely off track.
 EXIT_REPORT_RADIUS_NM = 1.5
+# A departure is "near" its assigned exit when it is no further off than the
+# nearest gate plus this margin (NM). Kept small: it distinguishes "heading for
+# the wrong side of the field" (~10 NM away) from normal early-departure jitter.
+EXIT_NEAREST_MARGIN_NM = 2.0
 
 # Arrival descent is stepped by distance to the entry gate, like a real
 # controller (not a single canned "descend to 1500" at 35 miles). Within
@@ -80,34 +88,103 @@ ANGELS_HANDOFF_SLOP_FT = 500
 # clips the pavement briefly; warning them then is noise, not safety.
 INCURSION_POLLS = 5
 
-# Spoken number words -> digits, for readback verification. STT writes what
-# it hears: "runway seven", "QNH two nine nine six", "5,000 feet" (with a
-# comma). The verifiers compare against digits, so normalise first.
-_NUMBER_WORDS = {
-    "zero": "0", "one": "1", "two": "2", "three": "3", "four": "4",
-    "five": "5", "six": "6", "seven": "7", "eight": "8", "nine": "9",
-    "niner": "9",
-}
+# Spoken number words -> digits. STT writes what it *hears*, so a clearance
+# figure arrives as words ("runway seven", "QNH two nine nine six") while every
+# intent regex is written for the digits a DCS pilot reads off the cockpit.
+# Covers digit words, teens and tens so compound altides ("angels thirty two")
+# parse as 32, not as 302.
+_ONES = {"zero": "0", "one": "1", "two": "2", "three": "3", "four": "4",
+         "five": "5", "six": "6", "seven": "7", "eight": "8", "nine": "9",
+         "niner": "9"}
+_TEENS = {"ten": "10", "eleven": "11", "twelve": "12", "thirteen": "13",
+          "fourteen": "14", "fifteen": "15", "sixteen": "16",
+          "seventeen": "17", "eighteen": "18", "nineteen": "19"}
+_TENS = {"twenty": "20", "thirty": "30", "forty": "40", "fifty": "50",
+         "sixty": "60", "seventy": "70", "eighty": "80", "ninety": "90"}
+_NUMBER_WORDS = {**_ONES, **_TEENS, **_TENS}
+
+# The words a figure may be built from, longest first so "twenty" is preferred
+# over a hypothetical "two" prefix match inside it.
+_FIGURE_WORD = "|".join(sorted(_NUMBER_WORDS, key=len, reverse=True))
+
+# A spoken figure after a number context: a runway, channel, heading or
+# altitude. Both the digit-by-digit form ("heading one four four" -> 144) and
+# the compound form ("angels thirty two" -> 32) are captured, with an optional
+# trailing "thousand" ("flight level two four zero", "angels two one thousand").
+_FIGURE_CONTEXT_RE = re.compile(
+    r"\b(runway|channel|heading|angels|altitude|flight level)\s+"
+    rf"((?:(?:{_FIGURE_WORD})\s*){{1,4}}(?:thousand)?)",
+    re.IGNORECASE)
 
 
-def _normalise_spoken_numbers(text: str) -> str:
-    """STT-friendly number normalisation for readback matching.
+def _spoken_figure(phrase: str) -> str:
+    """Parse a spoken figure ("one five", "thirty two", "fifteen") to digits.
 
-    - number words -> digits ("runway seven" -> "runway 7")
-    - digit groups with separators -> plain digits ("5,000" -> "5000",
-      "1,500" -> "1500")
-    - "two nine nine six" (a spoken digit *sequence*) -> "2996" so a QNH
-      readback matches "2992"-style figures.
+    Returns "" when the phrase is not a clean number. A trailing "thousand"
+    multiplies by 1000 ("two one thousand" -> "21000").
     """
-    text = re.sub(r"\b(\d{1,3}),(\d{3})\b", r"\1\2", text)
-    text = re.sub(r"\b(" + "|".join(_NUMBER_WORDS) + r")\b",
-                  lambda m: _NUMBER_WORDS[m.group(1)], text)
-    # A run of single digits separated by spaces is one spoken figure
-    # ("two nine nine six" -> "2996"). Only merge runs of 2+ to avoid
-    # fusing unrelated single digits.
-    text = re.sub(r"\b(\d)(\s+\d){1,}\b",
-                  lambda m: re.sub(r"\s+", "", m.group(0)), text)
-    return text
+    words = phrase.split()
+    scale = ""
+    if words and words[-1] == "thousand":
+        words, scale = words[:-1], "000"
+    if not words or any(w not in _NUMBER_WORDS for w in words):
+        return ""
+    # Compound tens+units ("thirty two") and the single-word tens/teens
+    # ("fifteen", "thirty") are one *value*; anything else is digit-by-digit
+    # ("one five" -> 15, "zero seven zero" -> 070).
+    if len(words) >= 2 and words[-2] in _TENS and words[-1] in _ONES:
+        head = [_ONES[w] for w in words[:-2]]
+        digits = "".join(head) + str(int(_TENS[words[-2]])
+                                    + int(_ONES[words[-1]]))
+    elif words[-1] in _TEENS or (len(words) == 1 and words[-1] in _TENS):
+        digits = "".join(_ONES[w] for w in words[:-1]) + _NUMBER_WORDS[words[-1]]
+    else:
+        digits = "".join(_ONES[w] for w in words)
+    return digits + scale
+
+
+def _fold_spoken_figures(text: str) -> str:
+    """Fold spoken number words into figures where the context is a number.
+
+    "runway zero seven" -> "runway 07", "channel three" -> "channel 3",
+    "channel two five seven" -> "channel 257", "heading one four four" ->
+    "heading 144", "angels thirty two" -> "angels 32".
+
+    This is the post-STT normalisation the intent regexes want: they are all
+    written for figures (``\\bchannel\\s*\\d\\b``), because DCS pilots read
+    *digits* off the cockpit, but STT transcribes the *words*. Folding the
+    words to figures at one choke point removes a whole class of "say again"
+    for numbers we already know how to handle (debrief 2026-10-22: every
+    channel readback was rejected by a digits-only test, and "angels fifteen"
+    compared against a "15" clearance as if the pilot had said nothing).
+
+    It is deliberately **context-gated** rather than a blanket word->digit
+    substitution: a global replace would rewrite "one" in "the one on final"
+    and destroy the formation ("two-ship") and flight-check-in ("two") word
+    forms. The flight check-in runs on the original text, before this.
+    """
+    def merge(match: "re.Match") -> str:
+        figure = _spoken_figure(match.group(2))
+        if not figure:
+            return match.group(0)
+        # Runway designators keep their leading zero ("zero seven" -> "07");
+        # every other figure is a plain number ("angels fifteen" -> "15").
+        if match.group(1).lower() == "runway":
+            figure = figure.zfill(2) if len(figure) < 2 else figure
+        else:
+            figure = figure.lstrip("0") or "0"
+        # Replace only the figure words, leaving the surrounding text — and in
+        # particular the whitespace after them — untouched. Rebuilding the whole
+        # match welded "7" onto the next word ("channel seven push" became
+        # "channel 7push"), so the channel regex rejected a valid readback
+        # (debrief 2026-10-22, 22:06:45).
+        # Group 2 is the figure words plus any trailing whitespace the regex
+        # allowed; keep that whitespace so the next word stays separate.
+        spoken = match.group(2)
+        trailing = spoken[len(spoken.rstrip()):]
+        return match.group(1) + " " + figure + trailing
+
+    return _FIGURE_CONTEXT_RE.sub(merge, text)
 
 
 def _stem(word: str) -> str:
@@ -118,6 +195,44 @@ def _stem(word: str) -> str:
     the stem with optional suffixes instead.
     """
     return rf"\b{word}(?:ing|ed|s)?\b"
+
+
+# Spoken digits, for the frequency-change patterns. STT writes what it hears, so
+# a channel is usually a *word* ("channel seven"), never a figure: a
+# `channel\s*\d` guard silently missed every real readback (debrief 2026-10-22:
+# "Stingray, channel three" and "pushing channel three" both got "say again").
+_CHANNEL_NUMBER = r"(?:\d+|" + "|".join(_NUMBER_WORDS) + r")"
+# A mention of an agency, for the bare check-in test ("Tower, Colt 1"). Matched
+# against the agency names rather than the *own* agency so the message can also
+# be a check-in on the wrong frequency.
+_BARE_CHECKIN_RE = re.compile(
+    r"\b(?:tower|ground|control|approach|departure|center|centre|atis)\b")
+# A pilot acknowledging a frequency change: "channel 8, push", "channel seven
+# tower", "pushing channel three", "switching to channel 3", "going to 257".
+_CHANNEL_CHANGE_RE = re.compile(
+    rf"\bchannel\s*{_CHANNEL_NUMBER}\b"
+    rf"|\b(?:push(?:ing)?|switch(?:ing)?|chang(?:ing|e)|going|moving|"
+    rf"contacting|diall?ing)\b[^.]*\bchannel\b"
+    rf"|\bpush\b")
+# A pilot *asking* to change frequency, rather than acknowledging one. A real
+# controller answers this ("contact Stingray on channel 3"), instead of leaving
+# the pilot to guess — this was 4 minutes of the 2026-10-22 sortie.
+_CHANNEL_REQUEST_RE = re.compile(
+    r"\b(?:request(?:ing)?|ask(?:ing)? for|like|need|want|would like)\b"
+    r"[^.]*\b(?:channel|frequency|freq|push|switch)\b"
+    r"|\b(?:channel|frequency|freq)\s*(?:change|switch)\b")
+# A pilot *asking to hand off up the chain* ("request Stingray", "request
+# departure", "request AWACS"). AWACS is not simulated; the SOP answer names
+# the channel anyway so the radio sequence stays teachable.
+_HANDOFF_REQUEST_RE = re.compile(
+    r"\b(?:request(?:ing)?|ask(?:ing)? for|like|need|want|would like)\b[^.]*"
+    r"\b(stingray|awacs|magic|overlord|departure|approach|center|centre)\b"
+    r"|\b(when can i|can i)\b[^.]*\b(stingray|awacs|push|switch)\b")
+# Everything the pilot said that is *not* the call itself: the agency name, the
+# callsign, the F-word of "F-word, calling" and punctuation. Used to tell a bare
+# check-in ("Tower, Epic 4") from a real call ("Tower, Epic 4, requesting taxi").
+_CALL_FILLER_RE = re.compile(
+    r"\b(?:this is|calling|over)\b|[^a-z0-9]+")
 
 
 class Controller(str, Enum):
@@ -567,6 +682,38 @@ class AtcBrain:
                                     "ground", "control", "approach",
                                     "departure", "center", "centre")}
 
+    def _is_bare_checkin(self, text: str, speaker: str = "") -> bool:
+        """True if the transmission is *only* an agency check-in.
+
+        "Ground, Colt 1" / "Tower, Colt 1" / "Kutaisi Tower, Colt 1" name the
+        agency and nothing else, so they are acknowledged ("Colt 1, Tower.").
+        A call that carries a request ("Tower, Colt 1, ready for departure")
+        is NOT bare — the request handler must have it.
+
+        Without this, Tower had no acknowledgement at all and answered a bare
+        check-in with "say again" (debrief 2026-10-22: every "Tower, Epic 4"
+        was rejected, which left the pilot with no way to establish contact).
+        """
+        if not text or not self.callsigns.strip(text).strip():
+            return False
+        content = self.callsigns.strip(text)
+        if speaker and speaker.lower() not in self._agency_words():
+            content = re.sub(rf"\b{re.escape(speaker)}\b", " ", content,
+                             flags=re.IGNORECASE)
+        rest = _CALL_FILLER_RE.sub(" ", content.lower())
+        if not rest.strip():
+            return True  # "Tower, Colt 1" — the agency and nothing else
+        words = set(rest.split())
+        # The full agency name ("Kutaisi Tower") and the airfield name are part
+        # of the address, not a request, so they count as filler too.
+        allowed = self._agency_words() | {self.tower.lower(),
+                                          self.ground.lower(),
+                                          self.control.lower()}
+        if self.airfield is not None:
+            allowed.add(self.airfield.name.lower())
+        allowed = {w for name in allowed for w in str(name).split()}
+        return bool(words) and words <= allowed
+
     def _resolve_speaker(self, text: str, who: str) -> str | None:
         """Attribute a transmission with no extracted callsign to a pilot.
 
@@ -737,22 +884,30 @@ class AtcBrain:
     # a fumbled readback never traps the pilot — they keep flying.
 
     # Word equivalents for the digits, so a spoken readback ("two five",
-    # "one five hundred") can be compared with the numeric clearance.
-    _WORD_DIGITS = {"zero": "0", "one": "1", "two": "2", "three": "3",
-                    "four": "4", "five": "5", "six": "6", "seven": "7",
-                    "eight": "8", "nine": "9", "niner": "9"}
+    # "one five hundred") can be compared with the numeric clearance. Shares the
+    # tables with the post-STT folder so "angels fifteen" and "angels one five"
+    # both compare equal to a "15" clearance.
+    _WORD_DIGITS = _NUMBER_WORDS
+
+    # A run of number words is one spoken figure ("two niner niner two" ->
+    # 2992, "thirty two" -> 32, "one five zero zero" -> 1500), with an optional
+    # trailing "thousand" ("two one thousand" -> 21000).
+    _NUMBER_RUN_RE = re.compile(
+        r"\b(?:" + _FIGURE_WORD + r")(?:\s+(?:" + _FIGURE_WORD + r"))*"
+        r"(?:\s+thousand)?\b")
 
     @classmethod
     def _numbers(cls, text: str) -> set[str]:
         """Every number in `text`, with spoken digits folded in.
 
-        "two niner niner two" -> {2992}; "0 7 0" -> {070}; "1500 feet" -> {1500}.
-        Used to compare a readback against the clearance without depending on
-        the filler words or the exact phrasing.
+        "two niner niner two" -> {2992}; "0 7 0" -> {070}; "1500 feet" -> {1500};
+        "angels fifteen" -> {15}; "angels thirty two" -> {32}. Used to compare a
+        readback against the clearance without depending on the filler words or
+        the exact phrasing.
         """
         t = re.sub(r"[.,]", "", (text or "").lower())
-        t = re.sub(r"\b(" + "|".join(cls._WORD_DIGITS) + r")\b",
-                   lambda m: cls._WORD_DIGITS[m.group(1)], t)
+        t = cls._NUMBER_RUN_RE.sub(
+            lambda m: _spoken_figure(m.group(0)) or m.group(0), t)
         t = re.sub(r"(?<=\d)\s+(?=\d)", "", t)  # "2 9 9 2" -> "2992"
         return set(re.findall(r"\d+", t))
 
@@ -843,6 +998,14 @@ class AtcBrain:
         `ok_key` to force an explicit acknowledgement where nothing follows
         (e.g. the Ground runway/QNH readback).
 
+        One exception, and only one: if an *earlier* attempt at this clearance
+        was incomplete (`readback_fails > 0`), the corrected readback IS
+        confirmed with "readback correct". Saying nothing after a "readback
+        incomplete" leaves the pilot unsure whether the fix landed (debrief
+        2026-10-22: "ATC bör bekräfta att readbacken sedan har blivit korrekt").
+        A clean first readback keeps the silent behaviour, so every tested
+        kneeboard dialog is unchanged.
+
         An incomplete readback is **not** called correct: it gets an honest
         "readback incomplete — {item} not read back, continue." so the pilot
         knows what to train on, and the caller still advances the phase, so a
@@ -852,8 +1015,12 @@ class AtcBrain:
         agency = self._agency(controller)
         item = self._readback_item(low, clearance)
         if item is None:
+            corrected = pilot.readback_fails > 0
             pilot.readback_fails = 0
-            return self._say(ok_key, callsign, agency=agency) if ok_key else ""
+            if ok_key or corrected:
+                return self._say(ok_key or "readback_correct", callsign,
+                                 agency=agency)
+            return ""
         pilot.readback_fails += 1
         if item == "clearance":
             # A wrong item was read back (e.g. a different exit): the honest
@@ -941,6 +1108,7 @@ class AtcBrain:
         # the wingman's bare number is caught too (it names no callsign).
         if self._is_flight_checkin(text, speaker):
             return ""
+
         # Every callsign the text names, in order. A transmission can mention
         # several (a readback "descend to Enfield 15" names Enfield; a formation
         # call names two flights). Prefer the *speaker's own* callsign when it is
@@ -953,7 +1121,7 @@ class AtcBrain:
             if name and re.search(r"\btrainer\b", text.lower()) and re.search(
                     r"\b(help|assist|what do i do|what now|remind me)\b",
                     text.lower()):
-                return self._help(name, self._pilot(name))
+                return self._help(name, self._pilot(name), controller)
             # A speaker we have already identified is trusted: use their own
             # callsign even when this transmission did not name it. STT often
             # drops or mangles the callsign, and we already know who is on the
@@ -984,6 +1152,10 @@ class AtcBrain:
         pilot = self._pilot(callsign)
         pilot.last_controller = controller.value
         self._note_formation(pilot, low)
+        # STT normalisation, applied once, at the point where every intent is
+        # matched against the text: see `_fold_spoken_figures`. Done *after*
+        # formation/check-in handling above, which need the word forms.
+        low = _fold_spoken_figures(low)
         reply = self._dispatch(callsign, pilot, low, track, controller, traffic,
                                speaker)
         if reply and not self._is_meta_reply(reply):
@@ -1017,6 +1189,17 @@ class AtcBrain:
         # before everything else so it can never be mistaken for a clearance.
         if re.search(r"\btrainer\b", low):
             return self._trainer(callsign, pilot, low, controller)
+
+        # Trainer aid: "<callsign> help" (also "assist", "what do I do", "what
+        # now", "remind me") gives a state-aware hint. Accepted *without* the
+        # "trainer" prefix: a stuck pilot says "Control, Epic 4, help", and
+        # demanding a magic word made the aid unreachable exactly when it was
+        # needed (debrief 2026-10-22: four help calls, all swallowed as
+        # check-ins or "say again"). It must come *before* the controller
+        # dispatch, because a bare "Control ..." is otherwise answered as a
+        # frequency check-in and the real question is lost.
+        if re.search(r"\b(help|assist|what do i do|what now|remind me)\b", low):
+            return self._help(callsign, pilot, controller)
 
         # Trainer aid: "<callsign> request vectors [for runway 25]" gives an
         # approach vector ("fly heading X, vectors for runway Y"). Real ATC
@@ -1065,6 +1248,47 @@ class AtcBrain:
             return pilot.last_reply or self._say(
                 "say_again", callsign, agency=self._agency(controller))
 
+        # Frequency-change *request* ("request channel change", "request
+        # Stingray", "when can I push"): a real controller answers this, so the
+        # trainer must too. A pilot who is told "shut up and fly your clearance"
+        # at this point has no way forward, which is what "man kan fastna på en
+        # kanal" describes (debrief 2026-10-22: 4 minutes of Control round
+        # trips after the Stingray handoff was already given).
+        if _CHANNEL_REQUEST_RE.search(low) or _HANDOFF_REQUEST_RE.search(low):
+            return self._channel_request(callsign, pilot, controller)
+
+        # Frequency-change acknowledgement ("Colt 1, channel 8, push"): the pilot
+        # is switching, so we stay *silent* — a "roger" would only step on the
+        # new frequency's first call. Spoken numbers and the "pushing/going to"
+        # forms count too: STT writes "channel seven", never "channel 7", so the
+        # old digit-only guard let every real readback fall through to "say
+        # again" (debrief 2026-10-22).
+        #
+        # This must run BEFORE the controller dispatch. Ground and Control each
+        # re-issue a pending handoff for any call in the handed-off phase, so a
+        # "channel seven, push" acknowledgement was answered with the handoff
+        # again — twice in a row in the 2026-10-22 sortie, stepping on the pilot
+        # as they changed frequency. A genuine request still reaches
+        # _channel_request above (it is matched first), and "say again" still
+        # works, so a pilot who missed the handoff is never stranded.
+        if _CHANNEL_CHANGE_RE.search(low) \
+                and not re.search(r"\b(request|clearance|taxi|inbound|requesting)\b",
+                                  low):
+            return ""
+
+        # Bare agency check-in ("Tower, Colt 1"): acknowledge it. Ground and
+        # Control each already had a handler for this, but Tower had none at
+        # all, so every bare Tower check-in was answered "say again" and the
+        # pilot could not even establish contact (debrief 2026-10-22: seven
+        # consecutive "Tower, Epic 4" calls, all rejected, while the pilot was
+        # on final). Deliberately Tower-only: Ground and Control already answer
+        # this correctly (and the Control one also arms the arrival flow), so
+        # their behaviour is left byte-identical.
+        if (controller == Controller.TOWER
+                and _BARE_CHECKIN_RE.search(low)
+                and self._is_bare_checkin(low, speaker)):
+            return self._say("tower_ack", callsign, agency=self.tower_short)
+
         if controller == Controller.GROUND:
             reply = self._handle_ground(callsign, pilot, low, track, traffic)
         elif controller == Controller.CONTROL:
@@ -1112,19 +1336,32 @@ class AtcBrain:
         if re.search(r"\bradio check\b|\bhow (do you )?(read|copy)\b|"
                      r"\breadability\b|\bcomm check\b", low):
             return self._say("radio_check", callsign, agency=agency)
-        # Frequency-change acknowledgement ("Colt 1, channel 8, push"): the pilot
-        # is switching, so we stay *silent* — a "roger" would only step on the
-        # new frequency's first call.
-        if re.search(r"\bchannel\s*\d\b|\bpush\b|\bswitching\b", low) \
-                and not re.search(r"\b(request|clearance|taxi|inbound|requesting)\b",
-                                  low):
-            return ""
         if re.search(r"\bchecking (in|out)\b|\bwith you\b", low):
             return self._say("roger", callsign, agency=agency)
         if re.search(r"\b(reading back|roger|wilco|copy)\b", low):
             return self._say("roger", callsign, agency=agency)
         # bare callsign / unintelligible request: ask them to say again
         return self._say("say_again", callsign, agency=agency)
+
+    def _channel_request(self, callsign: str, pilot: PilotState,
+                         controller: Controller) -> str:
+        """Answer a pilot who asks to change frequency.
+
+        Which channel is "next" depends on where they are: an airborne
+        departure is sent to Stingray (the handoff the SOP card shows), an
+        arrival is sent to Tower, and a pilot still on Ground to Tower. Naming
+        the channel keeps the radio sequence teachable — which is the point of
+        the trainer — and stops the request looping as "say again".
+        """
+        if controller == Controller.CONTROL:
+            if pilot.phase in (Phase.INBOUND, Phase.LANDING):
+                return self._say("contact_tower_from_control", callsign)
+            if pilot.phase == Phase.AIRBORNE:
+                return self._say("contact_stingray", callsign)
+        if controller == Controller.GROUND and pilot.phase in (
+                Phase.HOLDING, Phase.TAXI):
+            return self._say("contact_tower", callsign)
+        return self._say("control_ack", callsign, agency=self._agency(controller))
 
     def _trainer(self, callsign: str, pilot: PilotState, low: str,
                  controller: Controller) -> str:
@@ -1135,7 +1372,7 @@ class AtcBrain:
         """
         agency = self._agency(controller)
         if re.search(r"\b(help|assist|what do i do|what now|remind me)\b", low):
-            return self._help(callsign, pilot)
+            return self._help(callsign, pilot, controller)
         if re.search(r"\becho\b", low):
             if re.search(r"\b(off|stop|disable|no)\b", low):
                 pilot.mirror_logs = False
@@ -1250,7 +1487,16 @@ class AtcBrain:
             return self._check_readback(callsign, pilot, low,
                                         pilot.last_clearance or pilot.last_reply,
                                         Controller.GROUND)
-        if re.search(r"\b(clearance|ready to copy|ifr)\b", low):
+        # A clearance *request*: "ready to copy clearance", "request clearance",
+        # "requesting IFR". Distinguished from a *readback* (handled above) by
+        # the request verb, so "cleared taxi" / "request taxi" no longer fall in
+        # here and get a fresh departure clearance by mistake. A call that is
+        # about *taxi* clearance ("request taxi clearance") is left to the taxi
+        # handler below, which answers with the taxi clearance.
+        if re.search(r"\b(request(?:ing)?|ask(?:ing)? for|ready to copy|"
+                     r"ready for|like|need|want|copy)\b[^.]*\b"
+                     r"(clearance|ifr|clearance delivery)\b", low) \
+                and not re.search(r"\btaxi", low):
             pilot.phase = Phase.CLEARANCE
             gate = self._pick_exit_gate(traffic)
             pilot.exit_gate = gate
@@ -1260,6 +1506,10 @@ class AtcBrain:
             key = "departure_exit" if turn else "departure_exit_straight"
             reply = self._say(key, callsign, gate=self._exit_label(gate),
                               turn=turn)
+            # A new clearance starts a fresh readback check: a miss
+            # flagged on the *previous* clearance must not make the first
+            # correct readback of this one look like a correction.
+            pilot.readback_fails = 0
             pilot.last_clearance = reply
             return reply
         # Post-landing: taxi to parking (to a named ramp, or the nearest one).
@@ -1269,7 +1519,8 @@ class AtcBrain:
         # forever.
         if not pilot.parking_cleared and re.search(
                 r"\b(taxi to parking|to parking|to the ramp|to ramp|"
-                r"taxi to the ramp)\b", low):
+                r"taxi to the ramp|request(?:ing)?\s+(?:parking|"
+                r"taxi\s+to\s+(?:parking|the ramp)))\b", low):
             pilot.phase = Phase.TAXI
             pilot.parking_cleared = True
             parking = self._spoken_parking(low)
@@ -1286,6 +1537,10 @@ class AtcBrain:
             # Remember this clearance so the pilot's readback is checked against
             # it — not the previous (departure) taxi clearance, which named a
             # runway and would make a correct parking readback look incomplete.
+            # A new clearance starts a fresh readback check: a miss
+            # flagged on the *previous* clearance must not make the first
+            # correct readback of this one look like a correction.
+            pilot.readback_fails = 0
             pilot.last_clearance = reply
             return reply
         # Readback of the taxi clearance ("cleared taxi Sierra Echo and hold
@@ -1302,7 +1557,11 @@ class AtcBrain:
                                         pilot.last_clearance or pilot.last_reply,
                                         Controller.GROUND)
         if re.search(r"\b(request(?:ing)?|asking for|like)\b.*\btaxi(?:ing)?\b"
-                     r"|\btaxi(?:ing)?\b.*\b(startup|start up|start|runway)\b",
+                     r"|\btaxi(?:ing)?\b.*\b(startup|start up|start|runway)\b"
+                     r"|\b(request(?:ing)?|ready)\b[^.]*\b(start(?:-?up)?|"
+                     r"pushback|push back|engine start)\b"
+                     r"|\bready\b[^.]*\btaxi(?:ing)?\b"
+                     r"|\btaxi\b(?:\s*clearance)?\s*$",
                      low):
             pilot.phase = Phase.TAXI
             # Taxi route to the ACTIVE runway from the aircraft's ramp (routes
@@ -1313,6 +1572,10 @@ class AtcBrain:
                 lon = track.lon if track is not None else None
                 route = self.airfield.taxi_route(lat, lon, self.runway)
             reply = self._say("taxi", callsign, taxi_route=route or "Sierra Echo")
+            # A new clearance starts a fresh readback check: a miss
+            # flagged on the *previous* clearance must not make the first
+            # correct readback of this one look like a correction.
+            pilot.readback_fails = 0
             pilot.last_clearance = reply
             return reply
         # "runway vacated" / "rolling off runway 25" reported on Ground (the
@@ -1435,6 +1698,23 @@ class AtcBrain:
                 pilot.phase = Phase.DEPARTURE
                 pilot.awaiting_takeoff = False
                 return self._takeoff_clearance(callsign, pilot)
+            pilot.phase = Phase.LINEUP
+            return self._say("line_up", callsign)
+        # Holding short report addressed to Tower (the pilot may switch frequency
+        # before Ground hands them over, or simply repeat where they are). Tower
+        # owns the runway, so answer the report rather than "say again" (debrief
+        # 2026-10-22: "Tower, Epic 4, holding short runway 07" was rejected,
+        # leaving the pilot at the hold point with no way to get a clearance).
+        if pilot.phase in (Phase.TAXI, Phase.HOLDING) and re.search(
+                r"\bhold(?:ing)? short\b", low):
+            if track is not None and self.airfield is not None \
+                    and not self.airfield.is_holding_short(track.lat, track.lon):
+                return self._challenge(callsign, self.tower_short, track)
+            if self._runway_busy(traffic, exclude=speaker):
+                pilot.phase = Phase.HOLDING
+                pilot.awaiting_takeoff = True
+                pilot.takeoff_ready_announced = False
+                return self._say("hold_short_traffic", callsign)
             pilot.phase = Phase.LINEUP
             return self._say("line_up", callsign)
         # Departure handoff: once airborne, Tower hands the flight to Control.
@@ -1608,7 +1888,9 @@ class AtcBrain:
                 pilot.landing_ready_announced = False
                 return self._say("continue_approach", callsign)
             return self._issue_landing_clearance(callsign, pilot)
-        if re.search(r"\binbound\b|\bon approach\b|\blanding\b|\bentry\b", low):
+        if re.search(r"\binbound\b|\bon approach\b|\blanding\b|\bentry\b|"
+                     r"\brequest(?:ing)?\s+(?:to\s+)?land\b|\bready to land\b|"
+                     r"\brequest\s+landing\b", low):
             pilot.phase = Phase.INBOUND
             pilot.cleared_inbound = True
             return self._inbound_reply(callsign, pilot, track, low)
@@ -1618,6 +1900,13 @@ class AtcBrain:
 
     def _handle_control(self, callsign: str, pilot: PilotState, low: str,
                         track: AircraftTrack | None) -> str | None:
+        # Already handed off to Tower (Landing): Control has nothing further to
+        # say. Without this, a later Control call parsed as an inbound/entry
+        # report re-cleared a join and pulled the arrival back off Tower — the
+        # 3-minute Control/Tower ping-pong in the 2026-10-22 sortie. Repeat the
+        # handoff so a pilot who missed it is never stranded.
+        if pilot.phase == Phase.LANDING:
+            return self._say("control_handoff_repeat", callsign)
         # Explicit entry request ("Control, Colt 1, request Entry North"):
         # approve the pilot's chosen gate and remember it, so the join and any
         # follow-up use it. A bare direction in an inbound call ("35 miles
@@ -1684,6 +1973,14 @@ class AtcBrain:
         if pilot.phase in (Phase.INBOUND, Phase.LANDING) and re.search(
                 r"\b(passing|entering|at the entry|entry|established|abeam)\b",
                 low):
+            # Once Control has already handed them off, the arrival's phase is
+            # Landing and the *next* agency is Tower: re-clearing or
+            # re-challenging here would leave them stuck on Control (debrief
+            # 2026-10-22: 3 minutes of Control/Tower ping-pong, and the sortie
+            # ended with no landing clearance at all). Just re-state the
+            # handoff, so a pilot who missed it is never stranded.
+            if pilot.phase == Phase.LANDING:
+                return self._say("control_handoff_repeat", callsign)
             # Cross-check the report against the live position: a pilot who
             # claims to be at the entry point but is still far away is
             # challenged, and is NOT handed to Tower (they would arrive
@@ -1724,9 +2021,16 @@ class AtcBrain:
         # climb — a readback or a follow-up level report ("climbing angels 15",
         # "at angels 16") is acknowledged, not re-cleared, so the pilot is not
         # handed an endless "climb to Angels 15".
-        if re.search(r"\b(airborne|climbing|departing|departed|level|"
-                     r"angels|on the way|at \d+|checking in|with you)\b", low):
-            pilot.phase = Phase.AIRBORNE
+        if re.search(r"\b(airborne|climbing|climb|departing|departed|level|"
+                     r"angels|on the way|at \d+|checking in|with you|"
+                     r"ready to climb)\b", low):
+            # A departure stays a departure: it must NOT be flipped to Inbound
+            # here, or Control would treat the outbound leg as an arrival
+            # (debrief 2026-10-22: the post-takeoff check-in moved the pilot
+            # Lineup -> Inbound and the join flow then fought the departure
+            # flow). The arrival flow is armed by an explicit inbound call.
+            if pilot.phase not in (Phase.INBOUND, Phase.LANDING):
+                pilot.phase = Phase.AIRBORNE
             # A pilot who checks in with Control while still inside the CTR
             # (below the ceiling) is on the wrong frequency: Tower owns the
             # zone up to the ceiling. Real Control would not clear them up
@@ -1753,10 +2057,26 @@ class AtcBrain:
             return self._say("roger", callsign, agency=self.control_short)
         # Near the field, Control hands the flight to Tower (e.g. "on final",
         # "runway in sight", "overhead break", "passing the entry point").
+        # "request landing" belongs here too: a pilot who asks Control to land
+        # is asking to be handed over, and answering "say again" left them
+        # stranded on the wrong frequency (debrief 2026-10-22). It is the same
+        # handoff the "on final" phrasing already got.
         if re.search(r"\b(on final|final|runway in sight|visual|overhead|"
-                     r"break|initial|passing|entering)\b", low):
+                     r"break|initial|passing|entering|abeam|"
+                     r"established\s+on\b|"
+                     r"request(?:ing)?\s+(?:to\s+)?land|request\s+landing|"
+                     r"landing)\b", low):
             pilot.phase = Phase.LANDING
             return self._say("contact_tower_from_control", callsign)
+        # Common short-hands for returning to base. A pilot who says "RTB" or
+        # "returning to base" is inbound, and answering "say again" strands them.
+        if re.search(r"\b(rtb|returning to (?:base|the field|the boat)|"
+                     r"recover(?:ing|y))\b", low):
+            pilot.phase = Phase.INBOUND
+            pilot.cleared_inbound = True
+            gate = self._pick_entry_gate(track, low, pilot)
+            pilot.entry_gate = gate
+            return self._say("control_join_nohdg", callsign, gate=gate)
         # Initial Control check-in, bare: "Kutaisi Control, Adder11" (Master Arms
         # kneeboard page 2, step 1) -> "Adder11, Control". Answer it instead of
         # "say again"; the pilot follows with the inbound call.
@@ -1770,8 +2090,26 @@ class AtcBrain:
         # check-in right AFTER the Tower handoff (debrief 2026-10-18 12:55:33):
         # once the join has been issued (cleared_inbound) a bare check-in must
         # not re-arm the join flow by flipping Landing -> Inbound.
+        # A useful direction report ("marking both", "075 for 41") is a
+        # fighter-to-fighter picture call, not a clearance request. Answering it
+        # with "say again" trains the pilot to stop making the call (debrief
+        # 2026-10-22: "marking bull, zero seven seven, four forty" was rejected
+        # twice). We do not simulate the picture; acknowledge it.
+        if re.search(r"\b(marking|bullseye|bull'?s?eye|picture|"
+                     r"for \d{2,3}|radar contact)\b", low):
+            return self._say("roger", callsign, agency=self.control_short)
         if re.search(r"\bcontrol\b(?!\s+zone)", low):
             if pilot.phase == Phase.AIRBORNE or pilot.cleared_inbound:
+                return self._say("control_ack", callsign,
+                                 agency=self.control_short)
+            # A pilot who is already a *departure* (lined up, or just airborne)
+            # is switching to Control for the climb, not starting an arrival.
+            # Flipping them to Inbound here made Control treat the outbound leg
+            # as an arrival, and the join flow then fought the departure flow
+            # (debrief 2026-10-22: this is the check-in that moved the pilot
+            # Lineup -> Inbound seconds after takeoff).
+            if pilot.phase in (Phase.LINEUP, Phase.DEPARTURE):
+                pilot.phase = Phase.AIRBORNE
                 return self._say("control_ack", callsign,
                                  agency=self.control_short)
             pilot.phase = Phase.INBOUND
@@ -2067,14 +2405,28 @@ class AtcBrain:
 
     def _exit_deviation_note(self, pilot: PilotState,
                              track: AircraftTrack | None) -> str:
-        """A trainer note if the departure is not near its assigned exit gate.
+        """A trainer note if the departure is clearly heading for a wrong exit.
 
-        Empty when the pilot is close to the assigned gate (or we cannot tell).
+        Empty when the pilot is tracking their assigned gate (or we cannot
+        tell). The handoff fires seconds after liftoff, so the assigned gate is
+        *always* miles away at that moment — measuring against a small radius
+        made this note fire on every departure (debrief 2026-10-22). What is
+        actually wrong is heading for a *different* gate, so the assigned gate
+        is compared against the nearest one: only a departure whose exit gate is
+        not the closest gate at all gets the note.
         """
         if track is None or self.airfield is None or not pilot.exit_gate:
             return ""
         distance = self._distance_to_gate(track, pilot.exit_gate)
-        if distance is None or distance <= EXIT_REPORT_RADIUS_NM:
+        if distance is None:
+            return ""
+        nearest = self.airfield.nearest_gate(track.lat, track.lon)
+        nearest_distance = self._distance_to_gate(track, nearest) \
+            if nearest else None
+        if nearest_distance is not None:
+            if distance <= nearest_distance + EXIT_NEAREST_MARGIN_NM:
+                return ""
+        elif distance <= EXIT_REPORT_RADIUS_NM:
             return ""
         return self._say("exit_deviation", pilot.callsign,
                          gate=self._exit_label(pilot.exit_gate)) + " "
@@ -2170,11 +2522,16 @@ class AtcBrain:
                 return area
         return None
 
-    def _help(self, callsign: str, pilot: PilotState) -> str:
+    def _help(self, callsign: str, pilot: PilotState,
+              controller: Controller | None = None) -> str:
         """A short, state-aware hint for a pilot who is unsure what to do next.
 
         Triggered by "<callsign> help". The hint depends on the pilot's current
-        phase, so it always tells them the *next* call to make.
+        phase, so it always tells them the *next* call to make. `controller` is
+        the agency they are talking to, used to pick the right Phase.AIRBORNE
+        hint: a departure who checks in with Control is already on Control's
+        frequency, so "contact Control on channel 8" would send them in a
+        circle (debrief 2026-10-22).
         """
         key = {
             Phase.IDLE: "help_idle",
@@ -2187,6 +2544,10 @@ class AtcBrain:
             Phase.INBOUND: "help_inbound",
             Phase.LANDING: "help_landing",
         }.get(pilot.phase, "help_idle")
+        if pilot.phase == Phase.AIRBORNE and controller == Controller.CONTROL:
+            # Already with Control: the SOP next step is the Stingray push once
+            # at Angels 15, or the inbound call when they turn back.
+            key = "help_airborne_on_control"
         hint = self._say(key, callsign, gate=pilot.exit_gate or "Exit East")
         # Always remind the pilot of the escape hatches, so they can never get
         # stuck in a wrong state during training.

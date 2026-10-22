@@ -149,7 +149,16 @@ as a callsign.
 
 A pilot acknowledging a **frequency change** ("Colt 1, channel 8, push") gets
 **no reply at all** — the transmission was a handoff, and answering would only
-step on the next controller's first call.
+step on the next controller's first call. Spoken channel numbers and the
+"pushing / switching / going to" forms count too ("channel seven",
+"pushing channel three"): STT writes what it *hears*, so a digits-only match
+would reject nearly every real readback.
+
+A pilot **requesting** a frequency change instead ("request channel change",
+"request Stingray") *is* answered, with the channel appropriate to where they
+are — an airborne departure is sent to Stingray, an arrival to Tower. A request
+is never met with silence or "say again", so a pilot can always move on rather
+than being stuck on one channel.
 
 > If the state bridge is unavailable, the bot falls back to a built-in list of
 > common flight names. Tune the confusion rules in `atc/phonetics.py`
@@ -162,7 +171,7 @@ step on the next controller's first call.
 | Pilot says (examples) | Intent | Tower replies |
 | --- | --- | --- |
 | "Colt 1" (after a frequency switch) | **flight check-in** | *(silent — a flight-internal call, not a call to the agency; each wingman answers with their number: "2", "3", "4" …)* |
-| "Ground, Colt 1" | **check-in** | "Colt 1, Ground." |
+| "Ground, Colt 1" / "Tower, Colt 1" / "Kutaisi Tower, Colt 1" | **check-in** | "Colt 1, Ground." / "Colt 1, Tower." (all three agencies answer; the full agency name counts as part of the address) |
 | "Ground, Colt 1, two-ship Hornets on Ramp South" | **check-in + position** (no ATIS) | "Colt 1, Ground, weather is CAVOK. Wind 270, 2 knots, runway 25 in use, QNH 2992." (Ground reads out the weather when the pilot has not listened to ATIS) |
 | "…with information Charlie" | **check-in + ATIS** | "Colt 1, Ground, runway 25 in use, QNH 2992." (the pilot already has the weather from ATIS) |
 | "Ground, Colt 1, ready to copy clearance" | **clearance** | "Colt 1, Ground, after departure Exit West, 1500 ft or below." (exit + turn follow the active runway) |
@@ -189,7 +198,10 @@ step on the next controller's first call.
 | "Ground, Colt 1, rolling off runway 25, requesting taxi to parking" | **taxi to parking** | "Colt 1, Ground, cleared taxi to Ramp North via Alpha November." |
 | "Colt 1, checking in" / "with you" | **check-in** | "Colt 1, Tower, roger." |
 | "Colt 1, radio check" | **radio check** | "Colt 1, Tower, loud and clear." |
-| "Trainer, Colt 1, help" | **help** | a short, state-aware hint (see §3a) |
+| "Colt 1, help" / "Control, Colt 1, help" / "help" | **help** | a short, state-aware hint (see §3a); the `trainer,` prefix is optional |
+| "Colt 1, channel seven, push" / "…pushing channel three" | **frequency-change ack** | *(silent — the pilot is switching; spoken numbers and "pushing/going to" are accepted, not just "channel 7")* |
+| "Control, Colt 1, request Stingray" / "…request channel change" | **frequency-change request** | "Colt 1, Control, contact Stingray on channel 3." (the channel depends on where the pilot is: an airborne departure gets Stingray, an arrival gets Tower — so a pilot who asks can never be stranded) |
+| "Control, Colt 1, request landing" | **landing request** | "Colt 1, Control, contact Tower on channel 7." (same as an "on final" call — it is a request to be handed over, not a clearance) |
 
 Intent matching is order-sensitive: the first matching rule wins. Some rules
 require a prior state (e.g. "ready for departure" only clears line-up if the
@@ -220,16 +232,29 @@ An **incomplete** readback is never silently accepted: it gets an honest
 "readback incomplete — I did not get your {item}. Continue." (the phase still
 advances, so a fumbled readback never traps the pilot).
 
+**One exception:** if an earlier attempt at that clearance was incomplete, the
+readback that **fixes** it *is* confirmed with "readback correct". Saying nothing
+after a "readback incomplete" leaves the pilot unsure whether the correction
+landed. A clean first readback keeps the silent behaviour above, so no tested
+dialog changes:
+
+| Readback | Reply |
+| --- | --- |
+| First attempt, correct | *(silent — the rule above)* |
+| Corrects a prior "readback incomplete" | "readback correct." |
+
 ---
 
 ## 3a. Help (trainer aid)
 
 Because this is a *trainer*, a pilot who is unsure what to do can call
-**"Trainer, <callsign>, help"** (also "assist", "what do I do", "what now",
-"remind me"). The bot replies with a short hint for the pilot's **current
-phase**, so it always tells them the *next* call to make. It works on **every
-controller frequency** (Ground, Tower, Control) and in **every phase** — you
-never have to be on the "right" channel to ask for help.
+**"<callsign>, help"** — the `trainer,` prefix is **optional**, so
+"Control, Colt 1, help" and even a bare "help" work. "assist", "what do I do",
+"what now" and "remind me" are accepted synonyms. The bot replies with a short
+hint for the pilot's **current phase**, so it always tells them the *next* call
+to make. It works on **every controller frequency** (Ground, Tower, Control) and
+in **every phase** — you never have to be on the "right" channel to ask for
+help, and a bare "help" is attributed to the only online pilot.
 
 Every hint is prefixed with a clear marker — **"Apollo suggests:"** — so it is
 obvious the reply is training guidance, not a real clearance. (Apollo is the
@@ -245,13 +270,16 @@ follows.) The marker is the `help_prefix` variable in `phraseology.json`
 | Holding short | "you are holding short. Contact Tower on channel 7 and report ready for departure." |
 | Line up | "line up and wait runway 25, then report ready for departure." |
 | Departure | "you are cleared for takeoff runway 25. After departure Exit West, 1500 ft or below, then contact Control on channel 8." |
-| Airborne | "contact Control on channel 8 and report your position and intentions." |
+| Airborne (**on Tower**) | "contact Control on channel 8 and report your position and intentions." |
+| Airborne (**already on Control**) | "report inbound when you turn back, or push Stingray on channel 3 once you are at Angels 15." — the hint is controller-aware, so it never tells a pilot who is *already* on Control to "contact Control" |
 | Inbound | "report entering the control zone, then report runway in sight." |
 | Landing | "runway 25 is active. Report on final for landing clearance." |
 
 The hint wording lives in `phraseology.json` (`help_*` templates); the
-phase→template mapping is in `brain._help()`. Every hint ends with the escape
-reminder *"Say reset to start over, or cancel to undo a clearance."* (see §3b).
+phase→template mapping is in `brain._help()`, which takes the controller the
+pilot is talking to so the Airborne hint fits the frequency they are on. Every
+hint ends with the escape reminder *"Say reset to start over, or cancel to undo
+a clearance."* (see §3b).
 
 ---
 
@@ -845,15 +873,28 @@ Frequencies and controller names come from `airspace.json`; CLI flags
   heading to that gate — so 25 gives *Exit West* and 07 gives *Exit East* at
   Kutaisi. A gate roughly straight ahead (within 20°) drops the turn: *"after
   departure Exit East"*.
-- "requesting taxi" → taxi clearance: *"cleared taxi Sierra Echo and hold short
+- "requesting taxi" / "ready to taxi" / "ready for start up" / "request
+  pushback" → taxi clearance: *"cleared taxi Sierra Echo and hold short
   runway 25"*; a correct readback is **silent** (the next step is the hold-short
-  report).
-- "holding short runway 25" → handoff: *"contact Tower on channel 7"*.
-- "requesting taxi to parking" (after landing) → *"cleared taxi to Ramp North
-  via Alpha November"* (named ramp, or the nearest one to the aircraft).
+  report). The bot tolerates the common wordings — a pilot does not read the
+  manual, and requiring the single canonical "requesting taxi" produced "say
+  again" for perfectly normal phraseology.
+- "holding short runway 25" → handoff: *"contact Tower on channel 7"*. Reporting
+  the same thing on **Tower** (after switching early) is answered with the
+  line-up, not "say again".
+- "requesting taxi to parking" / "request parking" (after landing) → *"cleared
+  taxi to Ramp North via Alpha November"* (named ramp, or the nearest one to the
+  aircraft).
+- "request taxi clearance" is the **taxi** clearance, not a second departure
+  clearance — a request for clearance is only re-issued when it is about the
+  departure clearance itself.
 
 ### Tower
 
+- "Tower, Colt 1" / "Kutaisi Tower, Colt 1" → check-in: *"Colt 1, Tower."* (a
+  bare check-in with no request is acknowledged by all three agencies; Tower had
+  no acknowledgement at all before, so a pilot who had just been handed to Tower
+  could not establish contact and every check-in got "say again").
 - "ready for departure" → **line up and wait**: *"line up and wait runway 25"*.
   The pilot's readback (*"line up and wait 25"*) triggers the takeoff clearance:
   *"cleared for takeoff runway 25"* (the clearance itself is the
@@ -896,7 +937,8 @@ never broadcast their arrival; pilots call them). Disable it with
 
 ### Control
 
-- "inbound" / "checking in" → radar contact and routing to join via the
+- "inbound" / "inbound for landing" / "RTB" / "returning to base" /
+  "requesting recovery" → radar contact and routing to join via the
   **best entry** for the active runway: *"turn right heading 150 to join via
   Entry East"*. The heading **and the turn direction** are **computed** from the
   pilot's live position/heading to the entry point (not canned values): a pilot
@@ -920,7 +962,8 @@ never broadcast their arrival; pilots call them). Disable it with
   *"contact Tower on channel 7"*. This matches the Master Arms flow (kneeboard
   page 2): Control hands off right after the descend readback — there is no
   separate "passing the entry point" call, and Control never re-issues the join.
-- "airborne" / "climbing" / "at 1500 ft" / "checking in" (departure check-in) →
+- "airborne" / "climbing" / "at 1500 ft" / "checking in" / "request climb" /
+  "ready to climb" (departure check-in) →
   *"radar contact, climb to Angels 15"*. If the pilot checks in while **still
   inside the CTR** (below the ceiling), Control does **not** clear them up
   through the zone — Tower owns it up to the ceiling — and instead guides them:
@@ -930,8 +973,21 @@ never broadcast their arrival; pilots call them). Disable it with
   Control then **watches on radar** and issues the climb itself as soon as the
   aircraft leaves the zone (`check_departure_climb`, from the 2 s monitor) — the
   pilot does **not** have to report again.
-- "on final" / "runway in sight" / "overhead" → handoff to Tower:
-  *"contact Tower on channel 7"*.
+- "on final" / "runway in sight" / "overhead" / "request landing" → handoff to
+  Tower: *"contact Tower on channel 7"*. A `Landing` flight (already handed to
+  Tower) gets the same handoff repeated rather than a new join — this is what
+  stops an arrival ping-ponging between Control and Tower, and it means a pilot
+  who missed the first handoff is never stranded.
+- "request landing" is deliberately treated as the handoff, not a clearance: it
+  is a request to be passed on. Before, it was met with "say again", which left
+  the pilot stuck on Control.
+- A fighter-to-fighter **picture call** ("marking bull", "077 for 41") is
+  acknowledged with "roger" rather than "say again". AWACS is not simulated, but
+  rejecting the call would train the pilot to stop making it.
+- A pilot **requesting** a channel ("request channel change", "request
+  Stingray") is answered with the appropriate channel — Stingray for an airborne
+  departure, Tower for an arrival. A frequency request is never answered with
+  silence or "say again".
 
 ### Handoffs
 
@@ -941,9 +997,20 @@ The bot issues the standard Master Arms handoffs as the flight progresses:
 - Tower → Control (departures): *"contact Control on channel 8"* — Tower
   initiates this **unprompted** once the aircraft is past the runway (MA SOP:
   "expect instructions to switch to control"); reporting "airborne" or
-  "wheels up" also works (`contact_control`).
+  "wheels up" also works (`contact_control`). The handoff is **radar-driven**:
+  it is issued by the position monitor (`check_departure_handoff`, every ~2 s),
+  so the pilot does **not** have to report "airborne" — the aircraft simply
+  leaving the runway is enough. It is not a reply to a transmission.
 - Tower → Ground (after landing): *"contact Ground on channel 6"*
   (`contact_ground`).
+
+The departure handoff also **coaches**: if the aircraft is not tracking its
+assigned exit gate, the handoff is prefixed with *"note: you are not near Exit
+West. Continue."* The handoff still happens (the note never blocks). The check
+compares the assigned gate against the **nearest** gate, so it fires only when
+the departure is genuinely heading for a different exit — measuring the raw gate
+distance would fire on every departure, because the handoff happens seconds
+after liftoff when the gate is still 5-8 NM away.
 
 Entry/exit point names live in `airspace.json` (`gates`). The **radio preset
 channel numbers** are per-airfield in `airspace.json` (`channels`:
