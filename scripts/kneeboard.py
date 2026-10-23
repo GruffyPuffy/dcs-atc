@@ -6,7 +6,7 @@ pilot can glance at the correct phraseology in the cockpit:
 
     1. Start / Takeoff   — Ground + Tower (check-in, clearance, taxi, departure)
     2. RTB / Landing     — Control + Tower + Ground (inbound, break, landing, parking)
-    3. Airborne          — AWACS (check-in, push, attack, RTB) — not flown in the sim
+    3. Airborne          — AWACS/Stingray (check-in, bullseye, RTB) — flown by the trainer
 
 The dialogs are transcribed verbatim from the wiki (the "Adder11" two-ship
 example). Edit `PAGES` below to change the wording; the layout is automatic.
@@ -176,9 +176,10 @@ PAGES = [
     {
         "file": "03-airborne",
         "title": "AIRBORNE",
-        "subtitle": "AWACS / package — not flown in the sim (reference only)",
-        "note": "AWACS and package comms are outside the ATC trainer; kept here for "
-                "completeness of the MA SOP.",
+        "subtitle": "AWACS / Stingray — check-in, bullseye picture, RTB",
+        "note": "Stingray (AWACS) is a real controller in this trainer on the "
+                "package channel (Ch 3). Authentication (RAMROD) is not yet "
+                "implemented.",
         "sections": [
             ("Contacting AWACS", [
                 ("P", "Adder1"),
@@ -284,9 +285,86 @@ PAGES = [
             ("24*", "Intraflight (Flight 3)", "xxx.xx**"),
             ("25*", "Tower (AI)", "xxx.xx**"),
         ],
-        "highlight": {"6", "7", "8", "21*"},
-        "footer": "This trainer uses Ch 6 Ground 250.00, Ch 7 Tower 270.00, "
-                  "Ch 8 Control 257.00 and Ch 21 ATIS 270.50 at every airfield.",
+        "highlight": {"3", "6", "7", "8", "21*"},
+        "footer": "This trainer uses Ch 3 Stingray 265.00, Ch 6 Ground 250.00, "
+                  "Ch 7 Tower 270.00, Ch 8 Control 257.00 and Ch 21 ATIS 270.50 "
+                  "at every airfield.",
+    },
+    {
+        "file": "06-brevity",
+        "title": "BREVITY",
+        "subtitle": "Radio words — Master Arms brevity (the ones you will hear)",
+        "note": "The Master Arms brevity list, trimmed to the words used on the "
+                "ATC and package channels. Full list: "
+                "wiki.masterarms.se/index.php/Brevity.",
+        "glossary": [
+            ("Angels", "Height of a friendly aircraft in thousands of feet "
+                       "(\"Angels 15\" = 15,000 ft)."),
+            ("As fragged", "Will do exactly as briefed in the ATO — nothing has "
+                           "changed, so no need to repeat it."),
+            ("Authenticate", "Request or provide a response to a coded challenge "
+                             "(RAMROD)."),
+            ("Bingo", "Minimum fuel needed to return to base; also \"proceeding "
+                      "to base\" — a reason-free way to say you are heading home."),
+            ("Bogey", "A radar or visual contact whose identity is unknown."),
+            ("Bandit", "A contact identified as enemy."),
+            ("Bugout", "Leaving the engagement — no intent to re-engage."),
+            ("Bullseye", "A fixed reference point; positions are given as "
+                         "bearing and range from it (\"bullseye 065 for 40\")."),
+            ("Buster", "Fly at maximum continuous speed."),
+            ("Cease", "Break off the engagement on the specified target."),
+            ("Clean", "No radar contacts; also no ordnance remaining."),
+            ("Cleared", "The requested action is authorised."),
+            ("Cold", "Attack geometry that passes behind the target; also "
+                     "nose away from the threat."),
+            ("Contact", "Sensor contact at the stated position."),
+            ("Continue", "Continue the present manoeuvre — not a clearance to "
+                         "engage."),
+            ("Declare", "Request the identification of a specified track."),
+            ("Divert", "Proceed to an alternate mission or base."),
+            ("Estimate", "An estimate of size, range or height of a contact."),
+            ("Faded", "Radar contact is lost."),
+            ("Friendly", "A positively identified friendly contact."),
+            ("Gate", "Fly as fast as possible, using afterburner."),
+            ("Group", "Radar targets within about 3 NM of each other."),
+            ("Heavy", "A group or package of three or more aircraft."),
+            ("High", "Target altitude above the stated band."),
+            ("Hold fire", "Stop firing on the designated target."),
+            ("Hot", "Attack geometry that rolls out in front of the target; "
+                    "also armed/live."),
+            ("Joker", "Fuel state above bingo at which to start heading home."),
+            ("Knock it off", "Cease the air-combat manoeuvring."),
+            ("Locked", "Final radar lock-on."),
+            ("Lost contact", "Radar contact lost."),
+            ("Low", "Target altitude below the stated band."),
+            ("Magnum", "Launch of a friendly anti-radiation missile."),
+            ("Marking", "A call giving your position relative to the bullseye "
+                        "(\"marking bullseye 270 for 35\")."),
+            ("Miller Time", "Ordnance delivered — the strike is complete; "
+                            "usually with a request to RTB."),
+            ("Monitor", "Maintain sensor awareness on the specified group."),
+            ("No joy", "No contact; have not found the target."),
+            ("Picture", "A request for, or a report of, the tactical situation."),
+            ("Push", "Switch to the stated channel or frequency."),
+            ("Radio check", "Request for a readability report."),
+            ("Raygun", "A radar lock on a friendly aircraft (training)."),
+            ("Readback", "Repeat the clearance back to the controller."),
+            ("Roger", "I have received and understood your last transmission."),
+            ("RTB", "Return to base."),
+            ("Say again", "Repeat your last transmission."),
+            ("Spike", "RWR indication of a radar lock on you."),
+            ("Squawk", "Set the stated transponder code."),
+            ("State", "Report your fuel state (\"lowest state 4.5\")."),
+            ("Tally", "Sight of a target or enemy."),
+            ("Traffic", "Aircraft in the area, friendly or unknown."),
+            ("Unable", "Cannot comply with the request."),
+            ("Vector", "A heading to steer, given by the controller."),
+            ("Visual", "Sight of a friendly aircraft or ground position."),
+            ("Wilco", "Will comply with your last instruction."),
+            ("Winchester", "No ordnance remaining."),
+        ],
+        "footer": "Brevity is code words that shorten radio calls and reduce "
+                  "mishearing. Use them only when both sides know them.",
     },
 ]
 
@@ -356,6 +434,16 @@ def _measure(draw: ImageDraw.ImageDraw, page: dict, width: int,
         y += len(_wrap(draw, page["note"], f_note, width - 2 * MARGIN)) * 22 + 6
     if page.get("table"):
         y += len(page["table"]) * int(26 * scale) + 12
+    if page.get("glossary"):
+        # Two columns; approximate the taller one.
+        f_term = _font("DejaVuSans-Bold.ttf", max(9, int(16 * scale)))
+        f_def = _font("DejaVuSans.ttf", max(9, int(15 * scale)))
+        col_gap = int(24 * scale)
+        col_w = (width - 2 * MARGIN - col_gap) // 2
+        heights = [len(_wrap(draw, de, f_def, col_w - 4)) * int(19 * scale)
+                   + int(28 * scale) for _t, de in page["glossary"]]
+        y += max(sum(heights[:len(heights) // 2]),
+                 sum(heights[len(heights) // 2:])) + 12
     for heading, lines in page.get("sections", []):
         y += int(30 * scale)
         for _role, text in lines:
@@ -365,6 +453,51 @@ def _measure(draw: ImageDraw.ImageDraw, page: dict, width: int,
     footer = page.get("footer", FOOTER)
     y += len(_wrap(draw, footer, f_foot, width - 2 * MARGIN)) * 20 + 24
     return y
+
+
+def _draw_glossary(d: ImageDraw.ImageDraw, page: dict, width: int, y: int,
+                   scale: float) -> int:
+    """Two-column term/definition list (the brevity page).
+
+    Terms are drawn in the accent colour, definitions in the body colour, so a
+    pilot can scan for a word quickly. Two columns keep a long list on one page.
+    """
+    f_term = _font("DejaVuSans-Bold.ttf", max(9, int(16 * scale)))
+    f_def = _font("DejaVuSans.ttf", max(9, int(15 * scale)))
+    entries = page["glossary"]
+    col_gap = int(24 * scale)
+    col_w = (width - 2 * MARGIN - col_gap) // 2
+    # Split into two balanced columns by measured height, not by count, so a
+    # few long definitions do not overflow one side.
+    heights = []
+    for term, definition in entries:
+        h = len(_wrap(d, definition, f_def, col_w - 4)) * int(19 * scale) \
+            + int(22 * scale)
+        heights.append(h)
+    total = sum(heights)
+    target = total / 2
+    split, acc = len(entries), 0
+    for i, h in enumerate(heights):
+        if acc + h > target:
+            split = i
+            break
+        acc += h
+    columns = [entries[:split], entries[split:]]
+    for ci, col in enumerate(columns):
+        x = MARGIN + ci * (col_w + col_gap)
+        cy = y
+        for term, definition in col:
+            d.text((x, cy), term, font=f_term, fill=ACCENT)
+            cy += int(22 * scale)
+            for line in _wrap(d, definition, f_def, col_w - 4):
+                d.text((x, cy), line, font=f_def, fill=FG)
+                cy += int(19 * scale)
+            cy += int(6 * scale)
+    # Height of the taller column.
+    return y + max(
+        sum(len(_wrap(d, de, f_def, col_w - 4)) * int(19 * scale)
+            + int(28 * scale) for _t, de in col)
+        for col in columns)
 
 
 def render_page(page: dict, width: int, height: int) -> Image.Image:
@@ -404,6 +537,8 @@ def render_page(page: dict, width: int, height: int) -> Image.Image:
 
     if page.get("table"):
         y = _draw_table(d, page, width, y, scale)
+    if page.get("glossary"):
+        y = _draw_glossary(d, page, width, y, scale)
 
     for heading, lines in page.get("sections", []):
         d.text((MARGIN, y), heading, font=f_head, fill=ACCENT)

@@ -353,6 +353,21 @@ class TrackHistory:
             return []
         return [c for c in (data.get("chatter") or []) if isinstance(c, dict)]
 
+    @staticmethod
+    def read_bullseye(path: Path) -> list[float] | None:
+        """The saved coalition bullseye from a debrief file, or None.
+
+        Saved with the sortie so the viewer can draw it without a live bridge.
+        """
+        try:
+            data = json.loads(path.read_text())
+        except (OSError, ValueError):
+            return None
+        bullseye = data.get("bullseye")
+        if isinstance(bullseye, list) and len(bullseye) == 2:
+            return [float(bullseye[0]), float(bullseye[1])]
+        return None
+
 
 # Keep at most this many debrief files (one file per pilot spawn, so a
 # multi-ship session writes several). Oldest are pruned after a save.
@@ -523,7 +538,7 @@ _FALLBACK_LAYERS = {
 
 
 def _agencies(airfield: Airfield) -> list[str]:
-    """Radio agencies for the chatter filter: ground/tower/control/atis."""
+    """Radio agencies for the chatter filter: ground/tower/control/stingray/atis."""
     out = []
     if airfield.ground_frequency_mhz:
         out.append("ground")
@@ -531,6 +546,8 @@ def _agencies(airfield: Airfield) -> list[str]:
         out.append("tower")
     if airfield.control_frequency_mhz:
         out.append("control")
+    if airfield.stingray_frequency_mhz:
+        out.append("stingray")
     if airfield.atis_frequency_mhz:
         out.append("atis")
     return out
@@ -612,6 +629,8 @@ class MapService:
                 # window too (not just the trails).
                 with self._chatter_lock:
                     data["chatter"] = list(self._chatter)
+                if self.brain.bullseye:
+                    data["bullseye"] = list(self.brain.bullseye)
                 self.tracks.save_json(data, self.tracks_file)
             # Debriefs are saved every session now; keep the newest few only.
             prune_debriefs()
@@ -645,6 +664,8 @@ class MapService:
         data["callsign"] = callsign
         with self._chatter_lock:
             data["chatter"] = self._filter_chatter(player, callsign)
+        if self.brain.bullseye:
+            data["bullseye"] = list(self.brain.bullseye)
         self.tracks.save_json(data, path)
 
     def begin_spawn(self, player: str, callsign: str = "",
@@ -1021,6 +1042,10 @@ class MapService:
         airfield["tower_pos"] = self._live_tower_pos()
         airfield["wind"] = _wind_payload(self.brain)
         airfield["topgun"] = {"radius_m": BUST_RADIUS_M}
+        # Coalition bullseye from the mission (None until the bridge supplies
+        # it). Drawn on the map so a bullseye call can be checked by eye.
+        airfield["bullseye"] = (list(self.brain.bullseye)
+                                if self.brain.bullseye else None)
         return {
             "airfield": airfield,
             "aircraft": aircraft,

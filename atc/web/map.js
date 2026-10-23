@@ -8,6 +8,7 @@ const PHASE_COLOR = {
 };
 
 let map, ctrLayer, staticLayer, aircraftLayer, aiLayer, chartLayer, pathLayer, commLayer;
+let bullseyeLayer;  // debug overlay: bullseye picture calls (arrow + accuracy ring)
 let baseLayer;  // the base-map tile layer (OSM or DCS); swapped on config change
 let baseLayerName = '';
 let vectorSpec = null;     // dcsmaps WMS overlay (airbases/towns/navaids)
@@ -47,6 +48,7 @@ function initMap(center) {
   staticLayer = L.layerGroup().addTo(map);
   pathLayer = L.layerGroup().addTo(map);
   commLayer = L.layerGroup().addTo(map);
+  bullseyeLayer = L.layerGroup().addTo(map);
   aiLayer = L.layerGroup().addTo(map);
   aircraftLayer = L.layerGroup().addTo(map);
   document.getElementById('chart-toggle').addEventListener('change', (e) => {
@@ -289,6 +291,94 @@ function drawAirspace(af) {
   }
 
   drawWind(af);
+  drawBullseye(af);
+}
+
+function drawBullseye(af) {
+  // Coalition bullseye (main reference point) from the mission. Drawn as a
+  // small concentric-ring "target" symbol, sized like the other point markers
+  // (the entry gates are 5 px) so it reads as a reference point, not a zone.
+  // Blue, because we fly blue. Absent when the mission has no bullseye set (or
+  // an older debrief without one).
+  if (!af.bullseye || af.bullseye.length !== 2) return;
+  const pos = [af.bullseye[0], af.bullseye[1]];
+  // Rings in screen pixels (circleMarker), so the symbol keeps its size at any
+  // zoom — a geographic circle would balloon when zoomed out.
+  for (const r of [4, 8, 12]) {
+    L.circleMarker(pos, {
+      radius: r, color: '#1f6feb', weight: 1.5, opacity: 0.9,
+      fill: false, interactive: false,
+    }).addTo(staticLayer);
+  }
+  L.circleMarker(pos, {
+    radius: 2, color: '#1f6feb', weight: 1, fillColor: '#1f6feb',
+    fillOpacity: 1,
+  }).bindTooltip('Bullseye (blue)').addTo(staticLayer);
+}
+
+// Bullseye picture-call tolerance, mirroring the brain's constants
+// (BULLSEYE_TOLERANCE_DEG / _NM). Kept in sync by hand — the debug overlay is
+// a visual aid, not the authority (the brain does the actual check).
+const BULLSEYE_TOL_DEG = 10;
+const BULLSEYE_TOL_NM = 3;
+
+function parseBullseyeCall(text) {
+  // "bullseye 065 for 40, angels 15" -> {bearing, range, angels}. Mirrors the
+  // brain's parser so the drawn arrow can never disagree with what was checked.
+  const m = /\bbull'?s?eye\b\s*(\d{2,3})\s*(?:for|at)\s*(\d{1,3})/i.exec(text || '');
+  if (!m) return null;
+  const a = /\bangels\s*(\d{1,3})\b/i.exec(text || '');
+  return { bearing: Number(m[1]), range: Number(m[2]),
+           angels: a ? Number(a[1]) : null };
+}
+
+function drawBullseyeCalls(aircraft, af) {
+  // Debug overlay: for every bullseye picture call, draw an arrow from the
+  // bullseye along the *reported* bearing/range, plus a ring around the
+  // aircraft's *actual* position at the tolerance radius. If the arrow tip
+  // lands inside the ring, the reported position was good enough — readable at
+  // a glance from the trail, without re-running the check.
+  //
+  // Colours are chosen to stay visible on the map's green/tan terrain: the
+  // arrow is amber, the accuracy ring magenta (a green ring vanished against
+  // the terrain).
+  bullseyeLayer.clearLayers();
+  if (!af.bullseye || af.bullseye.length !== 2) return;
+  const [blat, blon] = af.bullseye;
+  for (const ac of aircraft) {
+    for (const c of (ac.comms || [])) {
+      const call = parseBullseyeCall(c.text);
+      if (!call) continue;
+      // Where the pilot *said* they were: from the bullseye, along the
+      // reported bearing, at the reported range.
+      const tip = destMeters(blat, blon, call.bearing, call.range * 1852);
+      const label = `Bullseye ${String(call.bearing).padStart(3, '0')} for `
+        + `${call.range}`
+        + (call.angels != null ? `, angels ${call.angels}` : '')
+        + ` · ${c.t || ''}`;
+      L.polyline([[blat, blon], tip], {
+        color: '#d29922', weight: 2, opacity: 0.95,
+      }).bindTooltip(label).addTo(bullseyeLayer);
+      // Arrowhead at the reported point, so the direction of the call reads.
+      for (const side of [-150, 150]) {
+        const barb = destMeters(tip[0], tip[1], call.bearing + side, 2500);
+        L.polyline([tip, barb], {
+          color: '#d29922', weight: 2, opacity: 0.95, interactive: false,
+        }).addTo(bullseyeLayer);
+      }
+      L.circleMarker(tip, {
+        radius: 4, color: '#d29922', weight: 2, fillColor: '#d29922',
+        fillOpacity: 0.9,
+      }).addTo(bullseyeLayer);
+      // Where the aircraft *actually* was, with the tolerance as a ring.
+      if (c.lat != null && c.lon != null) {
+        L.circle([c.lat, c.lon], {
+          radius: BULLSEYE_TOL_NM * 1852, color: '#db61a2', weight: 2,
+          opacity: 0.95, dashArray: '4 4', fill: false, interactive: false,
+        }).addTo(bullseyeLayer);
+      }
+    }
+  }
 }
 
 function destMeters(lat, lon, deg, meters) {
@@ -674,6 +764,7 @@ async function tick() {
     drawAirspace(data.airfield);
     drawAiAir(data.ai_air || []);
     drawAircraft(data.aircraft);
+    drawBullseyeCalls(data.aircraft, data.airfield);
     drawTable(data.aircraft);
     drawChatter(data.chatter || [], data.airfield.agencies || []);
     drawControl(data.control);

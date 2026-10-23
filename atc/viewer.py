@@ -257,6 +257,9 @@ def debrief_snapshot(path: Path, airfield, basemap: str | None) -> dict:
     # (or nothing when the chatter never stated one).
     af["wind"] = {"dir": conditions["dir"], "speed": conditions["speed_kt"],
                   "text": conditions["text"]}
+    # Coalition bullseye, saved with the sortie (None for older files). Drawn
+    # on the map so a bullseye call can be checked by eye during review.
+    af["bullseye"] = TrackHistory.read_bullseye(path)
     # The dcsmaps tiles are plain http:// — an https:// viewer page must not
     # load them directly (mixed content = blocked = black map). Rewrite the
     # URL to the viewer's own tile proxy, which fetches from dcsmaps over

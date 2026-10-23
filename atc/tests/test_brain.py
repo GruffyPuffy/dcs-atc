@@ -123,7 +123,7 @@ def test_tower_takeoff(brain):
     reply = brain.handle("Line up and wait 25, Colt 1",
                          controller=Controller.TOWER)
     assert "cleared for takeoff" in reply
-    assert brain.pilots["Colt 1"].phase == Phase.DEPARTURE
+    assert brain.pilots["Colt 1"].phase == Phase.TAKEOFF
 
 
 def test_tower_runway_in_sight_overhead(brain):
@@ -487,7 +487,7 @@ def test_takeoff_readback_after_clearance_gets_roger(brain):
     reply = brain.handle("Right turn out, cleared for takeoff, 25, Colt 1",
                          controller=Controller.TOWER)
     assert "say again" not in reply.lower()
-    assert brain.pilots["Colt 1"].phase == Phase.DEPARTURE
+    assert brain.pilots["Colt 1"].phase == Phase.TAKEOFF
 
 
 def test_tower_lineup_readback_clears_takeoff(brain):
@@ -497,7 +497,7 @@ def test_tower_lineup_readback_clears_takeoff(brain):
     assert "cleared for takeoff" in reply
     # Kutaisi 25's default exit (West) is straight ahead, so no turnout clause.
     assert "turnout" not in reply
-    assert brain.pilots["Colt 1"].phase == Phase.DEPARTURE
+    assert brain.pilots["Colt 1"].phase == Phase.TAKEOFF
 
 
 def test_takeoff_turnout_follows_the_exit_gate(brain):
@@ -1557,7 +1557,7 @@ def test_ready_for_departure_challenged_when_not_at_runway(brain, airfield):
     reply = brain.handle("Tower, Colt 1, ready for departure",
                          track=ramp, controller=Controller.TOWER)
     assert "negative" in reply.lower()
-    assert brain.pilots["Colt 1"].phase != Phase.DEPARTURE
+    assert brain.pilots["Colt 1"].phase != Phase.TAKEOFF
 
 
 def test_ready_for_departure_accepted_at_runway(brain, airfield):
@@ -1852,7 +1852,7 @@ def test_lined_up_and_waiting_clears_takeoff(brain):
     reply = brain.handle("Tower, Colt 1, lined up and waiting",
                          controller=Controller.TOWER)
     assert "cleared for takeoff" in reply
-    assert brain.pilots["Colt 1"].phase == Phase.DEPARTURE
+    assert brain.pilots["Colt 1"].phase == Phase.TAKEOFF
 
 
 def test_ready_again_while_lined_up_clears_takeoff(brain):
@@ -1863,14 +1863,14 @@ def test_ready_again_while_lined_up_clears_takeoff(brain):
     reply = brain.handle("Tower, Colt 1, ready for departure",
                          controller=Controller.TOWER)
     assert "cleared for takeoff" in reply
-    assert brain.pilots["Colt 1"].phase == Phase.DEPARTURE
+    assert brain.pilots["Colt 1"].phase == Phase.TAKEOFF
 
 
 def test_bare_ready_while_lined_up_clears_takeoff(brain):
     brain.handle("Tower, Colt 1, ready for departure", controller=Controller.TOWER)
     reply = brain.handle("Tower, Colt 1, ready", controller=Controller.TOWER)
     assert "cleared for takeoff" in reply
-    assert brain.pilots["Colt 1"].phase == Phase.DEPARTURE
+    assert brain.pilots["Colt 1"].phase == Phase.TAKEOFF
 
 
 def test_lineup_help_mentions_readback(brain):
@@ -2697,7 +2697,7 @@ def test_departure_handoff_is_radar_driven_not_a_pilot_report(brain, airfield):
     """
     from ctr import AircraftTrack
     pilot = brain._pilot("Colt 1")
-    pilot.phase = Phase.DEPARTURE
+    pilot.phase = Phase.TAKEOFF
     pilot.exit_gate = "West"
     # Still over the runway: no handoff yet (a readback is not airborne).
     thr = airfield.runway_threshold("25")
@@ -2705,7 +2705,7 @@ def test_departure_handoff_is_radar_driven_not_a_pilot_report(brain, airfield):
                            alt_ft=airfield.elevation_ft + 10, distance_nm=0.2,
                            relative="on runway", heading=250.0)
     assert brain.check_departure_handoff("Colt 1", on_rwy) is None
-    assert pilot.phase == Phase.DEPARTURE
+    assert pilot.phase == Phase.TAKEOFF
     # Clear of the runway: the handoff fires unprompted.
     sc_track = AircraftTrack(
         callsign="Colt 1", inside=False, lat=airfield.gates["West"][0],
@@ -2714,3 +2714,346 @@ def test_departure_handoff_is_radar_driven_not_a_pilot_report(brain, airfield):
     reply = brain.check_departure_handoff("Colt 1", sc_track)
     assert reply is not None and "contact Control" in reply
     assert pilot.phase == Phase.AIRBORNE
+
+
+# ---------- Stingray (AWACS) — Master Arms SOP, kneeboard page 3 ----------
+# The tactical leg: check in, give a bullseye picture, then RTB and hand back to
+# Control. Written against the recorded SOP phrases so the flow cannot regress.
+
+def _stingray(brain, callsign="Colt 1"):
+    """Put a known pilot on the Stingray leg."""
+    pilot = brain._pilot(callsign)
+    pilot.phase = Phase.STINGRAY
+    return pilot
+
+
+def test_stingray_checkin_is_acknowledged(brain):
+    # "Stingray, Adder11" -> "Adder11, Stingray" (SOP page 3).
+    _stingray(brain)
+    reply = brain.handle("Stingray, Colt 1", controller=Controller.STINGRAY)
+    assert reply and "Stingray" in reply
+    assert "say again" not in reply.lower()
+
+
+def test_stingray_bullseye_call_acknowledged_without_a_bullseye(brain):
+    # No mission bullseye (bare brain): acknowledge, never invent a position.
+    _stingray(brain)
+    reply = brain.handle(
+        "Stingray, Colt 1, bullseye 065 for 40, angels 15, as fragged",
+        controller=Controller.STINGRAY)
+    assert "radar contact" in reply.lower()
+    assert "negative" not in reply.lower()
+
+
+def test_stingray_bullseye_call_verified_against_the_mission(brain, airfield):
+    # With the mission bullseye set, a correct call is acknowledged...
+    from airspace import bearing_distance
+    from ctr import AircraftTrack
+    blat, blon = 42.0, 42.5
+    brain.set_bullseye(blat, blon)
+    _stingray(brain)
+    alat, alon = 42.6667, 42.5  # 40 NM north of the bullseye
+    bearing, distance = bearing_distance(blat, blon, alat, alon)
+    track = AircraftTrack(callsign="Colt 1", inside=False, lat=alat, lon=alon,
+                          alt_ft=15000.0, distance_nm=40.0, relative="north",
+                          heading=0.0)
+    reply = brain.handle(
+        f"Stingray, Colt 1, bullseye {bearing:03.0f} for {distance:.0f}",
+        controller=Controller.STINGRAY, track=track)
+    assert "radar contact" in reply.lower()
+    assert "negative" not in reply.lower()
+
+
+def test_stingray_bullseye_call_off_is_coached_not_blocked(brain):
+    # ...and a clearly wrong call gets the real bearing/range, but the flight
+    # continues (never a block — same rule as the position cross-check).
+    from ctr import AircraftTrack
+    brain.set_bullseye(42.0, 42.5)
+    pilot = _stingray(brain)
+    track = AircraftTrack(callsign="Colt 1", inside=False, lat=42.6667,
+                          lon=42.5, alt_ft=15000.0, distance_nm=40.0,
+                          relative="north", heading=0.0)
+    reply = brain.handle("Stingray, Colt 1, bullseye 200 for 10",
+                         controller=Controller.STINGRAY, track=track)
+    assert "negative" in reply.lower()
+    assert "bullseye" in reply.lower()
+    assert pilot.phase == Phase.STINGRAY  # not advanced, not blocked
+
+
+def test_stingray_rtb_triggers(brain):
+    # Every way a flight says "I am going home" gets "copy, RTB" — the reason
+    # is never questioned (a trainer flight may be a strike, a fuel check, or
+    # just a pilot who wants to head back).
+    for text in ("Colt 1 Miller Time, requesting RTB",
+                 "Colt 1, bingo",
+                 "Colt 1, joker",
+                 "Colt 1, bugout",
+                 "Colt 1, bug out",
+                 "Colt 1, winchester",
+                 "Colt 1, requesting RTB",
+                 "Colt 1, returning to base"):
+        pilot = _stingray(brain)
+        reply = brain.handle(text, controller=Controller.STINGRAY)
+        assert "RTB" in reply, text
+        assert pilot.rtb_requested, text
+
+
+def test_stingray_hands_back_to_control(brain):
+    # "request Control" re-enters the normal arrival flow (Control inbound).
+    pilot = _stingray(brain)
+    reply = brain.handle("Stingray, Colt 1, request Control",
+                         controller=Controller.STINGRAY)
+    assert "Control" in reply
+    assert "channel 8" in reply
+    assert pilot.phase == Phase.INBOUND
+
+
+def test_stingray_does_not_break_other_controllers(brain):
+    # The fourth controller must not change Ground/Tower/Control behaviour.
+    assert "Ground" in brain.handle("Ground, Colt 1",
+                                    controller=Controller.GROUND)
+    assert "Tower" in brain.handle("Tower, Colt 1", controller=Controller.TOWER)
+    assert "Control" in brain.handle("Control, Colt 1",
+                                     controller=Controller.CONTROL)
+
+
+def test_stingray_package_reports_are_silent(brain):
+    # "Adder1 pushing" and "one away" are SOP package-channel reports, not calls
+    # to the controller. Answering "say again" would train the pilot to stop
+    # making them, so Stingray stays silent.
+    for text in ("Colt 1 pushing", "Colt 1, one away", "Colt 1, rifle",
+                 "Colt 1, fox two", "Colt 1, magnum"):
+        _stingray(brain)
+        assert brain.handle(text, controller=Controller.STINGRAY) == "", text
+
+
+def test_stingray_air_start_can_check_in_directly(brain):
+    # An air-start (or a pilot practising) must be able to go straight to
+    # Stingray without flying a full departure first — otherwise testing the
+    # bullseye flow needs a takeoff every time.
+    pilot = brain._pilot("Colt 1")
+    assert pilot.phase == Phase.IDLE
+    reply = brain.handle("Stingray, Colt 1", controller=Controller.STINGRAY)
+    assert "Stingray" in reply
+    assert pilot.phase == Phase.STINGRAY
+
+
+def test_stingray_bullseye_calls_are_repeatable(brain):
+    # A pilot flying around practising bullseye calls can make as many as they
+    # like; each is checked on its own merits.
+    from ctr import AircraftTrack
+    brain.set_bullseye(42.05, 42.40)
+    track = AircraftTrack(callsign="Colt 1", inside=False, lat=42.6, lon=42.5,
+                          alt_ft=15000.0, distance_nm=33.0, relative="north",
+                          heading=0.0)
+    # True position is 008 for 33; all three are within tolerance (±10° / ±3 NM).
+    for text in ("Stingray, Colt 1, bullseye 008 for 33",
+                 "Stingray, Colt 1, bullseye 010 for 34",
+                 "Stingray, Colt 1, bullseye 007 for 32"):
+        reply = brain.handle(text, controller=Controller.STINGRAY, track=track)
+        assert "radar contact" in reply.lower(), text
+    # A clearly wrong call is still coached, not blocked.
+    reply = brain.handle("Stingray, Colt 1, bullseye 200 for 10",
+                         controller=Controller.STINGRAY, track=track)
+    assert "negative" in reply.lower()
+
+
+def test_stingray_help_is_tactical_not_idle(brain):
+    # A pilot on Stingray asking for help must NOT be told to "contact Ground
+    # for clearance and taxi" — that is the idle hint and is actively wrong on
+    # the tactical leg. Both a checked-in pilot and an air-start get the
+    # Stingray hint.
+    for phase in (Phase.STINGRAY, Phase.IDLE):
+        _airborne(brain, callsign="Colt 1", phase=phase)
+        reply = brain.handle("Stingray, Colt 1, help",
+                             controller=Controller.STINGRAY)
+        assert "bullseye" in reply.lower(), phase
+        assert "Ground" not in reply, phase
+
+
+def test_stingray_pilot_can_self_move_to_control(brain):
+    # A pilot on the tactical leg may ask to come home at any time — the trainer
+    # never makes them wait for the controller to offer the handoff. Every way
+    # of asking gives the Control handoff and re-enters the arrival flow.
+    for text in ("Stingray, Colt 1, request Control",
+                 "Stingray, Colt 1, request channel change",
+                 "Stingray, Colt 1, request channel 8",
+                 "Stingray, Colt 1, request landing",
+                 "Stingray, Colt 1, request to land",
+                 "Stingray, Colt 1, request approach",
+                 "Stingray, Colt 1, inbound",
+                 "Stingray, Colt 1, can I go to Control"):
+        pilot = _stingray(brain)
+        reply = brain.handle(text, controller=Controller.STINGRAY)
+        assert "Control" in reply and "channel 8" in reply, text
+        assert pilot.phase == Phase.INBOUND, text
+
+
+def test_stingray_channel_request_names_stingray_not_control(brain):
+    # A generic frequency request on Stingray must not be answered with
+    # "Colt 1, Control." (the old bug: the fallback used the Control ack, so
+    # Stingray appeared to answer as Control).
+    _stingray(brain)
+    reply = brain.handle("Stingray, Colt 1, request channel change",
+                         controller=Controller.STINGRAY)
+    assert "Control on channel 8" in reply
+    assert reply.strip() != "Colt 1, Control."
+
+
+def test_pilot_can_self_move_between_any_agencies(brain):
+    # This is a trainer: we do not know what the pilot wants to practise, so a
+    # pilot may ask to move to ANY agency from ANY agency. Every combination
+    # must name the target agency and its channel — never "say again", and never
+    # the agency they are already on.
+    agencies = {
+        Controller.GROUND: "Ground",
+        Controller.TOWER: "Tower",
+        Controller.CONTROL: "Control",
+        Controller.STINGRAY: "Stingray",
+    }
+    phases = [Phase.IDLE, Phase.TAXI, Phase.HOLDING, Phase.AIRBORNE,
+              Phase.STINGRAY, Phase.INBOUND, Phase.LANDING]
+    for controller, name in agencies.items():
+        for phase in phases:
+            for target, target_name in agencies.items():
+                _airborne(brain, callsign="Colt 1", phase=phase)
+                text = f"{name}, Colt 1, request {target_name}"
+                reply = brain.handle(text, controller=controller)
+                assert reply, f"{text} (from {controller.value}) got no reply"
+                assert "say again" not in reply.lower(), text
+                if target is not controller:
+                    assert f"contact {target_name}" in reply, text
+                    assert f"channel" in reply, text
+
+
+def test_self_move_sets_the_phase_for_the_new_agency(brain):
+    # Moving to an agency must set the phase to match, or the new agency treats
+    # the pilot as if they had never left (e.g. a self-move to Control must be
+    # seen as inbound, so the arrival flow works).
+    pilot = _airborne(brain, callsign="Colt 1", phase=Phase.STINGRAY)
+    brain.handle("Stingray, Colt 1, request Control",
+                 controller=Controller.STINGRAY)
+    assert pilot.phase == Phase.INBOUND
+    # And the arrival flow then works on Control.
+    reply = brain.handle("Control, Colt 1, inbound 35 miles north at Angels 12",
+                         controller=Controller.CONTROL)
+    assert "radar contact" in reply.lower()
+
+
+def test_stingray_help_states_the_real_bullseye(brain):
+    # The help hint states the pilot's *actual* bullseye position, so they can
+    # check their numbers before calling them out — and the number it states
+    # must be accepted by the check (otherwise the aid would mislead).
+    import re
+    from ctr import AircraftTrack
+    brain.set_bullseye(42.05, 42.40)
+    _stingray(brain)
+    track = AircraftTrack(callsign="Colt 1", inside=False, lat=42.6, lon=42.5,
+                          alt_ft=15000.0, distance_nm=33.0, relative="north",
+                          heading=0.0)
+    hint = brain.handle("Stingray, Colt 1, help",
+                        controller=Controller.STINGRAY, track=track)
+    match = re.search(r"bullseye (\d{3}) for (\d+)", hint)
+    assert match, hint
+    # Calling back exactly what help stated is accepted.
+    reply = brain.handle(
+        f"Stingray, Colt 1, bullseye {match.group(1)} for {match.group(2)}",
+        controller=Controller.STINGRAY, track=track)
+    assert "radar contact" in reply.lower()
+
+
+def test_stingray_help_without_a_bullseye_uses_the_example(brain):
+    # No mission bullseye (or no live position): the hint falls back to the
+    # generic example rather than reading "you are —".
+    brain.bullseye = None
+    _stingray(brain)
+    hint = brain.handle("Stingray, Colt 1, help",
+                        controller=Controller.STINGRAY)
+    assert "bullseye 065 for 40" in hint
+    assert "you are —" not in hint
+
+
+def test_stingray_bullseye_angels_is_checked(brain):
+    # A picture call states the altitude too ("angels 15"), so it is checked
+    # with the same tolerance as bearing/range — a wrong altitude is coached,
+    # not silently accepted.
+    from ctr import AircraftTrack
+    brain.set_bullseye(42.05, 42.40)
+    _stingray(brain)
+    track = AircraftTrack(callsign="Colt 1", inside=False, lat=42.6, lon=42.5,
+                          alt_ft=15000.0, distance_nm=33.0, relative="north",
+                          heading=0.0)
+    # Correct (and within ±1 angel) -> acknowledged.
+    for angels in (15, 14, 16):
+        reply = brain.handle(
+            f"Stingray, Colt 1, bullseye 008 for 33, angels {angels}",
+            controller=Controller.STINGRAY, track=track)
+        assert "radar contact" in reply.lower(), angels
+    # Clearly wrong -> coached, and the real angels is stated.
+    reply = brain.handle("Stingray, Colt 1, bullseye 008 for 33, angels 25",
+                         controller=Controller.STINGRAY, track=track)
+    assert "negative" in reply.lower()
+    assert "angels 15" in reply
+
+
+def test_stingray_bullseye_angels_is_optional(brain):
+    # The SOP call includes angels, but a call without it is still valid (the
+    # bearing/range is the position report).
+    from ctr import AircraftTrack
+    brain.set_bullseye(42.05, 42.40)
+    _stingray(brain)
+    track = AircraftTrack(callsign="Colt 1", inside=False, lat=42.6, lon=42.5,
+                          alt_ft=15000.0, distance_nm=33.0, relative="north",
+                          heading=0.0)
+    reply = brain.handle("Stingray, Colt 1, bullseye 008 for 33",
+                         controller=Controller.STINGRAY, track=track)
+    assert "radar contact" in reply.lower()
+
+
+def test_stingray_help_states_angels_too(brain):
+    # The help hint states the altitude as well, so the whole call can be
+    # checked before making it.
+    import re
+    from ctr import AircraftTrack
+    brain.set_bullseye(42.05, 42.40)
+    _stingray(brain)
+    track = AircraftTrack(callsign="Colt 1", inside=False, lat=42.6, lon=42.5,
+                          alt_ft=15000.0, distance_nm=33.0, relative="north",
+                          heading=0.0)
+    hint = brain.handle("Stingray, Colt 1, help",
+                        controller=Controller.STINGRAY, track=track)
+    match = re.search(r"bullseye (\d{3}) for (\d+), angels (\d+)", hint)
+    assert match, hint
+    reply = brain.handle(
+        f"Stingray, Colt 1, bullseye {match.group(1)} for {match.group(2)}, "
+        f"angels {match.group(3)}",
+        controller=Controller.STINGRAY, track=track)
+    assert "radar contact" in reply.lower()
+
+
+def test_a_challenge_never_traps_the_pilot(brain):
+    # A coaching challenge ("negative, I show you ...") must never block the
+    # pilot: they can ignore it and ask to move on, which is exactly what a
+    # trainee does. This is the "never get stuck" rule applied to the bullseye
+    # and position cross-checks.
+    from ctr import AircraftTrack
+    brain.set_bullseye(42.05, 42.40)
+    _stingray(brain)
+    track = AircraftTrack(callsign="Colt 1", inside=False, lat=42.6, lon=42.5,
+                          alt_ft=15000.0, distance_nm=33.0, relative="north",
+                          heading=0.0)
+    # A clearly wrong call is challenged...
+    reply = brain.handle("Stingray, Colt 1, bullseye 200 for 10",
+                         controller=Controller.STINGRAY, track=track)
+    assert "negative" in reply.lower()
+    # ...and the pilot can then ignore it and ask to go home.
+    for text in ("Stingray, Colt 1, request Control",
+                 "Stingray, Colt 1, request push to Control",
+                 "Stingray, Colt 1, request channel 8",
+                 "Stingray, Colt 1, bugout"):
+        _stingray(brain)
+        brain.handle("Stingray, Colt 1, bullseye 200 for 10",
+                     controller=Controller.STINGRAY, track=track)
+        reply = brain.handle(text, controller=Controller.STINGRAY, track=track)
+        assert "say again" not in reply.lower(), text
+        assert "Control" in reply or "RTB" in reply, text

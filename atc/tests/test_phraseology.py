@@ -28,7 +28,9 @@ REQUIRED_TEMPLATES = {
     "control_join_requested_nohdg",
     "contact_ground", "taxi_parking", "control_contact",
     "control_climb", "control_descend", "control_descend_step", "control_too_early",
-    "contact_stingray",
+    "contact_stingray", "contact_agency", "agency_ack",
+    "stingray_ack", "stingray_radar_contact", "stingray_rtb_copy",
+    "stingray_contact_control", "stingray_bullseye_challenge",
     "contact_tower_from_control",
     "go_around", "ctr_warning", "roger", "say_again",
     "say_again_no_callsign",
@@ -36,6 +38,7 @@ REQUIRED_TEMPLATES = {
     "state_reset", "cancel_ack",
     "help_idle", "help_clearance", "help_taxi", "help_holding", "help_lineup",
     "help_departure", "help_airborne", "help_airborne_on_control",
+    "help_stingray", "help_stingray_nobullseye",
     "help_inbound", "help_landing",
     "help_escape",
     "position_challenge", "directions_gate", "directions_field",
@@ -82,7 +85,8 @@ def test_every_template_renders_with_common_fields():
                   gate="East", position="4 miles north",
                   agency="Kutaisi Tower", bearing="090", distance="12",
                   airfield="Kutaisi", vector_runway="25", parking="Ramp South",
-                  holding="Holding C")
+                  holding="Holding C", stingray="Stingray", range="40",
+                  target="Control", target_channel="8", bullseye="bullseye 065 for 40")
     for key in REQUIRED_TEMPLATES:
         text = ph.render(key, **common)
         assert "{" not in text, f"{key} left a placeholder unfilled"

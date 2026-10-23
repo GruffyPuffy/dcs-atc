@@ -82,6 +82,15 @@ RADAR_CLEAR_NM = 3.0
 ANGELS_HANDOFF_FT = 15000
 ANGELS_HANDOFF_SLOP_FT = 500
 
+# Bullseye picture-call tolerance. The pilot reads bullseye off their HSI and
+# STT mangles numbers, so a call is only "off" when it is clearly wrong; an off
+# call is coached, never blocked (the flight continues either way).
+BULLSEYE_TOLERANCE_DEG = 10.0
+BULLSEYE_TOLERANCE_NM = 3.0
+# Angels tolerance for a picture call, in feet (the call states thousands of
+# feet, so 1000 ft = 1 angel). Generous: the pilot reads it off the HUD.
+ANGELS_TOLERANCE_FT = 1000.0
+
 # How many consecutive polls with the aircraft on the runway before the
 # "vacate immediately" incursion warning fires (~2 s poll cadence -> 10 s).
 # A pilot creeping forward to line up right after the Ground->Tower handoff
@@ -197,6 +206,36 @@ def _stem(word: str) -> str:
     return rf"\b{word}(?:ing|ed|s)?\b"
 
 
+# A bullseye picture call: "bullseye 065 for 40, Angels 15" -> bearing, range
+# and (optionally) angels. The bearing is a 2-3 digit group, the range follows
+# "for"/"at", and angels is the altitude in thousands of feet. Module-level so
+# the map server can parse the same call for its debug overlay (one parser, so
+# the drawn arrow can never disagree with what the brain checked).
+_BULLSEYE_CALL_RE = re.compile(
+    r"\bbull'?s?eye\b\s*(\d{2,3})\s*(?:for|at)\s*(\d{1,3})")
+_ANGELS_RE = re.compile(r"\bangels\s*(\d{1,3})\b")
+
+
+def parse_bullseye_call(text: str) -> tuple[float, float] | None:
+    """Parse "bullseye 065 for 40" -> (bearing, range_nm), or None.
+
+    Reads the folded text, so spoken numbers ("zero six five") work too.
+    """
+    match = _BULLSEYE_CALL_RE.search(text or "")
+    if not match:
+        return None
+    return float(match.group(1)), float(match.group(2))
+
+
+def parse_angels(text: str) -> float | None:
+    """Parse "angels 15" -> 15.0 (thousands of feet), or None.
+
+    Angels is the altitude in thousands of feet, so "angels 15" is 15,000 ft.
+    """
+    match = _ANGELS_RE.search(text or "")
+    return float(match.group(1)) if match else None
+
+
 # Spoken digits, for the frequency-change patterns. STT writes what it hears, so
 # a channel is usually a *word* ("channel seven"), never a figure: a
 # `channel\s*\d` guard silently missed every real readback (debrief 2026-10-22:
@@ -214,20 +253,23 @@ _CHANNEL_CHANGE_RE = re.compile(
     rf"|\b(?:push(?:ing)?|switch(?:ing)?|chang(?:ing|e)|going|moving|"
     rf"contacting|diall?ing)\b[^.]*\bchannel\b"
     rf"|\bpush\b")
-# A pilot *asking* to change frequency, rather than acknowledging one. A real
+# A pilot *asking to change frequency*, rather than acknowledging one. A real
 # controller answers this ("contact Stingray on channel 3"), instead of leaving
 # the pilot to guess — this was 4 minutes of the 2026-10-22 sortie.
+#
+# Covers every way a pilot asks to move: naming a channel/frequency, naming an
+# agency ("request Control", "request Tower", "request Stingray"), or asking
+# generically ("request channel change", "when can I push"). This is a trainer:
+# the pilot may ask to move to *any* agency from any agency, so the request verb
+# is matched against any agency name rather than a hand-picked list.
+_AGENCY_WORDS = (r"ground|tower|control|approach|departure|stingray|awacs|"
+                 r"magic|overlord|center|centre")
 _CHANNEL_REQUEST_RE = re.compile(
-    r"\b(?:request(?:ing)?|ask(?:ing)? for|like|need|want|would like)\b"
-    r"[^.]*\b(?:channel|frequency|freq|push|switch)\b"
-    r"|\b(?:channel|frequency|freq)\s*(?:change|switch)\b")
-# A pilot *asking to hand off up the chain* ("request Stingray", "request
-# departure", "request AWACS"). AWACS is not simulated; the SOP answer names
-# the channel anyway so the radio sequence stays teachable.
-_HANDOFF_REQUEST_RE = re.compile(
-    r"\b(?:request(?:ing)?|ask(?:ing)? for|like|need|want|would like)\b[^.]*"
-    r"\b(stingray|awacs|magic|overlord|departure|approach|center|centre)\b"
-    r"|\b(when can i|can i)\b[^.]*\b(stingray|awacs|push|switch)\b")
+    rf"\b(?:request(?:ing)?|ask(?:ing)? for|like|need|want|would like|"
+    rf"can i|when can i|permission to)\b[^.]*"
+    rf"\b(?:channel|frequency|freq|push|switch|{_AGENCY_WORDS})\b"
+    r"|\b(?:channel|frequency|freq)\s*(?:change|switch)\b"
+    r"|\b(?:when can i|can i)\b[^.]*\bpush\b")
 # Everything the pilot said that is *not* the call itself: the agency name, the
 # callsign, the F-word of "F-word, calling" and punctuation. Used to tell a bare
 # check-in ("Tower, Epic 4") from a real call ("Tower, Epic 4, requesting taxi").
@@ -241,6 +283,7 @@ class Controller(str, Enum):
     GROUND = "ground"
     TOWER = "tower"
     CONTROL = "control"
+    STINGRAY = "stingray"
 
 
 class Phase(str, Enum):
@@ -251,8 +294,13 @@ class Phase(str, Enum):
     TAXI = "Taxi"
     HOLDING = "Holding"
     LINEUP = "Lineup"
-    DEPARTURE = "Departure"
+    # Cleared for takeoff / rolling. Entered by the takeoff *readback*, i.e.
+    # before the aircraft moves — hence "Takeoff", not "Departure" (the old name
+    # made a Control check-in mis-classify a departure as an arrival).
+    TAKEOFF = "Takeoff"
     AIRBORNE = "Airborne"
+    # Handed to Stingray (AWACS) after the climb; the tactical leg before RTB.
+    STINGRAY = "Stingray"
     INBOUND = "Inbound"
     LANDING = "Landing"
 
@@ -306,6 +354,9 @@ class PilotState:
     # Tower has pushed a departure to Control (MA SOP: "expect instructions to
     # switch to control" once airborne). Fires once per departure.
     departure_handoff_announced: bool = False
+    # The flight has told Stingray it is returning to base ("Miller Time",
+    # "Bingo", "requesting RTB"). Arms the handoff back to Control.
+    rtb_requested: bool = False
     formation: int = 0  # flight size (2+ = multi-ship), learned from calls
     # Trainer aid: this pilot asked for the in-game comms mirror ("trainer,
     # echo on"). Per-pilot, so each pilot controls their own feed.
@@ -351,18 +402,21 @@ class AtcBrain:
                  phraseology: Phraseology | None = None,
                  callsigns: CallsignRegistry | None = None,
                  ground: str = "Ground", control: str = "Control",
+                 stingray: str = "Stingray",
                  gates: list[str] | None = None,
                  gate_locator=None, airfield=None):
         self.tower = tower
         self.runway = runway
         self.ground = ground
         self.control = control
+        self.stingray = stingray
         # Master Arms: an agency identifies itself by ROLE ("Tower", "Ground",
         # "Control"), not the full name ("Kutaisi Tower"). The full name is only
         # used by the pilot when initiating contact. Replies use the short name.
         self.tower_short = tower.split()[-1] if tower else "Tower"
         self.ground_short = ground.split()[-1] if ground else "Ground"
         self.control_short = control.split()[-1] if control else "Control"
+        self.stingray_short = stingray.split()[-1] if stingray else "Stingray"
         self.gates = gates or []
         self.gate_locator = gate_locator  # callable(lat, lon) -> gate name
         self.airfield = airfield  # Airfield, for position cross-checks
@@ -377,6 +431,10 @@ class AtcBrain:
         # Ground reads it out when a pilot checks in WITHOUT "with information X"
         # (MA SOP: "weather is CAVOK. Wind 270, 2 knots, Runway 25 in use, ...").
         self.weather = ""
+        # Coalition bullseye (main reference point) from the mission, as
+        # (lat, lon). None until the bridge supplies it; a bullseye call is then
+        # acknowledged without a position check rather than inventing a point.
+        self.bullseye: tuple[float, float] | None = None
         # TTS output volume, adjustable at runtime with "trainer, volume 0.3".
         # None = use the --tx-volume default.
         self.tx_volume: float | None = None
@@ -678,9 +736,11 @@ class AtcBrain:
         speaker happens to be called "Ground".
         """
         return {w.lower() for w in (self.tower_short, self.ground_short,
-                                    self.control_short, "atis", "tower",
+                                    self.control_short, self.stingray_short,
+                                    "atis", "tower",
                                     "ground", "control", "approach",
-                                    "departure", "center", "centre")}
+                                    "departure", "center", "centre",
+                                    "stingray", "awacs")}
 
     def _is_bare_checkin(self, text: str, speaker: str = "") -> bool:
         """True if the transmission is *only* an agency check-in.
@@ -821,6 +881,15 @@ class AtcBrain:
         if summary:
             self.weather = summary
 
+    def set_bullseye(self, lat: float, lon: float) -> None:
+        """Set the coalition bullseye (main reference point) from the mission.
+
+        The pilot reads bullseye off their HSI, so this must be the mission's
+        own point — a made-up one could not be verified. Until it is set, a
+        bullseye call is acknowledged without a position check.
+        """
+        self.bullseye = (float(lat), float(lon))
+
     def _say(self, key: str, callsign: str, agency: str | None = None,
              **fields: object) -> str:
         # Radio preset channels are per-airfield (airspace.json); fall back to
@@ -844,13 +913,15 @@ class AtcBrain:
             key, callsign=callsign, tower=self.tower_short,
             agency=agency or self.tower_short,
             runway=self.runway, wind=self.wind, ground=self.ground_short,
-            control=self.control_short, qnh=self.qnh, weather=self.weather,
+            control=self.control_short, stingray=self.stingray_short,
+            qnh=self.qnh, weather=self.weather,
             **overrides, **fields)
 
     def _agency(self, controller: Controller) -> str:
         """Short name of the agency handling a controller role."""
         return {Controller.GROUND: self.ground_short,
                 Controller.CONTROL: self.control_short,
+                Controller.STINGRAY: self.stingray_short,
                 Controller.TOWER: self.tower_short}.get(controller,
                                                          self.tower_short)
 
@@ -1121,7 +1192,7 @@ class AtcBrain:
             if name and re.search(r"\btrainer\b", text.lower()) and re.search(
                     r"\b(help|assist|what do i do|what now|remind me)\b",
                     text.lower()):
-                return self._help(name, self._pilot(name), controller)
+                return self._help(name, self._pilot(name), controller, track)
             # A speaker we have already identified is trusted: use their own
             # callsign even when this transmission did not name it. STT often
             # drops or mangles the callsign, and we already know who is on the
@@ -1188,7 +1259,7 @@ class AtcBrain:
         # phraseology), available on any frequency and in any phase. Handled
         # before everything else so it can never be mistaken for a clearance.
         if re.search(r"\btrainer\b", low):
-            return self._trainer(callsign, pilot, low, controller)
+            return self._trainer(callsign, pilot, low, controller, track)
 
         # Trainer aid: "<callsign> help" (also "assist", "what do I do", "what
         # now", "remind me") gives a state-aware hint. Accepted *without* the
@@ -1199,7 +1270,7 @@ class AtcBrain:
         # dispatch, because a bare "Control ..." is otherwise answered as a
         # frequency check-in and the real question is lost.
         if re.search(r"\b(help|assist|what do i do|what now|remind me)\b", low):
-            return self._help(callsign, pilot, controller)
+            return self._help(callsign, pilot, controller, track)
 
         # Trainer aid: "<callsign> request vectors [for runway 25]" gives an
         # approach vector ("fly heading X, vectors for runway Y"). Real ATC
@@ -1254,8 +1325,8 @@ class AtcBrain:
         # at this point has no way forward, which is what "man kan fastna på en
         # kanal" describes (debrief 2026-10-22: 4 minutes of Control round
         # trips after the Stingray handoff was already given).
-        if _CHANNEL_REQUEST_RE.search(low) or _HANDOFF_REQUEST_RE.search(low):
-            return self._channel_request(callsign, pilot, controller)
+        if _CHANNEL_REQUEST_RE.search(low):
+            return self._channel_request(callsign, pilot, controller, low)
 
         # Frequency-change acknowledgement ("Colt 1, channel 8, push"): the pilot
         # is switching, so we stay *silent* — a "roger" would only step on the
@@ -1293,6 +1364,8 @@ class AtcBrain:
             reply = self._handle_ground(callsign, pilot, low, track, traffic)
         elif controller == Controller.CONTROL:
             reply = self._handle_control(callsign, pilot, low, track)
+        elif controller == Controller.STINGRAY:
+            reply = self._handle_stingray(callsign, pilot, low, track)
         else:
             reply = self._handle_tower(callsign, pilot, low, track, traffic,
                                        speaker)
@@ -1324,7 +1397,7 @@ class AtcBrain:
             coach = self._readback_coaching(callsign, pilot, low,
                                             pilot.last_clearance or pilot.last_reply,
                                             controller)
-            pilot.phase = Phase.DEPARTURE
+            pilot.phase = Phase.TAKEOFF
             return coach + self._takeoff_clearance(callsign, pilot)
         if readback and pilot.phase in (Phase.CLEARANCE, Phase.TAXI,
                                         Phase.INBOUND):
@@ -1344,27 +1417,103 @@ class AtcBrain:
         return self._say("say_again", callsign, agency=agency)
 
     def _channel_request(self, callsign: str, pilot: PilotState,
-                         controller: Controller) -> str:
+                         controller: Controller, low: str = "") -> str:
         """Answer a pilot who asks to change frequency.
 
-        Which channel is "next" depends on where they are: an airborne
-        departure is sent to Stingray (the handoff the SOP card shows), an
-        arrival is sent to Tower, and a pilot still on Ground to Tower. Naming
-        the channel keeps the radio sequence teachable — which is the point of
-        the trainer — and stops the request looping as "say again".
+        This is a **trainer**: the pilot may ask to move to any agency from any
+        agency, because we do not know what they want to practise. So the reply
+        names the channel for the agency they asked for, and the pilot's phase
+        is set to match where they are going — otherwise the next agency would
+        treat them as if they had never left.
+
+        When no agency is named ("request channel change"), the SOP "next" step
+        for where they are is used: an airborne departure to Stingray, an
+        arrival to Tower, a pilot on Ground to Tower, a pilot on Stingray back
+        to Control.
         """
+        target = self._requested_agency(low)
+        if target is None:
+            target = self._next_agency(pilot, controller)
+        if target == controller:
+            # Asking for the agency they are already on: just acknowledge.
+            return self._say("agency_ack", callsign,
+                             agency=self._agency(controller))
+        self._enter_agency(pilot, target)
+        return self._say("contact_agency", callsign,
+                         agency=self._agency(controller),
+                         target=self._agency(target),
+                         target_channel=self._channel_for(target))
+
+    def _requested_agency(self, low: str) -> Controller | None:
+        """The agency a pilot named in a frequency request, or None.
+
+        "request Control" -> CONTROL, "request Stingray" -> STINGRAY. AWACS
+        synonyms (magic, overlord) map to Stingray, since that is the AWACS
+        position this trainer simulates.
+
+        Only the text *after* the request verb is searched: the opening address
+        names the agency the pilot is already talking to ("Tower, Colt 1,
+        request Control"), and matching that would read the request as "stay
+        where you are".
+        """
+        match = re.search(
+            r"\b(?:request(?:ing)?|ask(?:ing)? for|like|need|want|would like|"
+            r"can i|when can i|permission to)\b(.*)$", low)
+        tail = match.group(1) if match else low
+        if re.search(r"\b(stingray|awacs|magic|overlord)\b", tail):
+            return Controller.STINGRAY
+        if re.search(r"\b(control|centre|center)\b", tail):
+            return Controller.CONTROL
+        if re.search(r"\btower\b", tail):
+            return Controller.TOWER
+        if re.search(r"\bground\b", tail):
+            return Controller.GROUND
+        return None
+
+    def _next_agency(self, pilot: PilotState,
+                     controller: Controller) -> Controller:
+        """The SOP "next" agency when a pilot asks to move without naming one."""
         if controller == Controller.CONTROL:
             if pilot.phase in (Phase.INBOUND, Phase.LANDING):
-                return self._say("contact_tower_from_control", callsign)
+                return Controller.TOWER
             if pilot.phase == Phase.AIRBORNE:
-                return self._say("contact_stingray", callsign)
+                return Controller.STINGRAY
+        if controller == Controller.STINGRAY:
+            return Controller.CONTROL
         if controller == Controller.GROUND and pilot.phase in (
                 Phase.HOLDING, Phase.TAXI):
-            return self._say("contact_tower", callsign)
-        return self._say("control_ack", callsign, agency=self._agency(controller))
+            return Controller.TOWER
+        if controller == Controller.TOWER and pilot.phase in (
+                Phase.LANDING, Phase.TAXI):
+            return Controller.GROUND
+        return controller
+
+    def _enter_agency(self, pilot: PilotState, target: Controller) -> None:
+        """Set the phase to match the agency the pilot is moving to.
+
+        Without this the new agency would treat them as if they had never left
+        (e.g. a pilot who self-moves to Control would not be seen as inbound).
+        """
+        if target == Controller.STINGRAY:
+            pilot.phase = Phase.STINGRAY
+        elif target == Controller.CONTROL:
+            pilot.phase = Phase.INBOUND
+            pilot.cleared_inbound = False
+        elif target == Controller.TOWER:
+            if pilot.phase in (Phase.IDLE, Phase.CLEARANCE, Phase.TAXI):
+                pilot.phase = Phase.HOLDING
+        elif target == Controller.GROUND:
+            if pilot.phase in (Phase.LANDING, Phase.INBOUND):
+                pilot.phase = Phase.TAXI
+
+    def _channel_for(self, controller: Controller) -> str:
+        """The preset channel number for an agency (from airspace.json)."""
+        channels = getattr(self.airfield, "channels", None) or {}
+        return str(channels.get(controller.value, ""))
 
     def _trainer(self, callsign: str, pilot: PilotState, low: str,
-                 controller: Controller) -> str:
+                 controller: Controller,
+                 track: AircraftTrack | None = None) -> str:
         """Handle a "trainer, ..." command (trainer aid, any frequency).
 
         Currently: "trainer, echo on|off" toggles the in-game comms mirror for
@@ -1372,7 +1521,7 @@ class AtcBrain:
         """
         agency = self._agency(controller)
         if re.search(r"\b(help|assist|what do i do|what now|remind me)\b", low):
-            return self._help(callsign, pilot, controller)
+            return self._help(callsign, pilot, controller, track)
         if re.search(r"\becho\b", low):
             if re.search(r"\b(off|stop|disable|no)\b", low):
                 pilot.mirror_logs = False
@@ -1434,7 +1583,7 @@ class AtcBrain:
             Phase.TAXI: Phase.IDLE,
             Phase.HOLDING: Phase.TAXI,
             Phase.LINEUP: Phase.HOLDING,
-            Phase.DEPARTURE: Phase.HOLDING,
+            Phase.TAKEOFF: Phase.HOLDING,
             Phase.AIRBORNE: Phase.AIRBORNE,
             Phase.INBOUND: Phase.AIRBORNE,
             Phase.LANDING: Phase.INBOUND,
@@ -1647,7 +1796,7 @@ class AtcBrain:
                 return self._say("arrival_wrong_call", callsign)
             # Already cleared for takeoff: re-issue the clearance (idempotent)
             # rather than dropping the pilot back to Lineup.
-            if pilot.phase == Phase.DEPARTURE:
+            if pilot.phase == Phase.TAKEOFF:
                 pilot.awaiting_takeoff = False
                 return self._takeoff_clearance(callsign, pilot)
             # Already lined up and waiting: this "ready" call is the natural
@@ -1666,7 +1815,7 @@ class AtcBrain:
                 if not self._lined_up(track):
                     pilot.lineup_readback = True
                     return ""
-                pilot.phase = Phase.DEPARTURE
+                pilot.phase = Phase.TAKEOFF
                 pilot.awaiting_takeoff = False
                 return self._takeoff_clearance(callsign, pilot)
             # Cross-check: a pilot who says "ready for departure" but is not at
@@ -1695,7 +1844,7 @@ class AtcBrain:
                 if not self._lined_up(track):
                     pilot.lineup_readback = True
                     return ""
-                pilot.phase = Phase.DEPARTURE
+                pilot.phase = Phase.TAKEOFF
                 pilot.awaiting_takeoff = False
                 return self._takeoff_clearance(callsign, pilot)
             pilot.phase = Phase.LINEUP
@@ -1812,7 +1961,7 @@ class AtcBrain:
         # check, so a readback containing "turn" is not misread as a landing.
         # Master Arms: after the takeoff clearance readback there is no extra
         # call — the next transmission is the airborne handoff.
-        if pilot.phase == Phase.DEPARTURE and re.search(
+        if pilot.phase == Phase.TAKEOFF and re.search(
                 r"\b(cleared|takeoff|take off|right turn|left turn|turnout)\b",
                 low):
             return ""
@@ -2108,7 +2257,7 @@ class AtcBrain:
             # as an arrival, and the join flow then fought the departure flow
             # (debrief 2026-10-22: this is the check-in that moved the pilot
             # Lineup -> Inbound seconds after takeoff).
-            if pilot.phase in (Phase.LINEUP, Phase.DEPARTURE):
+            if pilot.phase in (Phase.LINEUP, Phase.TAKEOFF):
                 pilot.phase = Phase.AIRBORNE
                 return self._say("control_ack", callsign,
                                  agency=self.control_short)
@@ -2116,6 +2265,119 @@ class AtcBrain:
             return self._say("control_ack", callsign,
                              agency=self.control_short)
         return None
+
+    def _handle_stingray(self, callsign: str, pilot: PilotState, low: str,
+                         track: AircraftTrack | None) -> str | None:
+        """Stingray (AWACS) on the package channel — Master Arms SOP.
+
+        The tactical leg: check in, give a bullseye picture, then RTB. The
+        handoff back to Control re-enters the normal arrival flow, so the
+        inbound dialogs are unchanged. Authentication (RAMROD) is not
+        implemented yet.
+        """
+        # RTB: every way a flight says "I am going home". The reason is never
+        # questioned — a trainer flight may be a strike, a fuel check, or just
+        # a pilot who wants to head back, and all of them get the same "copy,
+        # RTB" and arm the Control handoff.
+        #   Miller Time  ordnance delivered (mission complete)
+        #   Bingo        fuel state to return
+        #   Joker        fuel state to start heading home
+        #   Bugout       leaving the engagement
+        #   Winchester   no ordnance remaining
+        #   RTB / returning to base / recovering  plain English
+        if re.search(r"\b(miller time|bingo|joker|bugout|bug out|winchester|"
+                     r"rtb|returning to (?:base|the field|the boat)|"
+                     r"request(?:ing)?\s+(?:to\s+)?(?:rtb|return)|"
+                     r"recover(?:ing|y))\b", low):
+            pilot.phase = Phase.STINGRAY
+            pilot.rtb_requested = True
+            return self._say("stingray_rtb_copy", callsign)
+
+        # A bullseye picture call ("Bullseye 065 for 40, Angels 15, as fragged").
+        # Verified against the mission's own bullseye when we have it; a call
+        # that is off gets a coaching challenge (never a block — the pilot keeps
+        # flying, exactly like the position cross-check). Repeatable: a pilot
+        # practising bullseye calls can make as many as they like.
+        if re.search(r"\b(bullseye|bull'?s?eye|marking bull)\b", low):
+            # An air-start (or any pilot who never checked in elsewhere) is on
+            # the tactical leg by definition once they talk to Stingray, so the
+            # map shows the right phase without a full departure first.
+            if pilot.phase in (Phase.IDLE, Phase.AIRBORNE):
+                pilot.phase = Phase.STINGRAY
+            return self._bullseye_reply(callsign, pilot, low, track)
+
+        # Handoff back to Control ("request Control", "requesting channel 8",
+        # "request landing", "inbound"). Stingray does not control the field, so
+        # any of these means "I want to come home" — give the Control handoff,
+        # which re-enters the normal arrival flow (the inbound dialogs are
+        # reused). A pilot may ask to move on at any time; the trainer never
+        # makes them wait for the controller to offer it.
+        if re.search(r"\b(control|channel\s*8|channel eight|inbound|"
+                     r"request(?:ing)?\s+(?:to\s+)?(?:land|landing|approach)|"
+                     r"approach)\b", low):
+            pilot.phase = Phase.INBOUND
+            pilot.cleared_inbound = False
+            return self._say("stingray_contact_control", callsign)
+
+        # Package-channel reports that need no answer from AWACS: the flight
+        # pushing off the hold ("Adder1 pushing") and ordnance away ("one
+        # away"). Both are SOP calls on this channel; answering "say again"
+        # would train the pilot to stop making them. Stay silent — they are
+        # reports to the package, not to the controller.
+        if re.search(r"\b(pushing|push(?:ing)? time|one away|two away|"
+                     r"rifle|fox\s*(?:one|two|three)|magnum)\b", low):
+            return ""
+
+        # Bare check-in ("Stingray, Adder11") -> "Adder11, Stingray". An
+        # air-start (or a pilot who never checked in elsewhere) is on the
+        # tactical leg by definition once they talk to Stingray, so the map
+        # shows the right phase without a full departure first.
+        if self._is_bare_checkin(low, "") or re.search(
+                r"\b(stingray|awacs)\b", low):
+            if pilot.phase in (Phase.IDLE, Phase.AIRBORNE):
+                pilot.phase = Phase.STINGRAY
+            return self._say("stingray_ack", callsign)
+
+        return None
+
+    def _bullseye_reply(self, callsign: str, pilot: PilotState, low: str,
+                        track: AircraftTrack | None) -> str:
+        """Acknowledge a bullseye picture call, coaching if it is off.
+
+        The pilot reads bullseye off their HSI, so the check is tolerant
+        (BULLSEYE_TOLERANCE_DEG / _NM) and never blocks: an off call gets the
+        real bearing/range so the pilot can correct, and the flight continues.
+        The stated angels is checked too (a picture call includes the altitude),
+        with the same tolerance. Without a mission bullseye (or a live track) we
+        simply acknowledge.
+        """
+        if self.bullseye is None or track is None:
+            return self._say("stingray_radar_contact", callsign)
+        reported = self._bullseye_call(low)
+        if reported is None:
+            return self._say("stingray_radar_contact", callsign)
+        bearing, distance = bearing_distance(
+            self.bullseye[0], self.bullseye[1], track.lat, track.lon)
+        off_bearing = abs((reported[0] - bearing + 180) % 360 - 180)
+        off_range = abs(reported[1] - distance)
+        # Angels: the call states the altitude in thousands of feet. Only
+        # checked when the pilot actually said it (it is optional in the SOP
+        # call), and only when we have a live altitude.
+        reported_angels = parse_angels(low)
+        actual_angels = track.alt_ft / 1000.0
+        off_angels = (abs(reported_angels - actual_angels)
+                      if reported_angels is not None else 0.0)
+        if (off_bearing <= BULLSEYE_TOLERANCE_DEG
+                and off_range <= BULLSEYE_TOLERANCE_NM
+                and off_angels <= ANGELS_TOLERANCE_FT / 1000.0):
+            return self._say("stingray_radar_contact", callsign)
+        return self._say("stingray_bullseye_challenge", callsign,
+                         bearing=f"{bearing:03.0f}", range=f"{distance:.0f}",
+                         angels=f"{actual_angels:.0f}")
+
+    def _bullseye_call(self, low: str) -> tuple[float, float] | None:
+        """Parse "bullseye 065 for 40" -> (bearing, range_nm), or None."""
+        return parse_bullseye_call(low)
 
     def _inbound_reply(self, callsign: str, pilot: PilotState,
                        track: AircraftTrack | None, low: str = "") -> str:
@@ -2391,7 +2653,7 @@ class AtcBrain:
         runway (a little time to settle after liftoff), then fires once.
         """
         pilot = self._pilot(callsign)
-        if (pilot.phase != Phase.DEPARTURE or pilot.departure_handoff_announced
+        if (pilot.phase != Phase.TAKEOFF or pilot.departure_handoff_announced
                 or track is None or self.airfield is None):
             return None
         if self.airfield.is_over_runway(track.lat, track.lon):
@@ -2454,9 +2716,9 @@ class AtcBrain:
         """Push a climbed departure to Stingray once they reach Angels 15.
 
         Master Arms SOP (kneeboard page 1): after the climb to Angels 15,
-        Control hands the flight to Stingray on channel 3. We do not simulate
-        AWACS, but the handoff still fires so the radio sequence matches the
-        card. Control then stays quiet until the inbound call. Fires once.
+        Control hands the flight to Stingray on channel 3. Stingray is now a
+        real controller (check-in, bullseye picture, RTB); Control stays quiet
+        until the inbound call. Fires once.
         """
         pilot = self._pilot(callsign)
         if (pilot.phase != Phase.AIRBORNE or not pilot.climb_issued
@@ -2523,7 +2785,8 @@ class AtcBrain:
         return None
 
     def _help(self, callsign: str, pilot: PilotState,
-              controller: Controller | None = None) -> str:
+              controller: Controller | None = None,
+              track: AircraftTrack | None = None) -> str:
         """A short, state-aware hint for a pilot who is unsure what to do next.
 
         Triggered by "<callsign> help". The hint depends on the pilot's current
@@ -2532,6 +2795,10 @@ class AtcBrain:
         hint: a departure who checks in with Control is already on Control's
         frequency, so "contact Control on channel 8" would send them in a
         circle (debrief 2026-10-22).
+
+        `track` is the pilot's live position, used by the Stingray hint to state
+        the *actual* bullseye bearing/range — so a pilot can check their numbers
+        before calling them out.
         """
         key = {
             Phase.IDLE: "help_idle",
@@ -2539,8 +2806,9 @@ class AtcBrain:
             Phase.TAXI: "help_taxi",
             Phase.HOLDING: "help_holding",
             Phase.LINEUP: "help_lineup",
-            Phase.DEPARTURE: "help_departure",
+            Phase.TAKEOFF: "help_departure",
             Phase.AIRBORNE: "help_airborne",
+            Phase.STINGRAY: "help_stingray",
             Phase.INBOUND: "help_inbound",
             Phase.LANDING: "help_landing",
         }.get(pilot.phase, "help_idle")
@@ -2548,10 +2816,40 @@ class AtcBrain:
             # Already with Control: the SOP next step is the Stingray push once
             # at Angels 15, or the inbound call when they turn back.
             key = "help_airborne_on_control"
-        hint = self._say(key, callsign, gate=pilot.exit_gate or "Exit East")
+        elif pilot.phase == Phase.IDLE and controller == Controller.STINGRAY:
+            # An air-start on Stingray: the idle hint ("contact Ground for
+            # clearance and taxi") is actively wrong here, so give the tactical
+            # leg instead.
+            key = "help_stingray"
+        fields: dict[str, object] = {"gate": pilot.exit_gate or "Exit East"}
+        if key == "help_stingray":
+            # State the real bullseye so the pilot can check their numbers
+            # before calling them out. Without a bullseye (or a live position)
+            # fall back to the generic example, so the hint never reads
+            # "you are —".
+            bullseye = self._bullseye_hint(track)
+            if bullseye:
+                fields["bullseye"] = bullseye
+            else:
+                key = "help_stingray_nobullseye"
+        hint = self._say(key, callsign, **fields)
         # Always remind the pilot of the escape hatches, so they can never get
         # stuck in a wrong state during training.
         return f"{hint} {self._say('help_escape', callsign)}"
+
+    def _bullseye_hint(self, track: AircraftTrack | None) -> str:
+        """The pilot's current bullseye position, for the help hint.
+
+        "bullseye 065 for 40, angels 15" — the exact call they should make.
+        Empty when the mission has no bullseye or we have no live position, so
+        the hint simply omits it rather than stating a wrong number.
+        """
+        if self.bullseye is None or track is None:
+            return ""
+        bearing, distance = bearing_distance(
+            self.bullseye[0], self.bullseye[1], track.lat, track.lon)
+        return (f"bullseye {bearing:03.0f} for {distance:.0f}, "
+                f"angels {track.alt_ft / 1000.0:.0f}")
 
     def _directions(self, callsign: str, low: str,
                     track: AircraftTrack | None,
@@ -2809,7 +3107,7 @@ class AtcBrain:
         # handoff fires at touchdown (phase becomes Taxi while still rolling
         # out), which otherwise looked like an uncleared incursion. Scoped to
         # Landing/Taxi so it does not persist into a later departure.
-        if pilot.phase in (Phase.HOLDING, Phase.LINEUP, Phase.DEPARTURE,
+        if pilot.phase in (Phase.HOLDING, Phase.LINEUP, Phase.TAKEOFF,
                            Phase.AIRBORNE, Phase.LANDING) or (
                 pilot.cleared_landing
                 and pilot.phase in (Phase.LANDING, Phase.TAXI)):
@@ -2870,7 +3168,7 @@ class AtcBrain:
                 speed_kt=getattr(track, "speed_kt", None)):
             return None
         pilot.lineup_readback = False
-        pilot.phase = Phase.DEPARTURE
+        pilot.phase = Phase.TAKEOFF
         return self._takeoff_clearance(callsign, pilot)
 
     def check_landing_handoff(self, callsign: str, on_runway: bool) -> str | None:

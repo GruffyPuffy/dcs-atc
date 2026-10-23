@@ -244,6 +244,17 @@ class StateClient:
             return None
         return reply["result"]
 
+    def bullseye(self, coalition: int = 2) -> dict | None:
+        """Coalition bullseye (main reference point) from the mission, or None.
+
+        Blue is coalition 2. Returns None when the mission has no bullseye set,
+        so the caller can degrade gracefully instead of inventing a point.
+        """
+        reply = self.exchange("bullseye", coalition=coalition)
+        if not reply.get("ok"):
+            return None
+        return reply["result"]
+
     def message(self, text: str, player: str = "",
                 duration: float = 8.0) -> bool:
         """Post text to the in-game chat/message log. To `player` by name when

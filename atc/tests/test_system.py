@@ -71,7 +71,7 @@ def test_tower_hands_departure_to_control_past_the_runway(airfield, brain):
     sc = _scenario(airfield, brain).at_threshold("25")
     sc.say("Tower, Colt 1, ready for departure", Controller.TOWER)
     sc.say("Line up and wait 25, Colt 1", Controller.TOWER)
-    assert brain.pilots["Colt 1"].phase == Phase.DEPARTURE
+    assert brain.pilots["Colt 1"].phase == Phase.TAKEOFF
     # Still over the runway: no handoff yet (a little time to settle).
     sc.at_runway("25", along_nm=0.5).set_alt(airfield.elevation_ft + 300)
     assert brain.check_departure_handoff("Colt 1", sc._track()) is None
@@ -179,11 +179,35 @@ def test_full_departure_two_ship(airfield, brain):
     assert "line up and wait" in r.lower()
     r = sc.say("Line up and wait 25, Colt 1", Controller.TOWER)
     assert "cleared for takeoff" in r.lower()
-    assert sc.phase() == Phase.DEPARTURE
+    assert sc.phase() == Phase.TAKEOFF
 
     r = sc.say("Tower, Colt 1, airborne", Controller.TOWER)
     assert "contact Control" in r
     assert sc.phase() == Phase.AIRBORNE
+
+    # Control: check in, climb, then the radar handoff to Stingray at Angels 15.
+    # The pilot must be clear of the CTR for the climb (MA: "remain below 1500
+    # ft until clear of the control zone"), so move them out to the exit gate.
+    sc.at_gate("East").set_alt(1500)
+    r = sc.say("Control, Colt 1, at 1500 ft", Controller.CONTROL)
+    assert "climb to Angels 15" in r
+    assert sc.say("Climbing to Angels 15, Colt 1", Controller.CONTROL) == ""
+    sc.set_alt(15000)  # at Angels 15, still clear of the CTR
+    r = brain.check_stingray_handoff("Colt 1", sc._track())
+    assert r and "contact Stingray" in r and "channel 3" in r
+
+    # Stingray: check in, bullseye picture, then RTB and hand back to Control.
+    r = sc.say("Stingray, Colt 1", Controller.STINGRAY)
+    assert r == "Colt 1, Stingray."  # the check-in ack, not "say again"
+    assert sc.phase() == Phase.STINGRAY
+    bearing, distance = sc.true_bullseye()
+    r = sc.say(sc.bullseye_call(bearing, distance), Controller.STINGRAY)
+    assert "radar contact" in r.lower()
+    r = sc.say("Colt 1, bugout", Controller.STINGRAY)
+    assert "RTB" in r
+    r = sc.say("Stingray, Colt 1, request Control", Controller.STINGRAY)
+    assert "contact Control" in r and "channel 8" in r
+    assert sc.phase() == Phase.INBOUND
 
 
 # ---------- Full arrival: inbound -> break -> land -> park ----------
@@ -192,8 +216,24 @@ def test_full_arrival_two_ship(airfield, brain):
     sc = _scenario(airfield, brain)
     sc.say("Ground, Colt 1, two-ship Hornets on Ramp South", Controller.GROUND)
 
+    # Stingray: the tactical leg first — check in, bullseye picture, RTB, then
+    # the handoff back to Control (MA SOP "returning to base").
+    sc.at_bullseye(90, 40).set_alt(15000)
+    r = sc.say("Stingray, Colt 1", Controller.STINGRAY)
+    assert r == "Colt 1, Stingray."  # the check-in ack, not "say again"
+    bearing, distance = sc.true_bullseye()
+    r = sc.say(sc.bullseye_call(bearing, distance), Controller.STINGRAY)
+    assert "radar contact" in r.lower()
+    r = sc.say("Colt 1 Miller Time, requesting RTB", Controller.STINGRAY)
+    assert "RTB" in r
+    r = sc.say("Stingray, Colt 1, request Control", Controller.STINGRAY)
+    assert "contact Control" in r and "channel 8" in r
+    assert sc.phase() == Phase.INBOUND
+
     # Control: inbound, join, readback (descend), then hand to Tower.
-    sc.at_gate("North")
+    # Reset the altitude: the Stingray leg left the fake track at Angels 15, and
+    # the descent step is altitude-aware (high -> step down to 5000 first).
+    sc.at_gate("North").set_alt(1000)
     r = sc.say("Kutaisi Control, Colt 1, inbound 35 miles north at Angels 12",
                Controller.CONTROL)
     assert "join via Entry East" in r
@@ -481,7 +521,7 @@ def test_lineup_never_traps_the_pilot(airfield, brain):
     # repeating "ready for departure" must still yield a takeoff clearance
     r = sc.say("Tower, Colt 1, ready for departure", Controller.TOWER)
     assert "cleared for takeoff" in r.lower()
-    assert sc.phase() == Phase.DEPARTURE
+    assert sc.phase() == Phase.TAKEOFF
 
 
 def test_takeoff_waits_until_actually_lined_up(airfield, brain):
@@ -506,7 +546,7 @@ def test_takeoff_waits_until_actually_lined_up(airfield, brain):
     sc.at_threshold("25")
     call = brain.check_lineup("Colt 1", sc._track())
     assert call and "cleared for takeoff" in call.lower()
-    assert sc.phase() == Phase.DEPARTURE
+    assert sc.phase() == Phase.TAKEOFF
     # Fires once.
     assert brain.check_lineup("Colt 1", sc._track()) is None
 
@@ -946,7 +986,7 @@ def test_full_lifecycle_all_pages(airfield, brain):
     assert sc.phase() == Phase.LINEUP
     r = sc.say("Line up and wait 25, Colt 1", Controller.TOWER)
     assert "cleared for takeoff" in r.lower()
-    assert sc.phase() == Phase.DEPARTURE
+    assert sc.phase() == Phase.TAKEOFF
 
     r = sc.say("Tower, Colt 1, airborne", Controller.TOWER)
     assert "contact Control" in r
@@ -1116,10 +1156,10 @@ def test_repeated_ready_for_departure_after_takeoff(airfield, brain):
     sc = _scenario(airfield, brain).at_threshold("25")
     sc.say("Tower, Colt 1, ready for departure", Controller.TOWER)
     sc.say("Line up and wait 25, Colt 1", Controller.TOWER)
-    assert sc.phase() == Phase.DEPARTURE
+    assert sc.phase() == Phase.TAKEOFF
     r = sc.say("Tower, Colt 1, ready for departure", Controller.TOWER)
     assert r is not None  # answered, not silent
-    assert sc.phase() == Phase.DEPARTURE  # still cleared
+    assert sc.phase() == Phase.TAKEOFF  # still cleared
 
 
 def test_checking_in_acknowledged(airfield, brain):

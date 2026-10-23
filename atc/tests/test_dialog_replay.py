@@ -140,12 +140,12 @@ def test_replay_takeoff_readback_does_not_loop(springfield):
     sc.say("Tower, Springfield 1-1, at runway 33, ready for departure",
            Controller.TOWER)
     sc.say("Line up and wait 33, Springfield 1-1", Controller.TOWER)
-    assert sc.phase() == Phase.DEPARTURE
+    assert sc.phase() == Phase.TAKEOFF
 
     r = sc.say("Right turn out, cleared for takeoff, 33, Springfield 1-1",
                Controller.TOWER)
     assert "say again" not in (r or "").lower()
-    assert sc.phase() == Phase.DEPARTURE
+    assert sc.phase() == Phase.TAKEOFF
 
 
 # ---- Multiplayer: a lead's landing clearance covers the wingmen (MA SOP) ----

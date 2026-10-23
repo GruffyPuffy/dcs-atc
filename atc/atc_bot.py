@@ -169,6 +169,8 @@ def main() -> None:
                         help="Ground MHz, AM (default: from airspace.json; 0 disables)")
     parser.add_argument("--control-freq", type=float, default=None,
                         help="Control MHz, AM (default: from airspace.json; 0 disables)")
+    parser.add_argument("--stingray-freq", type=float, default=None,
+                        help="Stingray/AWACS MHz, AM (default: from airspace.json; 0 disables)")
     parser.add_argument("--atis-interval", type=float, default=60.0,
                         help="seconds between ATIS broadcasts (0 disables)")
     parser.add_argument("--name", default=None,
@@ -189,6 +191,8 @@ def main() -> None:
                         help="Piper voice for Ground (default: en_US-ryan-medium)")
     parser.add_argument("--control-voice", default="en_US-lessac-medium",
                         help="Piper voice for Control (default: en_US-lessac-medium)")
+    parser.add_argument("--stingray-voice", default="en_US-joe-medium",
+                        help="Piper voice for Stingray/AWACS (default: en_US-joe-medium)")
     parser.add_argument("--atis-voice", default="en_GB-alan-medium",
                         help="Piper voice for ATIS (default: en_GB-alan-medium)")
     parser.add_argument("--log", default="/tmp/atc_log.txt")
@@ -252,17 +256,21 @@ def main() -> None:
     atis_mhz = args.atis_freq if args.atis_freq is not None else airfield.atis_frequency_mhz
     ground_mhz = args.ground_freq if args.ground_freq is not None else airfield.ground_frequency_mhz
     control_mhz = args.control_freq if args.control_freq is not None else airfield.control_frequency_mhz
+    stingray_mhz = args.stingray_freq if args.stingray_freq is not None else airfield.stingray_frequency_mhz
 
     freq_hz = round(freq_mhz * 1_000_000)
     atis_hz = round(atis_mhz * 1_000_000) if atis_mhz else None
     ground_hz = round(ground_mhz * 1_000_000) if ground_mhz else None
     control_hz = round(control_mhz * 1_000_000) if control_mhz else None
+    stingray_hz = round(stingray_mhz * 1_000_000) if stingray_mhz else None
     # frequency (Hz) -> controller role, for routing incoming transmissions
     controller_by_freq = {freq_hz: Controller.TOWER}
     if ground_hz:
         controller_by_freq[ground_hz] = Controller.GROUND
     if control_hz:
         controller_by_freq[control_hz] = Controller.CONTROL
+    if stingray_hz:
+        controller_by_freq[stingray_hz] = Controller.STINGRAY
     log_path = Path(args.log)
     audio_dir = Path(args.audio_dir)
     save_audio = args.save_audio  # capture rx/tx WAVs for debugging (opt-in)
@@ -281,6 +289,7 @@ def main() -> None:
         Controller.TOWER: args.voice,
         Controller.GROUND: args.ground_voice,
         Controller.CONTROL: args.control_voice,
+        Controller.STINGRAY: args.stingray_voice,
     }
     voices: dict[str, PiperVoice] = {}
     for voice_name in dict.fromkeys([*voice_names.values(), args.atis_voice]):
@@ -305,6 +314,7 @@ def main() -> None:
     brain = AtcBrain(tower=airfield.tower, runway=airfield.active_runway,
                      phraseology=Phraseology.load(), callsigns=callsigns,
                      ground=airfield.ground, control=airfield.control,
+                     stingray=airfield.stingray,
                      gates=list(airfield.gates), gate_locator=airfield.nearest_gate,
                      airfield=airfield)
     tracker = CtrTracker(airfield)
@@ -1052,12 +1062,15 @@ def main() -> None:
         freqs.append(ground_hz)
     if control_hz:
         freqs.append(control_hz)
+    if stingray_hz:
+        freqs.append(stingray_hz)
     if atis_hz:
         freqs.append(atis_hz)
     clients: dict[Controller, SrsClient] = {}
     for controller, _hz in [(Controller.TOWER, freq_hz),
                             (Controller.GROUND, ground_hz),
-                            (Controller.CONTROL, control_hz)]:
+                            (Controller.CONTROL, control_hz),
+                            (Controller.STINGRAY, stingray_hz)]:
         if _hz is None and controller is not Controller.TOWER:
             continue
         clients[controller] = SrsClient(
@@ -1089,6 +1102,20 @@ def main() -> None:
         if initial is not None:
             log(f"Active runway {initial.active_runway} (wind "
                 f"{initial.wind_dir:03.0f}/{initial.wind_speed:.0f} m/s)")
+        # Coalition bullseye from the mission (blue). Fetched once: it is a
+        # mission-editor constant, not weather. Without it, a bullseye call is
+        # acknowledged but not position-checked.
+        try:
+            bullseye = state.bullseye()
+        except (OSError, RuntimeError) as error:
+            bullseye = None
+            log(f"bullseye unavailable: {error}")
+        if bullseye:
+            brain.set_bullseye(bullseye["lat"], bullseye["lon"])
+            log(f"Bullseye (blue): {bullseye['lat']:.4f}, {bullseye['lon']:.4f}")
+        else:
+            log("Bullseye (blue): not set in mission — bullseye calls are "
+                "acknowledged without a position check")
         threading.Thread(target=monitor_ctr, daemon=True).start()
         if atis_hz and args.atis_interval > 0:
             threading.Thread(target=atis_loop, daemon=True).start()

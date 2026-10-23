@@ -155,10 +155,16 @@ step on the next controller's first call. Spoken channel numbers and the
 would reject nearly every real readback.
 
 A pilot **requesting** a frequency change instead ("request channel change",
-"request Stingray") *is* answered, with the channel appropriate to where they
-are — an airborne departure is sent to Stingray, an arrival to Tower. A request
-is never met with silence or "say again", so a pilot can always move on rather
-than being stuck on one channel.
+"request Stingray") *is* answered. This is a **trainer**, so a pilot may ask to
+move to **any agency from any agency** — we do not know what they want to
+practise. Naming an agency ("request Control", "request Tower", "request
+Ground", "request Stingray") sends them to that agency's channel and sets their
+phase to match, so the new agency does not treat them as if they had never left.
+A request naming no agency uses the SOP "next" step for where they are (an
+airborne departure to Stingray, an arrival to Tower, a pilot on Ground to Tower,
+a pilot on Stingray back to Control). A request is never met with silence or
+"say again", so a pilot can always move on rather than being stuck on one
+channel.
 
 > If the state bridge is unavailable, the bot falls back to a built-in list of
 > common flight names. Tune the confusion rules in `atc/phonetics.py`
@@ -184,7 +190,7 @@ than being stuck on one channel.
 | "Tower, Colt 1, ready for departure" (**while an arrival**) | **wrong call** | "Colt 1, Tower, negative, report runway in sight for landing." (never clears a takeoff for a pilot who is inbound/landing) |
 | "Line up and wait 25, Colt 1" | **readback** | *(silent)* — then, once the aircraft is actually **lined up** (at the threshold, pointing down the runway, stationary), the monitor issues "cleared for takeoff runway 25" unprompted. The clearance does **not** follow the readback alone: the pilot has only acknowledged the instruction, they may still be taxiing on. (A right turnout is spoken, a left turnout is the default and is not, and a straight-out departure gets "fly runway heading".) |
 | "Control, Colt 1, at 1500 ft" | **departure check-in** | "Colt 1, Control, radar contact, climb to Angels 15." |
-| "Climbing to Angels 15, Colt 1" | **climb readback** | *(silent)* — then, once at Angels 15, "Colt 1, Control, contact Stingray on channel 3." (AWACS is not simulated) |
+| "Climbing to Angels 15, Colt 1" | **climb readback** | *(silent)* — then, once at Angels 15, "Colt 1, Control, contact Stingray on channel 3." (Stingray is a real controller — see §11) |
 | "Kutaisi Control, Colt 1, inbound 35 miles north at Angels 12" | **inbound** | "Colt 1, Control, radar contact, turn right heading 150 to join via Entry East." (heading **and turn** computed from the live position; a pilot already pointing at the gate gets "fly heading 150" instead; entry is the best/straight-in gate for runway 25) |
 | "150 to join via Entry East, Colt 1" | **readback** | "Colt 1, Control, descend and maintain 5000 feet." (far out) / "…descend to 1500 feet." (within 15 NM of the entry) — the descent is **stepped by distance** |
 | "Descend to 1500 feet, Colt 1" | **readback** | *(silent if still high)* — then, once at 1500 ft, "Colt 1, Control, contact Tower on channel 7." unprompted. Already at 1500 on the readback → handoff immediately. |
@@ -200,7 +206,7 @@ than being stuck on one channel.
 | "Colt 1, radio check" | **radio check** | "Colt 1, Tower, loud and clear." |
 | "Colt 1, help" / "Control, Colt 1, help" / "help" | **help** | a short, state-aware hint (see §3a); the `trainer,` prefix is optional |
 | "Colt 1, channel seven, push" / "…pushing channel three" | **frequency-change ack** | *(silent — the pilot is switching; spoken numbers and "pushing/going to" are accepted, not just "channel 7")* |
-| "Control, Colt 1, request Stingray" / "…request channel change" | **frequency-change request** | "Colt 1, Control, contact Stingray on channel 3." (the channel depends on where the pilot is: an airborne departure gets Stingray, an arrival gets Tower — so a pilot who asks can never be stranded) |
+| "Control, Colt 1, request Stingray" / "…request channel change" | **frequency-change request** | "Colt 1, Control, contact Stingray on channel 3." (any agency to any agency; naming none uses the SOP next step — so a pilot who asks can never be stranded) |
 | "Control, Colt 1, request landing" | **landing request** | "Colt 1, Control, contact Tower on channel 7." (same as an "on final" call — it is a request to be handed over, not a clearance) |
 
 Intent matching is order-sensitive: the first matching rule wins. Some rules
@@ -252,8 +258,8 @@ Because this is a *trainer*, a pilot who is unsure what to do can call
 "Control, Colt 1, help" and even a bare "help" work. "assist", "what do I do",
 "what now" and "remind me" are accepted synonyms. The bot replies with a short
 hint for the pilot's **current phase**, so it always tells them the *next* call
-to make. It works on **every controller frequency** (Ground, Tower, Control) and
-in **every phase** — you never have to be on the "right" channel to ask for
+to make. It works on **every controller frequency** (Ground, Tower, Control, Stingray)
+and in **every phase** — you never have to be on the "right" channel to ask for
 help, and a bare "help" is attributed to the only online pilot.
 
 Every hint is prefixed with a clear marker — **"Apollo suggests:"** — so it is
@@ -272,6 +278,7 @@ follows.) The marker is the `help_prefix` variable in `phraseology.json`
 | Departure | "you are cleared for takeoff runway 25. After departure Exit West, 1500 ft or below, then contact Control on channel 8." |
 | Airborne (**on Tower**) | "contact Control on channel 8 and report your position and intentions." |
 | Airborne (**already on Control**) | "report inbound when you turn back, or push Stingray on channel 3 once you are at Angels 15." — the hint is controller-aware, so it never tells a pilot who is *already* on Control to "contact Control" |
+| Stingray (**or an air-start on Stingray**) | "you are with Stingray. Give a bullseye picture — **you are bullseye 008 for 33, angels 15** — then \"as fragged\". To head home, call \"bugout\" (or bingo / Miller Time / requesting RTB) — the reason is never questioned — then request Control on channel 8." — the hint states the pilot's **actual** bullseye position (computed from the mission bullseye and their live track), so they can check their numbers before calling them out. Without a bullseye or a live position it falls back to the generic example. |
 | Inbound | "report entering the control zone, then report runway in sight." |
 | Landing | "runway 25 is active. Report on final for landing clearance." |
 
@@ -620,7 +627,7 @@ being asked. Each fires **once per event** and re-arms when the condition clears
 | **Runway incursion** | On the runway without a takeoff/landing clearance | "…you are on the runway without clearance, vacate immediately." |
 | **Departure handoff** | A departure is past the runway (Tower phase) | "…contact Control on channel 8." (Tower initiates, unprompted — the pilot need not report "airborne") |
 | **Departure climb** | A departure that checked in with Control while still inside the CTR has now left the zone | "…radar contact, climb to Angels 15." (Control watches on radar; no report needed) |
-| **Stingray handoff** | A departure that has been climbed is now at Angels 15 | "…contact Stingray on channel 3." (AWACS is not simulated; the SOP call still fires on Control) |
+| **Stingray handoff** | A departure that has been climbed is now at Angels 15 | "…contact Stingray on channel 3." (Stingray is a real controller — see §11) |
 
 The altitude-bust check uses a **horizontal-only** containment test
 (`ControlZone.contains_horizontal`) so an aircraft inside the CTR footprint but
@@ -686,6 +693,8 @@ back "cleared to land" — no "roger".
 - No IFR clearances, holds, or instrument approaches.
 - No taxi route from live airfield data (routes are configured per airfield, see §9).
 - No parking-spot assignment (Ground clears to a named ramp, not a specific spot).
+- No RAMROD authentication on Stingray (the SOP challenge/response needs a
+  prebriefed key — a mission-design decision, not a code one).
 
 ---
 
@@ -836,20 +845,24 @@ map chatter on the **first broadcast** and whenever the **information letter
 changes** — otherwise the log would be flooded with identical ATIS lines. (The
 audio still plays every interval; only the logging is throttled.)
 
-## 11. Controllers (Ground / Tower / Control)
+## 11. Controllers (Ground / Tower / Control / Stingray)
 
-The bot answers on **three frequencies**, each mapped to a controller role. The
+The bot answers on **four frequencies**, each mapped to a controller role. The
 frequency a transmission arrives on selects the role, so the same callsign can
-talk to Ground, then Tower, then Control without any manual switching.
+talk to Ground, then Tower, then Control, then Stingray without any manual
+switching.
 
 | Controller | Frequency (Kutaisi) | Handles |
 |------------|--------------------|---------|
 | **Ground** | 250.000 MHz (`ground_frequency_mhz`) | Clearance delivery, taxi, hold-short |
 | **Tower** | 270.000 MHz (`frequency_mhz`) | Line-up, takeoff, overhead break, landing |
 | **Control** | 257.000 MHz (`control_frequency_mhz`) | CTR entry, inbound routing via entry point |
+| **Stingray** | 265.000 MHz (`stingray_frequency_mhz`) | AWACS: check-in, bullseye picture, RTB, handoff back to Control |
 
 Frequencies and controller names come from `airspace.json`; CLI flags
-`--ground-freq` / `--control-freq` override them (`0` disables a role).
+`--ground-freq` / `--control-freq` / `--stingray-freq` override them (`0`
+disables a role). Stingray is the Master Arms **package channel** (Ch 3,
+Tactical 265.00) — the SOP's "contact Stingray on channel 3".
 
 ### Ground
 
@@ -982,12 +995,66 @@ never broadcast their arrival; pilots call them). Disable it with
   is a request to be passed on. Before, it was met with "say again", which left
   the pilot stuck on Control.
 - A fighter-to-fighter **picture call** ("marking bull", "077 for 41") is
-  acknowledged with "roger" rather than "say again". AWACS is not simulated, but
-  rejecting the call would train the pilot to stop making it.
+  acknowledged with "roger" rather than "say again". Stingray is a real
+  controller now (see below), but a picture call on Control is still just
+  acknowledged.
 - A pilot **requesting** a channel ("request channel change", "request
   Stingray") is answered with the appropriate channel — Stingray for an airborne
   departure, Tower for an arrival. A frequency request is never answered with
   silence or "say again".
+
+### Stingray (AWACS)
+
+The tactical leg, from Master Arms SOP (kneeboard page 3). Control hands the
+climbed departure over (*"contact Stingray on channel 3"*); Stingray then runs
+the package channel:
+
+- **Check-in**: *"Stingray, Adder11"* → *"Adder11, Stingray"*.
+- **Bullseye picture**: *"Stingray, Adder11, bullseye 065 for 40, Angels 15, as
+  fragged"* → *"Adder11, Stingray, radar contact"*. The call is **verified
+  against the mission's own bullseye** (read from DCS via the bridge, blue
+  coalition) when one is set. Bearing, range **and angels** are all checked. A
+  call that is clearly off gets a coaching challenge — *"negative. I show you
+  bullseye 072 for 38, angels 15. Confirm your position."* — and the flight
+  continues (never a block, same rule as the position cross-check). Tolerance is
+  ±10° / ±3 NM / ±1 angel, because the pilot reads bullseye off their HSI and
+  STT mangles numbers. Angels is optional in the call (the SOP includes it, but
+  a bearing/range report alone is valid). Without a mission bullseye the call is
+  acknowledged without a position check.
+
+  **A challenge never traps the pilot.** They can ignore it and ask to move on
+  ("request Control", "bugout") — which is exactly what a trainee does — and the
+  request is answered normally. The same holds for the position cross-check on
+  Control and Tower: a challenge is coaching, never a gate.
+- **RTB**: *"Adder1 Miller Time, requesting RTB"* → *"copy, RTB"*. Every way a
+  flight says "I am going home" is accepted, and **the reason is never
+  questioned** — a trainer flight may be a strike, a fuel check, or just a pilot
+  who wants to head back. Accepted: `Miller Time` (ordnance delivered), `Bingo`
+  (fuel to return), `Joker` (fuel to head home), `Bugout` (leaving the
+  engagement), `Winchester` (no ordnance), plus plain `RTB` / `requesting RTB` /
+  `returning to base` / `recovering`.
+- **Handoff back**: *"request Control"* → *"contact Kutaisi Control on channel
+  8"*, which re-enters the normal Control arrival flow, so the inbound dialogs
+  are unchanged.
+
+**Not implemented yet:** RAMROD authentication (the two-letter challenge with
+the in-between answer). The SOP has it, but it needs a prebriefed key, which is
+a mission-design decision.
+
+The bullseye is drawn on the live map and the viewer as a small blue
+concentric-ring target, so a bullseye call can be checked by eye. It is saved
+with the debrief, so a replay shows it too.
+
+**Debug overlay.** Every bullseye picture call is also drawn: an amber arrow
+from the bullseye along the *reported* bearing/range, and a magenta ring around
+the aircraft's *actual* position at the tolerance radius. If the arrow tip lands
+inside the ring, the reported position was good enough — readable at a glance
+from the trail, without re-running the check.
+
+**Practising.** A pilot can fly around and make as many bullseye calls as they
+like; each is checked on its own merits. An **air-start** can check in with
+Stingray directly (no full departure needed), which is the quickest way to
+practise the tactical leg.
 
 ### Handoffs
 
@@ -1033,13 +1100,14 @@ transmit queue are serialised with a separate lock.
 ### Voices
 
 Each controller speaks with a **different Piper voice**, so Tower, Ground,
-Control and ATIS sound like different people:
+Control, Stingray and ATIS sound like different people:
 
 | Controller | Default voice | Flag |
 |------------|---------------|------|
 | Tower | `en_US-amy-medium` | `--voice` |
 | Ground | `en_US-ryan-medium` | `--ground-voice` |
 | Control | `en_US-lessac-medium` | `--control-voice` |
+| Stingray | `en_US-joe-medium` | `--stingray-voice` |
 | ATIS | `en_GB-alan-medium` | `--atis-voice` |
 
 Voices live in `atc/voices/` and are fetched with
@@ -1071,8 +1139,8 @@ and the bot's reply. Frequencies (AM): **ATIS 270.500**, **Ground 250.000**,
 | 12 | Control | "Climbing to Angels 15, Colt 1." | *(silent)* — then, once at Angels 15, "Colt 1, Control, contact Stingray on channel 3." |
 
 You are now clear of the CTR — the departure is complete. (Steps 2–7 are the
-Ground phase; 8–10 Tower; 11–12 Control. Stingray/AWACS is not simulated;
-stay on Control until you call inbound.)
+Ground phase; 8–10 Tower; 11–12 Control; 13+ Stingray (AWACS), where you check
+in, give a bullseye picture, and later request RTB.)
 
 ### Arrival
 

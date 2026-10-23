@@ -33,9 +33,15 @@ def callsigns():
 
 @pytest.fixture
 def brain(airfield, callsigns):
-    return AtcBrain(
+    b = AtcBrain(
         tower=airfield.tower, runway=airfield.active_runway,
         phraseology=Phraseology.load(), callsigns=callsigns,
         ground=airfield.ground, control=airfield.control,
+        stingray=airfield.stingray,
         gates=list(airfield.gates), gate_locator=airfield.nearest_gate,
         airfield=airfield)
+    # A fixed bullseye, so bullseye-call tests are deterministic (the live one
+    # comes from the DCS mission via the bridge). Tests that need "no bullseye"
+    # clear it explicitly.
+    b.set_bullseye(42.05, 42.40)
+    return b

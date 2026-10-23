@@ -9,9 +9,10 @@ channel plan from https://wiki.masterarms.se/index.php/Comms).
 | --- | --- |
 | `01-start-takeoff.jpg` | Ground (Ch 6) + Tower (Ch 7): check-in, ATIS, clearance, taxi, line-up, takeoff, handoff to Control |
 | `02-rtb-landing.jpg` | Control (Ch 8) + Tower (Ch 7) + Ground (Ch 6): inbound, join, descent, entry, break, landing, taxi to parking |
-| `03-airborne.jpg` | AWACS / package (not flown in the sim): check-in, push, attack, RTB handoff |
+| `03-airborne.jpg` | AWACS / Stingray (Ch 3): check-in, bullseye picture, RTB, handoff back to Control |
 | `04-light-path.jpg` | **Single-ship light path**: skip Ground (straight to Tower) and the overhead break (report "on final"); Tower → Control → land |
 | `05-comms.jpg` | **Comms board**: the Master Arms UHF channel plan (Ch 1–25), with the channels this trainer uses highlighted |
+| `06-brevity.jpg` | **Brevity**: the Master Arms radio words used on the ATC and package channels |
 
 Page 4 is a **shortened trainer path**, not a wiki transcript: it uses the ATC
 bot's actual replies to show the fewest calls that get a single-ship airborne and

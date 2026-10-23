@@ -197,6 +197,18 @@ elseif op == 'tower' then
         end
     end
     return envelope(false, 'NO_AIRBASE')
+elseif op == 'bullseye' then
+    -- Coalition bullseye ("main reference point") as set in the mission editor.
+    -- Blue is coalition 2 (the same side the airbases are read from). The pilot
+    -- reads bullseye off their HSI, so the trainer must use the *mission's*
+    -- point — a made-up one would be unverifiable. Returns NO_BULLSEYE when the
+    -- mission has none set (getMainRefPoint then gives the origin).
+    local coa = tonumber(req.coalition) or 2
+    local ok, p = pcall(coalition.getMainRefPoint, coa)
+    if not ok or type(p) ~= 'table' then return envelope(false, 'NO_BULLSEYE') end
+    if p.x == 0 and p.z == 0 then return envelope(false, 'NO_BULLSEYE') end
+    local lat, lon, alt = coord.LOtoLL(p)
+    return envelope(true, { coalition = coa, lat = lat, lon = lon, alt = alt })
 elseif op == 'weather' then
     local w = env.mission.weather or {}
     local wind = w.wind or {}

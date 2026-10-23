@@ -46,3 +46,27 @@ def test_tower_returns_none_on_error(monkeypatch):
     monkeypatch.setattr(client, "exchange",
                         lambda op, **fields: {"ok": False, "error": "NO_AIRBASE"})
     assert client.tower("Kutaisi") is None
+
+
+def test_bullseye_returns_point(monkeypatch):
+    client = StateClient()
+    seen = {}
+
+    def fake_exchange(op, **fields):
+        seen["op"] = op
+        seen.update(fields)
+        return {"ok": True, "result": {"coalition": 2, "lat": 42.1, "lon": 42.5}}
+
+    monkeypatch.setattr(client, "exchange", fake_exchange)
+    point = client.bullseye()
+    assert point["lat"] == 42.1 and point["lon"] == 42.5
+    assert seen["op"] == "bullseye"
+    assert seen["coalition"] == 2  # blue
+
+
+def test_bullseye_returns_none_when_unset(monkeypatch):
+    # A mission with no bullseye must degrade to None, never a made-up point.
+    client = StateClient()
+    monkeypatch.setattr(client, "exchange",
+                        lambda op, **fields: {"ok": False, "error": "NO_BULLSEYE"})
+    assert client.bullseye() is None

@@ -47,6 +47,22 @@ def _runway_point(airfield, runway: str, along_nm: float,
     return lat, lon
 
 
+def _bearing_range_point(lat: float, lon: float, bearing: float,
+                         range_nm: float) -> tuple[float, float]:
+    """A lat/lon at `bearing`/`range_nm` from a reference point.
+
+    The inverse of `bearing_distance`, so a position built from a bullseye
+    bearing/range reads back as that same bearing/range.
+    """
+    rad = math.radians(bearing)
+    north_m = range_nm * M_PER_NM * math.cos(rad)
+    east_m = range_nm * M_PER_NM * math.sin(rad)
+    out_lat = lat + math.degrees(north_m / EARTH_RADIUS_M)
+    out_lon = lon + math.degrees(
+        east_m / (EARTH_RADIUS_M * math.cos(math.radians(lat))))
+    return out_lat, out_lon
+
+
 class Unit:
     """A fake live unit (player or AI) for traffic / occupancy checks."""
 
@@ -125,6 +141,34 @@ class Scenario:
         self.lat, self.lon = _runway_point(self.airfield, runway,
                                            along_nm, across_nm)
         return self
+
+    def at_bullseye(self, bearing: float, range_nm: float) -> "Scenario":
+        """Place the pilot at a bullseye-relative offset.
+
+        `bearing`/`range_nm` are from the mission bullseye, exactly as a pilot
+        would read them off the HSI — so a bullseye call built from these
+        values is a *correct* call. Requires the brain to have a bullseye set
+        (`brain.set_bullseye`).
+        """
+        blat, blon = self.brain.bullseye
+        self.lat, self.lon = _bearing_range_point(blat, blon, bearing, range_nm)
+        return self
+
+    def bullseye_call(self, bearing: float, range_nm: float) -> str:
+        """A bullseye picture call for the pilot's current position.
+
+        Reads the true bearing/range from the mission bullseye, so the call is
+        correct by construction (use `at_bullseye` first, or pass explicit
+        values to make a deliberately wrong call).
+        """
+        return (f"Stingray, {self.callsign}, bullseye {bearing:03.0f} for "
+                f"{range_nm:.0f}, Angels 15, as fragged")
+
+    def true_bullseye(self) -> tuple[float, float]:
+        """The true (bearing, range) from the mission bullseye to the pilot."""
+        from airspace import bearing_distance
+        blat, blon = self.brain.bullseye
+        return bearing_distance(blat, blon, self.lat, self.lon)
 
     # ---- traffic helpers ----
 

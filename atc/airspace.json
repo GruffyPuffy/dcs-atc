@@ -37,6 +37,8 @@
       "ground_frequency_mhz": 250.0,
       "control": "Kutaisi Control",
       "control_frequency_mhz": 257.0,
+      "stingray": "Stingray",
+      "stingray_frequency_mhz": 265.0,
       "elevation_ft": 148,
       "tower_pos": [
         42.1797,
@@ -173,6 +175,8 @@
       "ground_frequency_mhz": 250.0,
       "control": "Gudauta Control",
       "control_frequency_mhz": 257.0,
+      "stingray": "Stingray",
+      "stingray_frequency_mhz": 265.0,
       "elevation_ft": 69,
       "active_runway": "15",
       "default_runway": "33",

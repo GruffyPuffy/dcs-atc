@@ -33,6 +33,7 @@ async function loadDebrief(name) {
     drawOverlay(data.airfield);
     drawAirspace(data.airfield);
     drawAircraft(data.aircraft);
+    drawBullseyeCalls(data.aircraft, data.airfield);
     drawTable(data.aircraft);
     drawChatter(data.chatter || [], data.airfield.agencies || []);
     const status = document.getElementById('status');

@@ -143,6 +143,10 @@ class Airfield:
     ground_frequency_mhz: float = 0.0
     control: str = ""
     control_frequency_mhz: float = 0.0
+    # AWACS / tactical agency (Master Arms "Stingray" on the package channel).
+    # Optional: an airfield without it simply has no Stingray controller.
+    stingray: str = ""
+    stingray_frequency_mhz: float = 0.0
     runways: dict[str, tuple[float, float]] = field(default_factory=dict)
     gates: dict[str, tuple[float, float]] = field(default_factory=dict)
     # Taxi routes to the runway, per runway and per starting ramp:
@@ -920,6 +924,8 @@ def _build_airfield(name: str, spec: dict, defaults: dict,
         ground_frequency_mhz=float(spec.get("ground_frequency_mhz", 0.0)),
         control=spec.get("control", f"{name} Control"),
         control_frequency_mhz=float(spec.get("control_frequency_mhz", 0.0)),
+        stingray=spec.get("stingray", "Stingray"),
+        stingray_frequency_mhz=float(spec.get("stingray_frequency_mhz", 0.0)),
         runways=runways,
         gates=gates,
         taxi_routes=taxi_routes,
