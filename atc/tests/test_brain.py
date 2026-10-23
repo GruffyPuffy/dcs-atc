@@ -3227,3 +3227,84 @@ def test_pilot_can_continue_after_authentication_attempt(brain):
     reply = brain.handle("Stingray, Colt 1", controller=Controller.STINGRAY)
     assert reply and "Stingray" in reply
     assert "say again" not in reply.lower()
+
+
+# --- Robustness: never a false ack, never a bare "say again" -----------------
+
+def test_stingray_does_not_false_ack_an_unknown_call(brain):
+    # The old catch-all acked ANY call containing "stingray"/"awacs", so an
+    # unrecognised call got a false "Colt 1, Stingray." ack. Only a genuine
+    # bare check-in may be acked; a call with content must be handled (or fall
+    # through), never acked as if it were a check-in.
+    _stingray(brain)
+    reply = brain.handle("Stingray, Colt 1, request weather",
+                         controller=Controller.STINGRAY)
+    assert reply != "Colt 1, Stingray."
+    assert "say again" in reply.lower()
+
+
+def test_stingray_bare_checkin_still_acked(brain):
+    _stingray(brain)
+    reply = brain.handle("Stingray, Colt 1", controller=Controller.STINGRAY)
+    assert reply == "Colt 1, Stingray."
+
+
+def test_request_vector_to_bullseye_is_not_an_approach_vector(brain, airfield):
+    # "request vector to bullseye" is a picture request, not an approach
+    # vector: it must not be answered with a runway heading. With a track
+    # present the vector aid WOULD answer, so this proves the exclusion.
+    south = _track(airfield, airfield.ctr.center_lat - 0.3,
+                   airfield.ctr.center_lon)
+    _airborne(brain, callsign="Colt 1", phase=Phase.AIRBORNE)
+    reply = brain.handle("Control, Colt 1, request vector to bullseye",
+                         track=south, controller=Controller.CONTROL)
+    assert "fly heading" not in reply.lower()
+    assert "vectors for runway" not in reply.lower()
+
+
+def test_capability_calls_answer_not_implemented_on_every_frequency(brain):
+    # PICTURE / DECLARE / BOGEY DOPE / SNAP are C2 (AWACS) functions we do not
+    # simulate. On every frequency they must get an honest ATC-style reply —
+    # never a false ack, never a bare "say again".
+    for controller in Controller:
+        for text in ("Colt 1, picture", "Colt 1, declare",
+                     "Colt 1, bogey dope", "Colt 1, snap"):
+            _airborne(brain, callsign="Colt 1", phase=Phase.AIRBORNE)
+            reply = brain.handle(text, controller=controller)
+            assert reply, (controller, text)
+            assert "say again" not in reply.lower(), (controller, text, reply)
+            assert "not implemented" in reply.lower(), (controller, text, reply)
+
+
+def test_emergency_never_gets_say_again_on_every_frequency(brain):
+    # A pilot who declares an emergency must never be told "say again" — that
+    # reads as "you said it wrong". Acknowledge in ATC style on every frequency.
+    for controller in Controller:
+        for text in ("Colt 1, mayday", "Colt 1, pan-pan",
+                     "Colt 1, declaring an emergency"):
+            _airborne(brain, callsign="Colt 1", phase=Phase.AIRBORNE)
+            reply = brain.handle(text, controller=controller)
+            assert reply, (controller, text)
+            assert "say again" not in reply.lower(), (controller, text, reply)
+            assert "emergency" in reply.lower(), (controller, text, reply)
+
+
+def test_self_move_to_tower_from_airborne_is_an_arrival(brain):
+    # An airborne pilot who self-moves to Tower is arriving, not departing:
+    # the phase must become Inbound so Tower recognises the arrival.
+    for phase in (Phase.AIRBORNE, Phase.STINGRAY, Phase.INBOUND,
+                  Phase.LANDING):
+        pilot = _airborne(brain, callsign="Colt 1", phase=phase)
+        brain.handle("Control, Colt 1, request Tower",
+                     controller=Controller.CONTROL)
+        assert pilot.phase == Phase.INBOUND, phase
+
+
+def test_self_move_to_ground_from_airborne_is_taxi(brain):
+    # Same for Ground: an airborne pilot asking for Ground wants ground
+    # handling, so the phase must become Taxi (Ground has no airborne handler).
+    for phase in (Phase.AIRBORNE, Phase.STINGRAY):
+        pilot = _airborne(brain, callsign="Colt 1", phase=phase)
+        brain.handle("Control, Colt 1, request Ground",
+                     controller=Controller.CONTROL)
+        assert pilot.phase == Phase.TAXI, phase

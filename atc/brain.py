@@ -1379,6 +1379,30 @@ class AtcBrain:
             return self._say("authentication_not_implemented", callsign,
                              agency=self._agency(controller))
 
+        # Emergency (MAYDAY / PAN-PAN / "declaring an emergency") is not
+        # simulated, but it must NEVER be answered with a bare "say again" —
+        # that reads as "you said it wrong" to a pilot who just declared an
+        # emergency. Acknowledge it in ATC style and give them a way forward.
+        # Handled before the controller dispatch so it works on every
+        # frequency, and before the capability branch below (which would
+        # otherwise match "declaring").
+        if re.search(r"\b(mayday|pan[\s-]?pan|declaring an emergency|"
+                     r"declaring emergency|emergency)\b", low):
+            return self._say("emergency_not_implemented", callsign,
+                             agency=self._agency(controller))
+
+        # Brevity calls that are C2/GCI (AWACS) functions — PICTURE, DECLARE,
+        # BOGEY DOPE, SNAP — are not simulated. Answer honestly in ATC style
+        # rather than with a false ack or a bare "say again", so the pilot
+        # knows the trainer does not model them and can carry on. Handled
+        # before the controller dispatch so it works on every frequency.
+        capability = re.search(r"\b(picture|declare|bogey dope|snap)\b", low)
+        if capability and not re.search(
+                r"\b(bullseye|bull'?s?eye|marking)\b", low):
+            return self._say("capability_not_implemented", callsign,
+                             agency=self._agency(controller),
+                             capability=capability.group(1).upper())
+
         # Trainer aid: "<callsign> help" (also "assist", "what do I do", "what
         # now", "remind me") gives a state-aware hint. Accepted *without* the
         # "trainer" prefix: a stuck pilot says "Control, Epic 4, help", and
@@ -1395,10 +1419,14 @@ class AtcBrain:
         # phraseology — distinct from a bearing/distance request. A *request*
         # for a heading ("request heading to the field") is the same aid; a
         # readback ("turn right heading 150") is not (it has no request verb).
-        if re.search(r"\bvectors?\b", low) or (
+        # A bullseye/marking call is excluded: "request vector to bullseye" is
+        # a picture request, not an approach vector, and must not be answered
+        # with a runway heading.
+        if (re.search(r"\bvectors?\b", low) or (
                 re.search(r"\bheading\b", low)
                 and re.search(r"\b(request(?:ing)?|like|prefer|would like|"
-                              r"asking for|need|give me|what)\b", low)):
+                              r"asking for|need|give me|what)\b", low))) \
+                and not re.search(r"\b(bullseye|bull'?s?eye|marking)\b", low):
             return self._vectors(callsign, low, track, controller)
 
         # Trainer aid: "<callsign> request bearing and distance [to <gate>]"
@@ -1620,8 +1648,20 @@ class AtcBrain:
         elif target == Controller.TOWER:
             if pilot.phase in (Phase.IDLE, Phase.CLEARANCE, Phase.TAXI):
                 pilot.phase = Phase.HOLDING
+            elif pilot.phase in (Phase.AIRBORNE, Phase.STINGRAY,
+                                 Phase.INBOUND, Phase.LANDING):
+                # An airborne pilot who self-moves to Tower is arriving, not
+                # departing: without this the phase stayed Airborne/Stingray and
+                # Tower did not recognise them as an arrival (the "fastnade"
+                # report — a pilot who moved to Tower could not get a landing).
+                pilot.phase = Phase.INBOUND
         elif target == Controller.GROUND:
             if pilot.phase in (Phase.LANDING, Phase.INBOUND):
+                pilot.phase = Phase.TAXI
+            elif pilot.phase in (Phase.AIRBORNE, Phase.STINGRAY):
+                # Same for Ground: an airborne pilot asking for Ground wants
+                # ground handling, so treat them as taxiing rather than leaving
+                # them in an airborne phase Ground has no handler for.
                 pilot.phase = Phase.TAXI
 
     def _channel_for(self, controller: Controller) -> str:
@@ -2450,8 +2490,13 @@ class AtcBrain:
         # air-start (or a pilot who never checked in elsewhere) is on the
         # tactical leg by definition once they talk to Stingray, so the map
         # shows the right phase without a full departure first.
-        if self._is_bare_checkin(low, "") or re.search(
-                r"\b(stingray|awacs)\b", low):
+        #
+        # Deliberately *only* a genuine bare check-in: the old guard also
+        # matched any call merely containing "stingray"/"awacs", so every
+        # unrecognised call ("Stingray, Colt 1, picture") got a false
+        # "Colt 1, Stingray." ack instead of falling through to its own
+        # handling. A call that carries content is not a check-in.
+        if self._is_bare_checkin(low, ""):
             if pilot.phase in (Phase.IDLE, Phase.AIRBORNE):
                 pilot.phase = Phase.STINGRAY
             return self._say("stingray_ack", callsign)
