@@ -194,6 +194,10 @@ PAGES = [
             ("Holding & push", [
                 ("P", "Adder1 pushing"),
             ]),
+            ("Picture calls", [
+                ("P", "Adder11, marking bull, 077 for 41"),
+                ("P", "Adder11, marking Kutaisi 200 for 20, angels 5"),
+            ]),
             ("The attack", [
                 ("P", "Adder11, one away"),
                 ("W", "Adder12, one away"),
@@ -338,8 +342,9 @@ PAGES = [
             ("Lost contact", "Radar contact lost."),
             ("Low", "Target altitude below the stated band."),
             ("Magnum", "Launch of a friendly anti-radiation missile."),
-            ("Marking", "A call giving your position relative to the bullseye "
-                        "(\"marking bullseye 270 for 35\")."),
+            ("Marking", "A position call naming the reference point — the "
+                        "bullseye (\"marking bull, 077 for 41\") or another "
+                        "point (\"marking Kutaisi 200 for 20\")."),
             ("Miller Time", "Ordnance delivered — the strike is complete; "
                             "usually with a request to RTB."),
             ("Monitor", "Maintain sensor awareness on the specified group."),

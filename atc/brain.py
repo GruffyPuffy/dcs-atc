@@ -138,17 +138,23 @@ def _spoken_figure(phrase: str) -> str:
         words, scale = words[:-1], "000"
     if not words or any(w not in _NUMBER_WORDS for w in words):
         return ""
-    # Compound tens+units ("thirty two") and the single-word tens/teens
-    # ("fifteen", "thirty") are one *value*; anything else is digit-by-digit
-    # ("one five" -> 15, "zero seven zero" -> 070).
+    # Compound tens+units ("thirty two") is one *value*; a trailing tens/teens
+    # word is the last two digits ("four forty" -> 440, "one forty" -> 140,
+    # "fifteen" -> 15); anything else is digit-by-digit ("one five" -> 15,
+    # "zero seven zero" -> 070). Every word is known to be a number word here,
+    # so `_NUMBER_WORDS` is safe for the leading digits too — a teen in the
+    # middle ("fifteen seven zero three") used to raise KeyError and kill the
+    # reply entirely, and "heading one forty" (a very common heading call) hit
+    # the same crash.
     if len(words) >= 2 and words[-2] in _TENS and words[-1] in _ONES:
-        head = [_ONES[w] for w in words[:-2]]
+        head = [_NUMBER_WORDS[w] for w in words[:-2]]
         digits = "".join(head) + str(int(_TENS[words[-2]])
                                     + int(_ONES[words[-1]]))
-    elif words[-1] in _TEENS or (len(words) == 1 and words[-1] in _TENS):
-        digits = "".join(_ONES[w] for w in words[:-1]) + _NUMBER_WORDS[words[-1]]
+    elif words[-1] in _TENS or words[-1] in _TEENS:
+        digits = "".join(_NUMBER_WORDS[w] for w in words[:-1]) \
+            + _NUMBER_WORDS[words[-1]]
     else:
-        digits = "".join(_ONES[w] for w in words)
+        digits = "".join(_NUMBER_WORDS[w] for w in words)
     return digits + scale
 
 
@@ -196,6 +202,63 @@ def _fold_spoken_figures(text: str) -> str:
     return _FIGURE_CONTEXT_RE.sub(merge, text)
 
 
+# A bullseye or marking call's figures, folded as one unit. The bearing follows
+# the point name ("marking Kutaisi two zero zero") or the keyword itself
+# ("bullseye zero six five"); the range follows "for"/"at" — or just a comma, as
+# in Mags' "marking bull, zero seven seven, four forty". Folded separately from
+# the general context above because "for" is far too common a word to fold
+# globally; this only runs when the transmission is a bullseye/marking call.
+# The point name is any word that is *not* a number word, so "bullseye zero six
+# five" does not read "zero" as the point. Bearing and range are folded in one
+# pass so the range cannot be mistaken for the bearing (a separate range pass
+# would match the comma *before* the bearing and strip its leading zero).
+_BULLSEYE_FOLD_RE = re.compile(
+    rf"\b(bull'?s?eye|marking)((?:\s+(?!(?:{_FIGURE_WORD})\b)[a-z]+)?)"
+    rf"([\s,]+)((?:(?:{_FIGURE_WORD})\s*){{1,4}})"
+    rf"(?:(for|at|,)([\s,]*)((?:(?:{_FIGURE_WORD})\s*){{1,4}}))?",
+    re.IGNORECASE)
+
+
+def _fold_bullseye_figures(text: str) -> str:
+    """Fold spoken figures in a bullseye/marking call.
+
+    "bullseye zero six five for four zero" -> "bullseye 065 for 40",
+    "marking Kutaisi two zero zero for twenty" -> "marking Kutaisi 200 for 20".
+
+    Runs *after* `_fold_spoken_figures` (which already handles the trailing
+    "angels five"), and only when the transmission is a bullseye/marking call —
+    the range context ("for"/"at"/",") is far too common to fold globally.
+    """
+    if not re.search(r"\b(bull'?s?eye|marking)\b", text, re.IGNORECASE):
+        return text
+
+    def merge(match: "re.Match") -> str:
+        out = match.group(1) + (match.group(2) or "") + match.group(3)
+        for figure_group, sep_groups in ((4, (5, 6)), (7, ())):
+            spoken = match.group(figure_group)
+            if spoken is None:
+                continue
+            figure = _spoken_figure(spoken)
+            if figure:
+                # Keep the whitespace the regex allowed after the figure, so
+                # the next word stays separate (the same trap as
+                # `_fold_spoken_figures`).
+                trailing = spoken[len(spoken.rstrip()):]
+                # A bearing is always three digits ("zero six five" -> 065);
+                # the range is a plain number ("four zero" -> 40).
+                if figure_group == 4:
+                    figure = figure.zfill(3)
+                else:
+                    figure = figure.lstrip("0") or "0"
+                out += figure + trailing
+            else:
+                out += spoken
+            out += "".join(match.group(i) or "" for i in sep_groups)
+        return out
+
+    return _BULLSEYE_FOLD_RE.sub(merge, text)
+
+
 def _stem(word: str) -> str:
     """A regex fragment matching a verb in its common spoken forms.
 
@@ -214,6 +277,21 @@ def _stem(word: str) -> str:
 _BULLSEYE_CALL_RE = re.compile(
     r"\bbull'?s?eye\b\s*(\d{2,3})\s*(?:for|at)\s*(\d{1,3})")
 _ANGELS_RE = re.compile(r"\bangels\s*(\d{1,3})\b")
+# An exact-altitude statement: "angels 15703", "15703 feet", "15703 tf". The SOP
+# wants whole thousands ("angels 16"); reading the digits off the altimeter is a
+# habit the trainer should coach out (Mags: "Apollo blir irriterad om man läser
+# siffrorna exakt"). Deliberately 4-5 digits, so it cannot collide with the
+# 1-3 digit angels figure above.
+_EXACT_ALT_RE = re.compile(
+    r"\b(?:angels\s*(\d{4,5})|(\d{4,5})\s*(?:feet|foot|ft|tf)\b)")
+# A marking call: "marking <point> <bearing> for <range>". The point is the
+# bullseye ("bull"/"bulls"/"bullseye") or a named point ("Kutaisi"). The range
+# separator is "for"/"at" or just a comma (Mags' "marking bull, 077, 440").
+# Matched against the folded text, so spoken figures work too.
+_MARKING_RE = re.compile(
+    r"\bmarking\s+([a-z']+)\s*,?\s*(\d{2,3})\s*(?:for|at|,)\s*(\d{1,3})\b")
+# The words a pilot uses for the bullseye itself, as opposed to a named point.
+_BULLSEYE_WORDS = {"bull", "bulls", "bullseye", "bull's", "bulls'", "bullseye's"}
 
 
 def parse_bullseye_call(text: str) -> tuple[float, float] | None:
@@ -227,6 +305,21 @@ def parse_bullseye_call(text: str) -> tuple[float, float] | None:
     return float(match.group(1)), float(match.group(2))
 
 
+def parse_marking_call(text: str) -> tuple[str, float, float] | None:
+    """Parse "marking Kutaisi 200 for 20" -> ("kutaisi", 200.0, 20.0), or None.
+
+    The point is returned lower-cased; "bull"/"bulls"/"bullseye" mean the
+    coalition bullseye itself. Reads the folded text, so spoken figures work.
+    """
+    match = _MARKING_RE.search(text or "")
+    if not match:
+        return None
+    point = match.group(1).lower()
+    if point in _BULLSEYE_WORDS:
+        point = "bullseye"
+    return point, float(match.group(2)), float(match.group(3))
+
+
 def parse_angels(text: str) -> float | None:
     """Parse "angels 15" -> 15.0 (thousands of feet), or None.
 
@@ -234,6 +327,19 @@ def parse_angels(text: str) -> float | None:
     """
     match = _ANGELS_RE.search(text or "")
     return float(match.group(1)) if match else None
+
+
+def parse_exact_altitude(text: str) -> float | None:
+    """Parse an exact-altitude statement -> feet, or None.
+
+    "angels 15703", "15703 feet" and "15703 tf" all mean the pilot read the
+    digits off the altimeter instead of rounding to whole thousands. Returns the
+    stated altitude in feet so the trainer can coach the correct call.
+    """
+    match = _EXACT_ALT_RE.search(text or "")
+    if not match:
+        return None
+    return float(match.group(1) or match.group(2))
 
 
 # Spoken digits, for the frequency-change patterns. STT writes what it hears, so
@@ -1227,6 +1333,7 @@ class AtcBrain:
         # matched against the text: see `_fold_spoken_figures`. Done *after*
         # formation/check-in handling above, which need the word forms.
         low = _fold_spoken_figures(low)
+        low = _fold_bullseye_figures(low)
         reply = self._dispatch(callsign, pilot, low, track, controller, traffic,
                                speaker)
         if reply and not self._is_meta_reply(reply):
@@ -1260,6 +1367,17 @@ class AtcBrain:
         # before everything else so it can never be mistaken for a clearance.
         if re.search(r"\btrainer\b", low):
             return self._trainer(callsign, pilot, low, controller, track)
+
+        # Authentication (RAMROD) is deliberately not implemented: it needs a
+        # prebriefed key, which is a mission-design decision, not a trainer
+        # feature. A pilot who tries it must not be left with a bare "say
+        # again" — that reads as "you said it wrong" and invites them to keep
+        # retrying a thing that can never work. Answer in ATC style and give
+        # them a way forward. Handled before the controller dispatch so it
+        # works on every frequency.
+        if re.search(r"\b(authenticat\w*|ramrod)\b", low):
+            return self._say("authentication_not_implemented", callsign,
+                             agency=self._agency(controller))
 
         # Trainer aid: "<callsign> help" (also "assist", "what do I do", "what
         # now", "remind me") gives a state-aware hint. Accepted *without* the
@@ -2298,7 +2416,7 @@ class AtcBrain:
         # that is off gets a coaching challenge (never a block — the pilot keeps
         # flying, exactly like the position cross-check). Repeatable: a pilot
         # practising bullseye calls can make as many as they like.
-        if re.search(r"\b(bullseye|bull'?s?eye|marking bull)\b", low):
+        if re.search(r"\b(bullseye|bull'?s?eye|marking)\b", low):
             # An air-start (or any pilot who never checked in elsewhere) is on
             # the tactical leg by definition once they talk to Stingray, so the
             # map shows the right phase without a full departure first.
@@ -2342,7 +2460,7 @@ class AtcBrain:
 
     def _bullseye_reply(self, callsign: str, pilot: PilotState, low: str,
                         track: AircraftTrack | None) -> str:
-        """Acknowledge a bullseye picture call, coaching if it is off.
+        """Acknowledge a bullseye/marking picture call, coaching if it is off.
 
         The pilot reads bullseye off their HSI, so the check is tolerant
         (BULLSEYE_TOLERANCE_DEG / _NM) and never blocks: an off call gets the
@@ -2350,16 +2468,61 @@ class AtcBrain:
         The stated angels is checked too (a picture call includes the altitude),
         with the same tolerance. Without a mission bullseye (or a live track) we
         simply acknowledge.
+
+        Two trainer-specific cases on top of the plain check:
+
+        * An **exact-altitude** statement ("angels 15703", "15703 tf") is a
+          format error, not a position error — the SOP wants whole thousands
+          ("angels 16"). It is coached explicitly, because reading the digits
+          off the altimeter is exactly the habit the trainer exists to break.
+        * A **marking** call names a point ("marking Kutaisi two zero zero for
+          twenty"). The point is resolved against the served airfield and the
+          bullseye; a point we do not know is acknowledged without a check
+          rather than guessed at.
         """
-        if self.bullseye is None or track is None:
-            return self._say("stingray_radar_contact", callsign)
-        reported = self._bullseye_call(low)
-        if reported is None:
-            return self._say("stingray_radar_contact", callsign)
-        bearing, distance = bearing_distance(
-            self.bullseye[0], self.bullseye[1], track.lat, track.lon)
-        off_bearing = abs((reported[0] - bearing + 180) % 360 - 180)
-        off_range = abs(reported[1] - distance)
+        exact = parse_exact_altitude(low)
+        if exact is not None:
+            # The altitude format was wrong; the position may still be off, so
+            # combine both into one transmission (two "negative"s in a row would
+            # not be said on the radio).
+            rounded = f"{round(exact / 1000.0):.0f}"
+            off = self._verify_picture(callsign, low, track)
+            if off:
+                return self._say("stingray_angels_and_position", callsign,
+                                 angels=rounded, **off)
+            return self._say("stingray_angels_rounding", callsign,
+                             angels=rounded)
+        off = self._verify_picture(callsign, low, track)
+        if off:
+            return self._say("stingray_bullseye_challenge", callsign, **off)
+        return self._say("stingray_radar_contact", callsign)
+
+    def _verify_picture(self, callsign: str, low: str,
+                        track: AircraftTrack | None) -> dict | None:
+        """Check the position in a bullseye/marking call.
+
+        Returns the challenge fields (``point``/``bearing``/``range``/
+        ``angels``) when the position is off, or None when it checks out or
+        states no position we can verify (the caller then acknowledges).
+        """
+        if track is None:
+            return None
+        marking = parse_marking_call(low)
+        if marking is not None:
+            name, reported_bearing, reported_range = marking
+            point = self._resolve_point(name)
+        else:
+            reported = parse_bullseye_call(low)
+            if reported is None:
+                return None
+            reported_bearing, reported_range = reported
+            point = self._resolve_point("bullseye")
+        if point is None:
+            return None
+        label, (plat, plon) = point
+        bearing, distance = bearing_distance(plat, plon, track.lat, track.lon)
+        off_bearing = abs((reported_bearing - bearing + 180) % 360 - 180)
+        off_range = abs(reported_range - distance)
         # Angels: the call states the altitude in thousands of feet. Only
         # checked when the pilot actually said it (it is optional in the SOP
         # call), and only when we have a live altitude.
@@ -2370,14 +2533,33 @@ class AtcBrain:
         if (off_bearing <= BULLSEYE_TOLERANCE_DEG
                 and off_range <= BULLSEYE_TOLERANCE_NM
                 and off_angels <= ANGELS_TOLERANCE_FT / 1000.0):
-            return self._say("stingray_radar_contact", callsign)
-        return self._say("stingray_bullseye_challenge", callsign,
-                         bearing=f"{bearing:03.0f}", range=f"{distance:.0f}",
-                         angels=f"{actual_angels:.0f}")
+            return None
+        return {"point": label, "bearing": f"{bearing:03.0f}",
+                "range": f"{distance:.0f}",
+                "actual_angels": f"{actual_angels:.0f}"}
 
-    def _bullseye_call(self, low: str) -> tuple[float, float] | None:
-        """Parse "bullseye 065 for 40" -> (bearing, range_nm), or None."""
-        return parse_bullseye_call(low)
+    def _resolve_point(self, name: str) -> tuple[str, tuple[float, float]] | None:
+        """Resolve a picture-call point name to (label, (lat, lon)), or None.
+
+        Only points the trainer actually knows: the coalition bullseye and the
+        served airfield (the SOP example names the field — "marking Kutaisi two
+        zero zero for twenty"). Anything else returns None, so the call is
+        acknowledged without a check instead of being verified against a guess.
+        """
+        if name == "bullseye":
+            if self.bullseye is None:
+                return None
+            return "bullseye", self.bullseye
+        if self.airfield is None:
+            return None
+        label = self.airfield.name
+        known = {label.lower()}
+        ctr = getattr(self.airfield.ctr, "name", "") or ""
+        if ctr.lower().endswith(" ctr"):
+            known.add(ctr[:-4].strip().lower())
+        if name not in known:
+            return None
+        return label, (self.airfield.ctr.center_lat, self.airfield.ctr.center_lon)
 
     def _inbound_reply(self, callsign: str, pilot: PilotState,
                        track: AircraftTrack | None, low: str = "") -> str:

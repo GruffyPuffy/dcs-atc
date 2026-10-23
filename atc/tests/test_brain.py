@@ -2,7 +2,9 @@
 
 import dataclasses
 
-from brain import (AtcBrain, Controller, INCURSION_POLLS, Phase, Phraseology)
+from brain import (AtcBrain, Controller, INCURSION_POLLS, Phase, Phraseology,
+                   _fold_bullseye_figures, _fold_spoken_figures,
+                   _spoken_figure, parse_bullseye_call, parse_marking_call)
 from ctr import AircraftTrack
 
 
@@ -3057,3 +3059,171 @@ def test_a_challenge_never_traps_the_pilot(brain):
         reply = brain.handle(text, controller=Controller.STINGRAY, track=track)
         assert "say again" not in reply.lower(), text
         assert "Control" in reply or "RTB" in reply, text
+
+
+# --- Spoken figures in picture calls (STT writes words, not digits) ----------
+# The debrief's STT output is words ("bullseye zero six five for four zero"), so
+# the fold has to happen before the parsers or a spoken call is silently
+# unhandled. These pin the fold, the parsers, and the end-to-end reply.
+
+def test_spoken_figure_handles_tens_and_teens():
+    # Regression: the fold used `_ONES` for every word, so a teen or a trailing
+    # tens word raised KeyError and the worker swallowed the reply entirely —
+    # the pilot heard *nothing* ("heading one forty" is a very common call).
+    assert _spoken_figure("four forty") == "440"
+    assert _spoken_figure("one forty") == "140"
+    assert _spoken_figure("fifteen") == "15"
+    assert _spoken_figure("fifteen seven zero three") == "15703"
+    assert _spoken_figure("thirty two") == "32"
+    assert _spoken_figure("two one thousand") == "21000"
+    assert _spoken_figure("zero seven zero") == "070"
+
+
+def test_a_heading_with_a_tens_word_does_not_crash(brain):
+    # The crash was reachable through handle(): the worker catches the exception
+    # and the pilot hears nothing, which is exactly the "stuck" symptom.
+    brain._pilot("Colt 1").phase = Phase.AIRBORNE
+    reply = brain.handle("Colt 1, heading four forty",
+                         controller=Controller.CONTROL)
+    assert reply is not None
+
+
+def test_spoken_bullseye_call_is_folded(brain):
+    # "bullseye zero six five for four zero" -> "bullseye 065 for 40".
+    assert parse_bullseye_call(
+        _fold_bullseye_figures(_fold_spoken_figures(
+            "bullseye zero six five for four zero"))) == (65.0, 40.0)
+
+
+def test_spoken_marking_call_is_folded(brain):
+    # "marking Kutaisi two zero zero for twenty" -> "marking kutaisi 200 for 20".
+    folded = _fold_bullseye_figures(_fold_spoken_figures(
+        "marking kutaisi two zero zero for twenty"))
+    assert parse_marking_call(folded) == ("kutaisi", 200.0, 20.0)
+
+
+def test_marking_bull_means_the_bullseye(brain):
+    # "marking bull, 077, 440" — a comma instead of "for", and "bull" for the
+    # bullseye itself (Mags' habit; the trainer accepts it).
+    folded = _fold_bullseye_figures(_fold_spoken_figures(
+        "marking bull, zero seven seven, four forty"))
+    assert parse_marking_call(folded) == ("bullseye", 77.0, 440.0)
+
+
+def test_marking_a_named_point_is_verified_against_the_airfield(brain):
+    # The SOP example names the field: "marking Kutaisi two zero zero for
+    # twenty". The point resolves to the served airfield's reference point.
+    from airspace import bearing_distance
+    from ctr import AircraftTrack
+    _stingray(brain)
+    clat = brain.airfield.ctr.center_lat
+    clon = brain.airfield.ctr.center_lon
+    alat, alon = 42.0, 42.2  # somewhere south-west of Kutaisi
+    bearing, distance = bearing_distance(clat, clon, alat, alon)
+    track = AircraftTrack(callsign="Colt 1", inside=False, lat=alat, lon=alon,
+                          alt_ft=5000.0, distance_nm=distance,
+                          relative="southwest", heading=200.0)
+    reply = brain.handle(
+        f"Stingray, Colt 1, marking Kutaisi {bearing:03.0f} for {distance:.0f}, "
+        f"angels 5",
+        controller=Controller.STINGRAY, track=track)
+    assert "radar contact" in reply.lower(), reply
+    # A wrong bearing is coached, and names the point it checked against.
+    reply = brain.handle(
+        "Stingray, Colt 1, marking Kutaisi 090 for 40, angels 5",
+        controller=Controller.STINGRAY, track=track)
+    assert "negative" in reply.lower()
+    assert "Kutaisi" in reply
+
+
+def test_marking_an_unknown_point_is_acknowledged_not_guessed(brain):
+    # A point the trainer does not know (another airfield) is acknowledged
+    # without a check — verifying against a guess would teach the wrong number.
+    from ctr import AircraftTrack
+    _stingray(brain)
+    track = AircraftTrack(callsign="Colt 1", inside=False, lat=42.0, lon=42.2,
+                          alt_ft=5000.0, distance_nm=20.0,
+                          relative="southwest", heading=200.0)
+    reply = brain.handle("Stingray, Colt 1, marking Batumi 200 for 20, angels 5",
+                         controller=Controller.STINGRAY, track=track)
+    assert "radar contact" in reply.lower()
+    assert "negative" not in reply.lower()
+
+
+def test_exact_altitude_is_coached_to_round(brain):
+    # "angels 15703" / "15703 tf" read the digits off the altimeter; the SOP
+    # wants whole thousands. The trainer coaches the correct call (Mags: "Apollo
+    # blir irriterad om man läser siffrorna exakt").
+    from ctr import AircraftTrack
+    brain.set_bullseye(42.05, 42.40)
+    _stingray(brain)
+    track = AircraftTrack(callsign="Colt 1", inside=False, lat=42.6, lon=42.5,
+                          alt_ft=15703.0, distance_nm=33.0, relative="north",
+                          heading=0.0)
+    for text in ("Stingray, Colt 1, bullseye 008 for 33, angels 15703",
+                 "Stingray, Colt 1, bullseye 008 for 33, 15703 tf",
+                 "Stingray, Colt 1, bullseye 008 for 33, 15703 feet"):
+        reply = brain.handle(text, controller=Controller.STINGRAY, track=track)
+        assert "negative" in reply.lower(), text
+        assert "angels 16" in reply, text
+        assert "radar contact" not in reply.lower(), text
+
+
+def test_exact_altitude_with_a_bad_position_coaches_both(brain):
+    # Both errors in one transmission get one combined reply — two "negative"s
+    # in a row would not be said on the radio.
+    from ctr import AircraftTrack
+    brain.set_bullseye(42.05, 42.40)
+    _stingray(brain)
+    track = AircraftTrack(callsign="Colt 1", inside=False, lat=42.6, lon=42.5,
+                          alt_ft=15703.0, distance_nm=33.0, relative="north",
+                          heading=0.0)
+    reply = brain.handle("Stingray, Colt 1, bullseye 200 for 10, angels 15703",
+                         controller=Controller.STINGRAY, track=track)
+    assert reply.lower().count("negative") == 1, reply
+    assert "angels 16" in reply
+    assert "bullseye" in reply.lower()
+
+
+def test_rounded_angels_are_still_accepted(brain):
+    # The correct call ("angels 16" for 15,703 ft) is acknowledged — the coaching
+    # must not reject the very form it asks for.
+    from ctr import AircraftTrack
+    brain.set_bullseye(42.05, 42.40)
+    _stingray(brain)
+    track = AircraftTrack(callsign="Colt 1", inside=False, lat=42.6, lon=42.5,
+                          alt_ft=15703.0, distance_nm=33.0, relative="north",
+                          heading=0.0)
+    reply = brain.handle("Stingray, Colt 1, bullseye 008 for 33, angels 16",
+                         controller=Controller.STINGRAY, track=track)
+    assert "radar contact" in reply.lower()
+
+
+# ---------- Authentication (RAMROD) — not implemented, but never a dead end ----
+# A pilot who tries to authenticate must not hear a bare "say again": that reads
+# as "you said it wrong" and invites them to keep retrying something that can
+# never work. Answer in ATC style, on every frequency, and leave a way forward.
+
+def test_authentication_is_answered_in_atc_style_on_every_controller(brain):
+    for controller in (Controller.GROUND, Controller.TOWER,
+                       Controller.CONTROL, Controller.STINGRAY):
+        for text in ("Colt 1, authenticate Golf Alpha",
+                     "Colt 1, authenticating Romeo",
+                     "Colt 1, RAMROD"):
+            reply = brain.handle(text, controller=controller)
+            assert reply, (controller, text)
+            assert "say again" not in reply.lower(), (controller, text, reply)
+            assert "not implemented" in reply.lower(), (controller, text, reply)
+            assert "Colt 1" in reply, (controller, text, reply)
+
+
+def test_pilot_can_continue_after_authentication_attempt(brain):
+    # The reply must not advance or wedge the state machine: the very next
+    # normal call is handled as if the authentication attempt never happened.
+    _stingray(brain)
+    reply = brain.handle("Stingray, Colt 1, RAMROD",
+                         controller=Controller.STINGRAY)
+    assert "not implemented" in reply.lower()
+    reply = brain.handle("Stingray, Colt 1", controller=Controller.STINGRAY)
+    assert reply and "Stingray" in reply
+    assert "say again" not in reply.lower()

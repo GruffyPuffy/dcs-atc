@@ -322,19 +322,123 @@ function drawBullseye(af) {
 const BULLSEYE_TOL_DEG = 10;
 const BULLSEYE_TOL_NM = 3;
 
-function parseBullseyeCall(text) {
-  // "bullseye 065 for 40, angels 15" -> {bearing, range, angels}. Mirrors the
-  // brain's parser so the drawn arrow can never disagree with what was checked.
-  const m = /\bbull'?s?eye\b\s*(\d{2,3})\s*(?:for|at)\s*(\d{1,3})/i.exec(text || '');
+// Spoken number words -> digits, mirroring the brain's tables. STT writes what
+// it hears ("bullseye zero six five for four zero"), so the overlay has to fold
+// the words the same way the brain does or a spoken call would draw nothing.
+const NUMBER_WORDS = {
+  zero: '0', one: '1', two: '2', three: '3', four: '4', five: '5', six: '6',
+  seven: '7', eight: '8', nine: '9', niner: '9',
+  ten: '10', eleven: '11', twelve: '12', thirteen: '13', fourteen: '14',
+  fifteen: '15', sixteen: '16', seventeen: '17', eighteen: '18',
+  nineteen: '19',
+  twenty: '20', thirty: '30', forty: '40', fifty: '50', sixty: '60',
+  seventy: '70', eighty: '80', ninety: '90',
+};
+const TEENS = new Set(['ten', 'eleven', 'twelve', 'thirteen', 'fourteen',
+  'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen']);
+const TENS = new Set(['twenty', 'thirty', 'forty', 'fifty', 'sixty',
+  'seventy', 'eighty', 'ninety']);
+const FIGURE_WORD = Object.keys(NUMBER_WORDS)
+  .sort((a, b) => b.length - a.length).join('|');
+
+function spokenFigure(phrase) {
+  // "four forty" -> "440", "zero six five" -> "065", "thirty two" -> "32".
+  // Mirrors the brain's `_spoken_figure` (including the tens/teens tail rule).
+  const words = phrase.trim().split(/\s+/);
+  if (!words.length || words.some((w) => !(w in NUMBER_WORDS))) return '';
+  if (words.length >= 2 && TENS.has(words[words.length - 2])
+      && words[words.length - 1] in NUMBER_WORDS
+      && !TENS.has(words[words.length - 1])
+      && !TEENS.has(words[words.length - 1])) {
+    const head = words.slice(0, -2).map((w) => NUMBER_WORDS[w]).join('');
+    return head + String(Number(NUMBER_WORDS[words[words.length - 2]])
+                         + Number(NUMBER_WORDS[words[words.length - 1]]));
+  }
+  const last = words[words.length - 1];
+  if (TENS.has(last) || TEENS.has(last)) {
+    return words.slice(0, -1).map((w) => NUMBER_WORDS[w]).join('')
+      + NUMBER_WORDS[last];
+  }
+  return words.map((w) => NUMBER_WORDS[w]).join('');
+}
+
+function foldPictureFigures(text) {
+  // Fold the bearing/range of a bullseye or marking call, mirroring the brain's
+  // `_fold_bullseye_figures`. Only runs on a bullseye/marking call — the range
+  // separator ("for"/"at"/",") is far too common to fold globally.
+  if (!/\b(bull'?s?eye|marking)\b/i.test(text || '')) return text || '';
+  const re = new RegExp(
+    `\\b(bull'?s?eye|marking)((?:\\s+(?!(?:${FIGURE_WORD})\\b)[a-z]+)?)`
+    + `([\\s,]+)((?:(?:${FIGURE_WORD})\\s*){1,4})`
+    + `(?:(for|at|,)([\\s,]*)((?:(?:${FIGURE_WORD})\\s*){1,4}))?`, 'i');
+  // A figure group carries the whitespace the regex allowed after it; keep that
+  // whitespace so the next word stays separate (the brain's `_fold_spoken_
+  // figures` welded "channel 7push" the same way).
+  const fold = (spoken, pad) => {
+    const trailing = spoken.slice(spoken.trimEnd().length);
+    const digits = spokenFigure(spoken);
+    if (!digits) return spoken;
+    return (pad ? digits.padStart(3, '0') : String(Number(digits))) + trailing;
+  };
+  return (text || '').replace(re, (all, kw, point, sep, bearing, rsep, rws,
+                                   range) => {
+    let out = kw + (point || '') + sep + fold(bearing, true);
+    if (range == null) return out;
+    return out + (rsep || '') + (rws || '') + fold(range, false);
+  });
+}
+
+function foldAngels(text) {
+  // "angels five" -> "angels 5". The brain folds this in the general
+  // `_fold_spoken_figures` pass, before the bullseye pass; the overlay needs
+  // the same so a spoken angels shows in the tooltip.
+  const re = new RegExp(`\\bangels\\s+((?:(?:${FIGURE_WORD})\\s*){1,4})`, 'i');
+  return (text || '').replace(re, (all, spoken) => {
+    const trailing = spoken.slice(spoken.trimEnd().length);
+    const digits = spokenFigure(spoken);
+    return digits ? 'angels ' + String(Number(digits)) + trailing : all;
+  });
+}
+
+function parsePictureCall(text, af) {
+  // "bullseye 065 for 40, angels 15" or "marking Kutaisi 200 for 20" ->
+  // {point, lat, lon, bearing, range, angels}. Mirrors the brain's parsers so
+  // the drawn arrow can never disagree with what was checked. Returns null when
+  // the call names a point we cannot resolve (the brain acknowledges those
+  // without a check, so there is nothing to draw).
+  const t = foldAngels(foldPictureFigures(text));
+  const m = /\bmarking\s+([a-z']+)\s*,?\s*(\d{2,3})\s*(?:for|at|,)\s*(\d{1,3})\b/i
+    .exec(t)
+    || /\bbull'?s?eye\b\s*(\d{2,3})\s*(?:for|at)\s*(\d{1,3})/i.exec(t);
   if (!m) return null;
-  const a = /\bangels\s*(\d{1,3})\b/i.exec(text || '');
-  return { bearing: Number(m[1]), range: Number(m[2]),
+  let point, lat, lon;
+  if (m.length === 4) {
+    const name = m[1].toLowerCase();
+    if (['bull', 'bulls', 'bullseye', "bull's"].includes(name)) {
+      if (!af.bullseye || af.bullseye.length !== 2) return null;
+      point = 'bullseye';
+      [lat, lon] = af.bullseye;
+    } else if (af.name && name === af.name.toLowerCase()) {
+      point = af.name;
+      [lat, lon] = af.center;
+    } else {
+      return null;  // unknown point: the brain does not verify it either
+    }
+  } else {
+    if (!af.bullseye || af.bullseye.length !== 2) return null;
+    point = 'bullseye';
+    [lat, lon] = af.bullseye;
+  }
+  const bearing = Number(m[m.length - 2]);
+  const range = Number(m[m.length - 1]);
+  const a = /\bangels\s*(\d{1,3})\b/i.exec(t);
+  return { point, lat, lon, bearing, range,
            angels: a ? Number(a[1]) : null };
 }
 
 function drawBullseyeCalls(aircraft, af) {
-  // Debug overlay: for every bullseye picture call, draw an arrow from the
-  // bullseye along the *reported* bearing/range, plus a ring around the
+  // Debug overlay: for every bullseye/marking picture call, draw an arrow from
+  // the named point along the *reported* bearing/range, plus a ring around the
   // aircraft's *actual* position at the tolerance radius. If the arrow tip
   // lands inside the ring, the reported position was good enough — readable at
   // a glance from the trail, without re-running the check.
@@ -343,20 +447,19 @@ function drawBullseyeCalls(aircraft, af) {
   // arrow is amber, the accuracy ring magenta (a green ring vanished against
   // the terrain).
   bullseyeLayer.clearLayers();
-  if (!af.bullseye || af.bullseye.length !== 2) return;
-  const [blat, blon] = af.bullseye;
   for (const ac of aircraft) {
     for (const c of (ac.comms || [])) {
-      const call = parseBullseyeCall(c.text);
+      const call = parsePictureCall(c.text, af);
       if (!call) continue;
-      // Where the pilot *said* they were: from the bullseye, along the
+      // Where the pilot *said* they were: from the named point, along the
       // reported bearing, at the reported range.
-      const tip = destMeters(blat, blon, call.bearing, call.range * 1852);
-      const label = `Bullseye ${String(call.bearing).padStart(3, '0')} for `
-        + `${call.range}`
+      const tip = destMeters(call.lat, call.lon, call.bearing,
+                             call.range * 1852);
+      const label = `${call.point} ${String(call.bearing).padStart(3, '0')} `
+        + `for ${call.range}`
         + (call.angels != null ? `, angels ${call.angels}` : '')
         + ` · ${c.t || ''}`;
-      L.polyline([[blat, blon], tip], {
+      L.polyline([[call.lat, call.lon], tip], {
         color: '#d29922', weight: 2, opacity: 0.95,
       }).bindTooltip(label).addTo(bullseyeLayer);
       // Arrowhead at the reported point, so the direction of the call reads.

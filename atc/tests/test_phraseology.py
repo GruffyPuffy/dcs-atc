@@ -14,6 +14,7 @@ REQUIRED_TEMPLATES = {
     "trainer_echo_on",
     "trainer_echo_off",
     "trainer_unknown",
+    "authentication_not_implemented",
     "taxi", "hold_short", "takeoff", "line_up", "lineup_readback",
     "lineup_readback_straight",
     "hold_short_traffic", "continue_approach",
@@ -86,7 +87,8 @@ def test_every_template_renders_with_common_fields():
                   agency="Kutaisi Tower", bearing="090", distance="12",
                   airfield="Kutaisi", vector_runway="25", parking="Ramp South",
                   holding="Holding C", stingray="Stingray", range="40",
-                  target="Control", target_channel="8", bullseye="bullseye 065 for 40")
+                  target="Control", target_channel="8", bullseye="bullseye 065 for 40",
+                  point="bullseye", actual_angels="15")
     for key in REQUIRED_TEMPLATES:
         text = ph.render(key, **common)
         assert "{" not in text, f"{key} left a placeholder unfilled"
