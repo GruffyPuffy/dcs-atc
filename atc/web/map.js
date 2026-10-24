@@ -427,7 +427,8 @@ function parsePictureCall(text, af) {
       if (!af.bullseye || af.bullseye.length !== 2) return null;
       point = 'bullseye';
       [lat, lon] = af.bullseye;
-    } else if (af.name && name === af.name.toLowerCase()) {
+    } else if (af.name && (name === af.name.toLowerCase()
+        || (af.name.toLowerCase() === 'kutaisi' && name === 'kutasi'))) {
       point = af.name;
       [lat, lon] = af.center;
     } else {
@@ -536,33 +537,25 @@ function drawBullseyeCalls(aircraft, af) {
       }
       // Where the aircraft *actually* was, with the tolerance as a ring.
       if (c.lat != null && c.lon != null) {
-        const actualBullseye = af.bullseye && af.bullseye.length === 2
-          ? bearingRange(af.bullseye[0], af.bullseye[1], c.lat, c.lon)
-          : null;
+        const actualBRA = bearingRange(call.lat, call.lon, c.lat, c.lon);
         const ring = L.circle([c.lat, c.lon], {
           radius: BULLSEYE_TOL_NM * 1852, color: '#db61a2', weight: 2,
           opacity: 0.95, dashArray: '4 4', fill: false,
           bubblingMouseEvents: false,
         });
-        let popupText = 'Actual bullseye unavailable (mission bullseye not set).';
-        if (actualBullseye) {
-          const actualBearing = String(Math.round(actualBullseye[0]) % 360)
-            .padStart(3, '0');
-          const actualRange = Math.round(actualBullseye[1]);
-          const altitude = actualAngelsAt(ac, c);
-          const angels = altitude == null ? ''
-            : `, Angels ${Math.round(altitude / 1000)}`;
-          popupText = `Actual bullseye: ${actualBearing} for ${actualRange}`
-            + angels;
-        }
+        const actualBearing = String(Math.round(actualBRA[0]) % 360)
+          .padStart(3, '0');
+        const actualRange = Math.round(actualBRA[1]);
+        const altitude = actualAngelsAt(ac, c);
+        const angels = altitude == null ? ''
+          : `, Angels ${Math.round(altitude / 1000)}`;
+        const popupText = `Actual ${call.point}: ${actualBearing} for `
+          + `${actualRange}${angels}`;
         const popupKey = `${ac.callsign}|${c.t || ''}|${c.lat},${c.lon}|`
           + `${c.text}|actual`;
         ring.addTo(bullseyeLayer);
-        const showCompass = actualBullseye
-          ? () => drawActualBullseyeCompass(
-            af.bullseye[0], af.bullseye[1], c.lat, c.lon,
-            actualBullseye[0])
-          : null;
+        const showCompass = () => drawActualBullseyeCompass(
+          call.lat, call.lon, c.lat, c.lon, actualBRA[0]);
         bindBullseyePopup(ring, popupKey, popupText, showCompass);
       }
     }
@@ -606,7 +599,8 @@ function drawActualBullseyeCompass(bullLat, bullLon, actualLat, actualLon,
   const actual = [actualLat, actualLon];
   const color = '#db61a2';
 
-  // The long magenta vector is the aircraft's real position from bullseye.
+  // The long magenta vector is the aircraft's real position from the call's
+  // reference point (bullseye or named marking point).
   L.polyline([bull, actual], {
     color, weight: 3, opacity: 0.95, interactive: false,
   }).addTo(bullseyeCompassLayer);

@@ -594,14 +594,7 @@ def test_http_endpoints_serve_api_and_page(brain, airfield):
         assert b'id="map"' in html
         js = urllib.request.urlopen(f"http://127.0.0.1:{port}/map.js").read()
         assert b"L.map" in js
-        assert b"Possible STT repair" in js
-        assert b"STT reading" in js
-        assert b"Actual bullseye:" in js
-        assert b"actualAngelsAt" in js
-        assert b"bullseyePopupKey" in js
-        assert b"|line" in js and b"|dot" in js
-        assert b"setLatLng(event.latlng)" in js
-        assert b"drawActualBullseyeCompass" in js
+        _assert_picture_overlay_review_contract(js)
     finally:
         server.shutdown()
 
@@ -622,16 +615,52 @@ def test_viewer_serves_repaired_picture_overlay_asset(airfield, tmp_path):
             f"http://127.0.0.1:{port}/map.js",
             headers={"Authorization": f"Basic {token}"})
         js = urllib.request.urlopen(request).read()
-        assert b"Possible STT repair" in js
-        assert b"STT reading" in js
-        assert b"Actual bullseye:" in js
-        assert b"actualAngelsAt" in js
-        assert b"bullseyePopupKey" in js
-        assert b"|line" in js and b"|dot" in js
-        assert b"setLatLng(event.latlng)" in js
-        assert b"drawActualBullseyeCompass" in js
+        _assert_picture_overlay_review_contract(js)
     finally:
         server.shutdown()
+
+
+def _assert_picture_overlay_review_contract(js):
+    """Guard the shared live-map/viewer review interactions in served JS.
+
+    This is an asset-level regression check, not a substitute for exercising
+    Leaflet in a browser. It catches accidental removal or rewiring of the
+    click/popup/compass contract for both routes that serve map.js.
+    """
+    assert b"Possible STT repair" in js
+    assert b"STT reading" in js
+    assert b"Actual ${call.point}:" in js
+    assert b"actualAngelsAt" in js
+    assert b"name === 'kutasi'" in js
+
+    # All arrow parts and the actual-position ring are independently clickable.
+    assert b"`${popupKeyBase}|line`" in js
+    assert b"`${popupKeyBase}|head:${side}`" in js
+    assert b"`${popupKeyBase}|dot`" in js
+    assert b"bindBullseyePopup(ring, popupKey, popupText, showCompass)" in js
+
+    # The popup is anchored where the user clicked; redraws don't recenter it
+    # on the arrow midpoint. Its own remove lifecycle clears popup/compass state.
+    draw_calls = js.split(b"function drawBullseyeCalls", 1)[1].split(
+        b"function bindBullseyePopup", 1)[0]
+    assert b"bullseyeLayer.clearLayers()" in draw_calls  # each poll redraws
+    assert b".setLatLng(" not in draw_calls  # redraw never moves an open popup
+    assert b".setLatLng(event.latlng)" in js
+    assert b"popup.on('remove'" in js
+    assert b"if (bullseyePopup === popup)" in js
+    assert b"bullseyePopupKey = null;" in js
+    assert b"clearBullseyeCompass();" in js
+
+    # Compass inspection is triggered from the ring popup click and is drawn
+    # from the BRA reference (bullseye or named marking point) to actual pos.
+    assert b"const showCompass = () => drawActualBullseyeCompass(" in js
+    assert b"bearingRange(call.lat, call.lon, c.lat, c.lon)" in js
+    assert b"call.lat, call.lon, c.lat, c.lon, actualBRA[0]" in js
+    assert b"popup.openOn(map);\n    if (onClick) onClick();" in js
+    assert b"const bull = [bullLat, bullLon];" in js
+    assert b"const actual = [actualLat, actualLon];" in js
+    assert b"destMeters(bullLat, bullLon, 0, 10 * 1852)" in js
+    assert b"const arc = [];" in js
 
 
 def test_start_map_server_returns_running_server(brain, airfield):

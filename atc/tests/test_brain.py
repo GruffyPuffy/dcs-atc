@@ -3114,7 +3114,7 @@ def test_stt_joined_four_is_repaired_for_named_marking_point(brain, airfield):
     track = _track(airfield, lat, lon, alt_ft=18000)
     _stingray(brain)
     reply = brain.handle(
-        "Stingray, Colt 1, marking Kutaisi, 457, 440, angels, 18",
+        "Stingray, Colt 1, marking Kutasi, 457, 440, angels, 18",
         controller=Controller.STINGRAY, track=track)
     assert "radar contact" in reply.lower(), reply
 

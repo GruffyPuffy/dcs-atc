@@ -2647,6 +2647,8 @@ class AtcBrain:
             return None
         label = self.airfield.name
         known = {label.lower()}
+        if label.lower() == "kutaisi":
+            known.add("kutasi")  # common STT spelling of Kutaisi
         ctr = getattr(self.airfield.ctr, "name", "") or ""
         if ctr.lower().endswith(" ctr"):
             known.add(ctr[:-4].strip().lower())
