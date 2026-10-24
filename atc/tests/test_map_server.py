@@ -601,6 +601,7 @@ def test_http_endpoints_serve_api_and_page(brain, airfield):
         assert b"bullseyePopupKey" in js
         assert b"|line" in js and b"|dot" in js
         assert b"setLatLng(event.latlng)" in js
+        assert b"drawActualBullseyeCompass" in js
     finally:
         server.shutdown()
 
@@ -628,6 +629,7 @@ def test_viewer_serves_repaired_picture_overlay_asset(airfield, tmp_path):
         assert b"bullseyePopupKey" in js
         assert b"|line" in js and b"|dot" in js
         assert b"setLatLng(event.latlng)" in js
+        assert b"drawActualBullseyeCompass" in js
     finally:
         server.shutdown()
 

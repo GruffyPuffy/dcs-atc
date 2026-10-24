@@ -8,7 +8,8 @@ const PHASE_COLOR = {
 };
 
 let map, ctrLayer, staticLayer, aircraftLayer, aiLayer, chartLayer, pathLayer, commLayer;
-let bullseyeLayer;  // debug overlay: bullseye picture calls (arrow + accuracy ring)
+let bullseyeLayer;  // STT readings, candidate repairs, and actual-position rings
+let bullseyeCompassLayer;  // shown only while inspecting an actual-position popup
 let baseLayer;  // the base-map tile layer (OSM or DCS); swapped on config change
 let baseLayerName = '';
 let vectorSpec = null;     // dcsmaps WMS overlay (airbases/towns/navaids)
@@ -41,6 +42,8 @@ function initMap(center) {
   map.on('click', () => {
     commPopupKey = null;
     bullseyePopupKey = null;
+    bullseyePopup = null;
+    clearBullseyeCompass();
   });
   // The base layer is set from the server payload (OSM or DCS tiles) on the
   // first snapshot; start with OSM so the map renders immediately.
@@ -54,6 +57,7 @@ function initMap(center) {
   pathLayer = L.layerGroup().addTo(map);
   commLayer = L.layerGroup().addTo(map);
   bullseyeLayer = L.layerGroup().addTo(map);
+  bullseyeCompassLayer = L.layerGroup().addTo(map);
   aiLayer = L.layerGroup().addTo(map);
   aircraftLayer = L.layerGroup().addTo(map);
   document.getElementById('chart-toggle').addEventListener('change', (e) => {
@@ -554,21 +558,28 @@ function drawBullseyeCalls(aircraft, af) {
         const popupKey = `${ac.callsign}|${c.t || ''}|${c.lat},${c.lon}|`
           + `${c.text}|actual`;
         ring.addTo(bullseyeLayer);
-        bindBullseyePopup(ring, popupKey, popupText);
+        const showCompass = actualBullseye
+          ? () => drawActualBullseyeCompass(
+            af.bullseye[0], af.bullseye[1], c.lat, c.lon,
+            actualBullseye[0])
+          : null;
+        bindBullseyePopup(ring, popupKey, popupText, showCompass);
       }
     }
   }
 }
 
-function bindBullseyePopup(layer, key, text) {
+function bindBullseyePopup(layer, key, text, onClick = null) {
   layer.on('click', (event) => {
     if (bullseyePopupKey === key && bullseyePopup
         && map.hasLayer(bullseyePopup)) {
       map.closePopup(bullseyePopup);
       bullseyePopup = null;
       bullseyePopupKey = null;
+      clearBullseyeCompass();
       return;
     }
+    clearBullseyeCompass();
     bullseyePopupKey = key;
     const popup = L.popup({ maxWidth: 320, className: 'comm-popup' })
       .setLatLng(event.latlng)
@@ -578,11 +589,68 @@ function bindBullseyePopup(layer, key, text) {
       if (bullseyePopup === popup) {
         bullseyePopup = null;
         bullseyePopupKey = null;
+        clearBullseyeCompass();
       }
     });
     popup.openOn(map);
+    if (onClick) onClick();
   });
   return layer;
+}
+
+function drawActualBullseyeCompass(bullLat, bullLon, actualLat, actualLon,
+                                   bearing) {
+  clearBullseyeCompass();
+  if (!bullseyeCompassLayer) return;
+  const bull = [bullLat, bullLon];
+  const actual = [actualLat, actualLon];
+  const color = '#db61a2';
+
+  // The long magenta vector is the aircraft's real position from bullseye.
+  L.polyline([bull, actual], {
+    color, weight: 3, opacity: 0.95, interactive: false,
+  }).addTo(bullseyeCompassLayer);
+  for (const side of [-150, 150]) {
+    const barb = destMeters(actualLat, actualLon, bearing + side, 3000);
+    L.polyline([actual, barb], {
+      color, weight: 3, opacity: 0.95, interactive: false,
+    }).addTo(bullseyeCompassLayer);
+  }
+
+  // A north reference and an arc make the actual bearing readable as an
+  // angle, rather than just another long line across the map.
+  const northEnd = destMeters(bullLat, bullLon, 0, 10 * 1852);
+  L.polyline([bull, northEnd], {
+    color: '#8b949e', weight: 2, opacity: 0.85, dashArray: '5 5',
+    interactive: false,
+  }).addTo(bullseyeCompassLayer);
+  const arcRadiusM = 8 * 1852;
+  const arc = [];
+  for (let degree = 0; degree < bearing; degree += 3)
+    arc.push(destMeters(bullLat, bullLon, degree, arcRadiusM));
+  arc.push(destMeters(bullLat, bullLon, bearing, arcRadiusM));
+  if (arc.length > 1) {
+    L.polyline(arc, {
+      color, weight: 2, opacity: 0.9, interactive: false,
+    }).addTo(bullseyeCompassLayer);
+  }
+
+  const midpoint = bearing / 2;
+  const labelPos = destMeters(bullLat, bullLon, midpoint, 10 * 1852);
+  const bearingText = String(Math.round(bearing) % 360).padStart(3, '0');
+  L.marker(labelPos, {
+    icon: L.divIcon({
+      className: '',
+      html: `<div style="color:${color};font-weight:700;white-space:nowrap;`
+        + `text-shadow:0 1px 2px #fff,0 0 4px #fff">${bearingText}°</div>`,
+      iconSize: [44, 18], iconAnchor: [22, 9],
+    }),
+    interactive: false, keyboard: false,
+  }).addTo(bullseyeCompassLayer);
+}
+
+function clearBullseyeCompass() {
+  if (bullseyeCompassLayer) bullseyeCompassLayer.clearLayers();
 }
 
 function actualAngelsAt(ac, comm) {
