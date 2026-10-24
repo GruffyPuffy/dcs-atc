@@ -9,6 +9,7 @@ Usage:
                       [--eam atc] [--stt-model small.en] [--voice en_US-amy-medium]
                       [--ground-voice en_US-ryan-medium]
                       [--control-voice en_US-lessac-medium]
+                      [--stingray-voice en_US-joe-medium]
                       [--atis-voice en_GB-alan-medium]
                       [--log /tmp/atc_log.txt] [--gain 1.0] [--tx-volume 0.6]
                       [--save-audio]

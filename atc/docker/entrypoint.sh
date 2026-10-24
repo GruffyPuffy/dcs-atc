@@ -66,7 +66,8 @@ fi
 # The model downloads into HF_HOME on first use; voices are fetched here.
 log "Ensuring Piper voices..."
 uv run python -m piper.download_voices \
-    en_US-amy-medium en_US-ryan-medium en_US-lessac-medium en_GB-alan-medium \
+    en_US-amy-medium en_US-ryan-medium en_US-lessac-medium en_US-joe-medium \
+    en_GB-alan-medium \
     --download-dir voices || log "voice download failed (will retry next start)"
 
 # --- 4. Viewer credentials ---------------------------------------------------
