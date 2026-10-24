@@ -3096,16 +3096,61 @@ def test_spoken_bullseye_call_is_folded(brain):
 
 
 def test_stt_commas_and_joined_four_are_verified_against_track(brain):
-    from ctr import AircraftTrack
+    from scenario import _bearing_range_point
     brain.set_bullseye(42.05, 42.40)
-    track = AircraftTrack(callsign="Colt 1", inside=False, lat=42.6, lon=42.5,
-                          alt_ft=18000, distance_nm=33, relative="north",
-                          heading=0)
+    lat, lon = _bearing_range_point(42.05, 42.40, 57, 40)
+    track = _track(brain.airfield, lat, lon, alt_ft=18000)
     _stingray(brain)
     reply = brain.handle(
-        "Stingray, Colt 1, Bullseye, 408, 433, Angels, 18, as fragged",
+        "Stingray, Colt 1, Bullseye, 457, 440, Angels, 18, as fragged",
         controller=Controller.STINGRAY, track=track)
     assert "radar contact" in reply.lower(), reply
+
+
+def test_stt_joined_four_is_repaired_for_named_marking_point(brain, airfield):
+    from scenario import _bearing_range_point
+    lat, lon = _bearing_range_point(airfield.ctr.center_lat,
+                                    airfield.ctr.center_lon, 57, 40)
+    track = _track(airfield, lat, lon, alt_ft=18000)
+    _stingray(brain)
+    reply = brain.handle(
+        "Stingray, Colt 1, marking Kutaisi, 457, 440, angels, 18",
+        controller=Controller.STINGRAY, track=track)
+    assert "radar contact" in reply.lower(), reply
+
+
+def test_stt_joined_four_is_not_repaired_when_track_disagrees(brain):
+    from scenario import _bearing_range_point
+    brain.set_bullseye(42.05, 42.40)
+    lat, lon = _bearing_range_point(42.05, 42.40, 220, 25)
+    track = _track(brain.airfield, lat, lon, alt_ft=18000)
+    _stingray(brain)
+    reply = brain.handle(
+        "Stingray, Colt 1, Bullseye, 457, 440, Angels, 18, as fragged",
+        controller=Controller.STINGRAY, track=track)
+    assert "negative" in reply.lower(), reply
+
+
+def test_stt_joined_four_repairs_one_digit_bearing_and_range(brain, airfield):
+    from scenario import _bearing_range_point
+
+    # "for 5" can become "45" in either BRA field. Position verification
+    # disambiguates that from a literal 045-degree bearing / 45-NM range.
+    brain.set_bullseye(42.05, 42.40)
+    bull_lat, bull_lon = _bearing_range_point(42.05, 42.40, 5, 5)
+    bull_track = _track(airfield, bull_lat, bull_lon, alt_ft=18000)
+    mark_lat, mark_lon = _bearing_range_point(
+        airfield.ctr.center_lat, airfield.ctr.center_lon, 5, 5)
+    mark_track = _track(airfield, mark_lat, mark_lon, alt_ft=18000)
+
+    _stingray(brain)
+    for text, track in (
+        ("Stingray, Colt 1, Bullseye, 45, 45, Angels, 18", bull_track),
+        ("Stingray, Colt 1, marking Kutaisi, 45, 45, Angels, 18",
+         mark_track),
+    ):
+        reply = brain.handle(text, controller=Controller.STINGRAY, track=track)
+        assert "radar contact" in reply.lower(), reply
 
 
 def test_spoken_marking_call_is_folded(brain):

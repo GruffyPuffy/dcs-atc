@@ -305,31 +305,46 @@ def parse_bullseye_call(text: str) -> tuple[float, float] | None:
     return float(match.group(1)), float(match.group(2))
 
 
-def _picture_call_variants(text: str) -> list[tuple[float, float]]:
-    """Return conservative numeric readings for common STT digit merges.
+def _picture_bra_variants(bearing: float,
+                          distance: float) -> list[tuple[float, float]]:
+    """Return plausible BRA readings for STT joining "for" into a figure.
 
-    Keep the literal reading first. If STT has glued a leading spoken "four"
-    onto a two-digit bearing/range ("57" -> "457", "40" -> "440"), also try
-    the suffix. These readings are only accepted when the live position
-    independently verifies them within the normal tolerances.
+    Keep the literal reading first. STT can turn "for 57" into "457" and
+    "for 5" into "45"; try removing that leading four from either BRA field.
+    A candidate is only accepted when the live position verifies it within the
+    normal tolerances, so legitimate 045 / 45 readings remain valid too.
     """
-    canonical = parse_bullseye_call(text)
-    if canonical is None:
-        return []
-    bearing, distance = canonical
+    canonical = (bearing, distance)
     choices = [canonical]
     bearings = [bearing]
     ranges = [distance]
-    if bearing >= 360:
-        bearings.append(bearing % 100)
-    if distance >= 100 and int(distance) // 100 == 4:
-        ranges.append(distance % 100)
+
+    def without_joined_four(value: float) -> float | None:
+        # Three digit form: "457" -> "57". Two digit form: "45" -> "5".
+        if 400 <= value < 500:
+            return value % 100
+        if 40 <= value < 50:
+            return value % 10
+        return None
+
+    bearing_variant = without_joined_four(bearing)
+    range_variant = without_joined_four(distance)
+    if bearing_variant is not None:
+        bearings.append(bearing_variant)
+    if range_variant is not None:
+        ranges.append(range_variant)
     for candidate_bearing in bearings:
         for candidate_range in ranges:
             candidate = (candidate_bearing, candidate_range)
             if candidate not in choices:
                 choices.append(candidate)
     return choices
+
+
+def _picture_call_variants(text: str) -> list[tuple[float, float]]:
+    """Read all plausible bullseye BRA values from a folded call."""
+    canonical = parse_bullseye_call(text)
+    return (_picture_bra_variants(*canonical) if canonical is not None else [])
 
 
 def parse_marking_call(text: str) -> tuple[str, float, float] | None:
@@ -2582,7 +2597,8 @@ class AtcBrain:
         marking = parse_marking_call(low)
         if marking is not None:
             name, reported_bearing, reported_range = marking
-            reported_variants = [(reported_bearing, reported_range)]
+            reported_variants = _picture_bra_variants(reported_bearing,
+                                                       reported_range)
             point = self._resolve_point(name)
         else:
             reported_variants = _picture_call_variants(low)

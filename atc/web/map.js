@@ -24,6 +24,8 @@ const commMarkers = new Map();  // callsign -> L.layerGroup
 // 2 s, so we reopen only the popup the user actually opened, and a map click
 // clears this so a dismissed popup stays dismissed.
 let commPopupKey = null;
+let bullseyePopupKey = null;
+let bullseyePopup = null;
 
 function initMap(center) {
   map = L.map('map', { preferCanvas: true }).setView(center, 11);
@@ -36,7 +38,10 @@ function initMap(center) {
   map.on('moveend', scheduleVectors);
   map.on('zoomend', scheduleVectors);
   // Clicking the map (not a marker) dismisses any open comm popup for good.
-  map.on('click', () => { commPopupKey = null; });
+  map.on('click', () => {
+    commPopupKey = null;
+    bullseyePopupKey = null;
+  });
   // The base layer is set from the server payload (OSM or DCS tiles) on the
   // first snapshot; start with OSM so the map renders immediately.
   baseLayer = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -437,67 +442,166 @@ function parsePictureCall(text, af) {
 }
 
 function drawBullseyeCalls(aircraft, af) {
-  // Debug overlay: for every bullseye/marking picture call, draw an arrow from
-  // the named point along the *reported* bearing/range, plus a ring around the
-  // aircraft's *actual* position at the tolerance radius. If the arrow tip
-  // lands inside the ring, the reported position was good enough — readable at
-  // a glance from the trail, without re-running the check.
+  // Show the literal STT reading and plausible "for"-joined repairs. The
+  // recorded position marks which interpretation, if any, agrees with the
+  // flight; it does not erase the raw reading from the review.
   //
   // Colours are chosen to stay visible on the map's green/tan terrain: the
-  // arrow is amber, the accuracy ring magenta (a green ring vanished against
-  // the terrain).
+  // arrow is amber, repaired readings blue, and the accuracy ring magenta (a
+  // green ring vanished against the terrain).
   bullseyeLayer.clearLayers();
   for (const ac of aircraft) {
     for (const c of (ac.comms || [])) {
       const call = parsePictureCall(c.text, af);
       if (!call) continue;
-      // Match the brain's STT repair: accept a dropped leading "four" only
-      // when a candidate BRA agrees with this recorded aircraft position.
-      if (c.lat != null && c.lon != null) {
-        const bearings = [call.bearing];
-        const ranges = [call.range];
-        if (call.bearing >= 360) bearings.push(call.bearing % 100);
-        if (call.range >= 400 && call.range < 500)
-          ranges.push(call.range % 100);
-        const candidates = bearings.flatMap((bearing) =>
-          ranges.map((range) => [bearing, range]));
-        const actual = bearingRange(call.lat, call.lon, c.lat, c.lon);
-        const match = candidates.find(([b, r]) =>
-          Math.abs((b - actual[0] + 180) % 360 - 180) <= BULLSEYE_TOL_DEG
-          && Math.abs(r - actual[1]) <= BULLSEYE_TOL_NM);
-        if (match) [call.bearing, call.range] = match;
+      const bearings = [call.bearing];
+      const ranges = [call.range];
+      const withoutJoinedFour = (value) => {
+        if (value >= 400 && value < 500) return value % 100;
+        if (value >= 40 && value < 50) return value % 10;
+        return null;
+      };
+      const bearingVariant = withoutJoinedFour(call.bearing);
+      const rangeVariant = withoutJoinedFour(call.range);
+      if (bearingVariant != null) bearings.push(bearingVariant);
+      if (rangeVariant != null) ranges.push(rangeVariant);
+      const candidates = bearings.flatMap((bearing) =>
+        ranges.map((range) => [bearing, range]));
+      const actual = c.lat != null && c.lon != null
+        ? bearingRange(call.lat, call.lon, c.lat, c.lon) : null;
+      const matches = actual ? candidates.filter(([bearing, range]) =>
+        Math.abs((bearing - actual[0] + 180) % 360 - 180)
+          <= BULLSEYE_TOL_DEG
+        && Math.abs(range - actual[1]) <= BULLSEYE_TOL_NM) : [];
+      const raw = candidates[0];
+      const rawMatches = matches.some(([bearing, range]) =>
+        bearing === raw[0] && range === raw[1]);
+      // If a repair matches the recorded position, it is the useful alternate
+      // to show. If none match (or there is no recorded position), show every
+      // plausible repair so the review makes the uncertainty visible.
+      const repairs = candidates.slice(1);
+      const repairsToDraw = rawMatches ? [] : (matches.length
+        ? matches.filter(([bearing, range]) =>
+          bearing !== raw[0] || range !== raw[1])
+        : repairs);
+      const angels = call.angels != null ? `, angels ${call.angels}` : '';
+      const stamp = ` · ${c.t || ''}`;
+
+      const drawArrow = (bearing, range, repaired, matched) => {
+        const tip = destMeters(call.lat, call.lon, bearing, range * 1852);
+        const bearingText = String(bearing).padStart(3, '0');
+        let label = `${repaired ? 'Possible STT repair' : 'STT reading'}: `
+          + `${call.point} ${bearingText} for ${range}${angels}`;
+        if (repaired) {
+          label += ` (from ${String(raw[0]).padStart(3, '0')} for ${raw[1]})`;
+          label += actual ? (matched ? ' · matches recorded position'
+                                     : ' · does not match recorded position')
+            : ' · position unavailable';
+        }
+        label += stamp;
+        const color = repaired ? '#58a6ff' : '#d29922';
+        const style = { color, weight: 2, opacity: 0.95 };
+        if (repaired) style.dashArray = '6 5';
+        const popupKeyBase = `${ac.callsign}|${c.t || ''}|${c.lat},${c.lon}|`
+          + `${c.text}|${repaired ? 'repair' : 'raw'}|${bearing},${range}`;
+        const mainLine = L.polyline([[call.lat, call.lon], tip], {
+          ...style, bubblingMouseEvents: false,
+        });
+        mainLine.addTo(bullseyeLayer);
+        bindBullseyePopup(mainLine, `${popupKeyBase}|line`, label);
+        for (const side of [-150, 150]) {
+          const barb = destMeters(tip[0], tip[1], bearing + side, 2500);
+          const arrowhead = L.polyline([tip, barb], {
+            ...style, bubblingMouseEvents: false,
+          });
+          arrowhead.addTo(bullseyeLayer);
+          bindBullseyePopup(arrowhead, `${popupKeyBase}|head:${side}`, label);
+        }
+        const dot = L.circleMarker(tip, {
+          radius: 4, color, weight: 2, fillColor: color,
+          fillOpacity: 0.9, bubblingMouseEvents: false,
+        });
+        dot.addTo(bullseyeLayer);
+        bindBullseyePopup(dot, `${popupKeyBase}|dot`, label);
+      };
+
+      drawArrow(raw[0], raw[1], false, rawMatches);
+      for (const [bearing, range] of repairsToDraw) {
+        const matched = matches.some(([b, r]) => b === bearing && r === range);
+        drawArrow(bearing, range, true, matched);
       }
-      // Where the pilot *said* they were: from the named point, along the
-      // reported bearing, at the reported range.
-      const tip = destMeters(call.lat, call.lon, call.bearing,
-                             call.range * 1852);
-      const label = `${call.point} ${String(call.bearing).padStart(3, '0')} `
-        + `for ${call.range}`
-        + (call.angels != null ? `, angels ${call.angels}` : '')
-        + ` · ${c.t || ''}`;
-      L.polyline([[call.lat, call.lon], tip], {
-        color: '#d29922', weight: 2, opacity: 0.95,
-      }).bindTooltip(label).addTo(bullseyeLayer);
-      // Arrowhead at the reported point, so the direction of the call reads.
-      for (const side of [-150, 150]) {
-        const barb = destMeters(tip[0], tip[1], call.bearing + side, 2500);
-        L.polyline([tip, barb], {
-          color: '#d29922', weight: 2, opacity: 0.95, interactive: false,
-        }).addTo(bullseyeLayer);
-      }
-      L.circleMarker(tip, {
-        radius: 4, color: '#d29922', weight: 2, fillColor: '#d29922',
-        fillOpacity: 0.9,
-      }).addTo(bullseyeLayer);
       // Where the aircraft *actually* was, with the tolerance as a ring.
       if (c.lat != null && c.lon != null) {
-        L.circle([c.lat, c.lon], {
+        const actualBullseye = af.bullseye && af.bullseye.length === 2
+          ? bearingRange(af.bullseye[0], af.bullseye[1], c.lat, c.lon)
+          : null;
+        const ring = L.circle([c.lat, c.lon], {
           radius: BULLSEYE_TOL_NM * 1852, color: '#db61a2', weight: 2,
-          opacity: 0.95, dashArray: '4 4', fill: false, interactive: false,
-        }).addTo(bullseyeLayer);
+          opacity: 0.95, dashArray: '4 4', fill: false,
+          bubblingMouseEvents: false,
+        });
+        let popupText = 'Actual bullseye unavailable (mission bullseye not set).';
+        if (actualBullseye) {
+          const actualBearing = String(Math.round(actualBullseye[0]) % 360)
+            .padStart(3, '0');
+          const actualRange = Math.round(actualBullseye[1]);
+          const altitude = actualAngelsAt(ac, c);
+          const angels = altitude == null ? ''
+            : `, Angels ${Math.round(altitude / 1000)}`;
+          popupText = `Actual bullseye: ${actualBearing} for ${actualRange}`
+            + angels;
+        }
+        const popupKey = `${ac.callsign}|${c.t || ''}|${c.lat},${c.lon}|`
+          + `${c.text}|actual`;
+        ring.addTo(bullseyeLayer);
+        bindBullseyePopup(ring, popupKey, popupText);
       }
     }
   }
+}
+
+function bindBullseyePopup(layer, key, text) {
+  layer.on('click', (event) => {
+    if (bullseyePopupKey === key && bullseyePopup
+        && map.hasLayer(bullseyePopup)) {
+      map.closePopup(bullseyePopup);
+      bullseyePopup = null;
+      bullseyePopupKey = null;
+      return;
+    }
+    bullseyePopupKey = key;
+    const popup = L.popup({ maxWidth: 320, className: 'comm-popup' })
+      .setLatLng(event.latlng)
+      .setContent(`<div class="comm-tip">${text}</div>`);
+    bullseyePopup = popup;
+    popup.on('remove', () => {
+      if (bullseyePopup === popup) {
+        bullseyePopup = null;
+        bullseyePopupKey = null;
+      }
+    });
+    popup.openOn(map);
+  });
+  return layer;
+}
+
+function actualAngelsAt(ac, comm) {
+  if (comm.alt_ft != null && Number.isFinite(Number(comm.alt_ft)))
+    return Number(comm.alt_ft);
+  // Older debriefs store altitude on path points, not on radio calls. Calls
+  // are pinned to the last recorded position, so use the nearest path sample
+  // when it is close enough to represent the call's position.
+  let closestAlt = null;
+  let closestNm = Infinity;
+  for (const point of (ac.path || [])) {
+    if (!Array.isArray(point) || point.length < 3) continue;
+    const distance = bearingRange(comm.lat, comm.lon, point[0], point[1])[1];
+    if (distance < closestNm) {
+      closestNm = distance;
+      closestAlt = Number(point[2]);
+    }
+  }
+  return closestNm <= 0.1 && Number.isFinite(closestAlt) ? closestAlt : null;
 }
 
 function bearingRange(lat1, lon1, lat2, lon2) {

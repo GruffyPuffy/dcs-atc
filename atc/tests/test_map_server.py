@@ -594,6 +594,40 @@ def test_http_endpoints_serve_api_and_page(brain, airfield):
         assert b'id="map"' in html
         js = urllib.request.urlopen(f"http://127.0.0.1:{port}/map.js").read()
         assert b"L.map" in js
+        assert b"Possible STT repair" in js
+        assert b"STT reading" in js
+        assert b"Actual bullseye:" in js
+        assert b"actualAngelsAt" in js
+        assert b"bullseyePopupKey" in js
+        assert b"|line" in js and b"|dot" in js
+        assert b"setLatLng(event.latlng)" in js
+    finally:
+        server.shutdown()
+
+
+def test_viewer_serves_repaired_picture_overlay_asset(airfield, tmp_path):
+    import base64
+    from viewer import ViewerService, make_handler as make_viewer_handler
+
+    service = ViewerService(airfield, tmp_path, None,
+                            credentials={"reviewer": "secret"})
+    server = ThreadingHTTPServer(
+        ("127.0.0.1", 0), make_viewer_handler(service))
+    port = server.server_address[1]
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        token = base64.b64encode(b"reviewer:secret").decode()
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{port}/map.js",
+            headers={"Authorization": f"Basic {token}"})
+        js = urllib.request.urlopen(request).read()
+        assert b"Possible STT repair" in js
+        assert b"STT reading" in js
+        assert b"Actual bullseye:" in js
+        assert b"actualAngelsAt" in js
+        assert b"bullseyePopupKey" in js
+        assert b"|line" in js and b"|dot" in js
+        assert b"setLatLng(event.latlng)" in js
     finally:
         server.shutdown()
 
