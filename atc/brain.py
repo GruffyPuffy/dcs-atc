@@ -275,8 +275,8 @@ def _stem(word: str) -> str:
 # the map server can parse the same call for its debug overlay (one parser, so
 # the drawn arrow can never disagree with what the brain checked).
 _BULLSEYE_CALL_RE = re.compile(
-    r"\bbull'?s?eye\b\s*(\d{2,3})\s*(?:for|at)\s*(\d{1,3})")
-_ANGELS_RE = re.compile(r"\bangels\s*(\d{1,3})\b")
+    r"\bbull'?s?eye\b\s*,?\s*(\d{2,3})\s*(?:for|at|,)\s*(\d{1,3})")
+_ANGELS_RE = re.compile(r"\bangels\s*,?\s*(\d{1,3})\b")
 # An exact-altitude statement: "angels 15703", "15703 feet", "15703 tf". The SOP
 # wants whole thousands ("angels 16"); reading the digits off the altimeter is a
 # habit the trainer should coach out (Mags: "Apollo blir irriterad om man läser
@@ -303,6 +303,33 @@ def parse_bullseye_call(text: str) -> tuple[float, float] | None:
     if not match:
         return None
     return float(match.group(1)), float(match.group(2))
+
+
+def _picture_call_variants(text: str) -> list[tuple[float, float]]:
+    """Return conservative numeric readings for common STT digit merges.
+
+    Keep the literal reading first. If STT has glued a leading spoken "four"
+    onto a two-digit bearing/range ("57" -> "457", "40" -> "440"), also try
+    the suffix. These readings are only accepted when the live position
+    independently verifies them within the normal tolerances.
+    """
+    canonical = parse_bullseye_call(text)
+    if canonical is None:
+        return []
+    bearing, distance = canonical
+    choices = [canonical]
+    bearings = [bearing]
+    ranges = [distance]
+    if bearing >= 360:
+        bearings.append(bearing % 100)
+    if distance >= 100 and int(distance) // 100 == 4:
+        ranges.append(distance % 100)
+    for candidate_bearing in bearings:
+        for candidate_range in ranges:
+            candidate = (candidate_bearing, candidate_range)
+            if candidate not in choices:
+                choices.append(candidate)
+    return choices
 
 
 def parse_marking_call(text: str) -> tuple[str, float, float] | None:
@@ -2555,19 +2582,25 @@ class AtcBrain:
         marking = parse_marking_call(low)
         if marking is not None:
             name, reported_bearing, reported_range = marking
+            reported_variants = [(reported_bearing, reported_range)]
             point = self._resolve_point(name)
         else:
-            reported = parse_bullseye_call(low)
-            if reported is None:
+            reported_variants = _picture_call_variants(low)
+            if not reported_variants:
                 return None
-            reported_bearing, reported_range = reported
             point = self._resolve_point("bullseye")
         if point is None:
             return None
         label, (plat, plon) = point
         bearing, distance = bearing_distance(plat, plon, track.lat, track.lon)
-        off_bearing = abs((reported_bearing - bearing + 180) % 360 - 180)
-        off_range = abs(reported_range - distance)
+        # STT sometimes joins a spoken "four" to the next figure: "for 57"
+        # becomes 457 and "for 40" becomes 440. Consider those interpretations
+        # only when the aircraft's actual BRA confirms one within tolerance.
+        matched = next((candidate for candidate in reported_variants
+                        if abs((candidate[0] - bearing + 180) % 360 - 180)
+                        <= BULLSEYE_TOLERANCE_DEG
+                        and abs(candidate[1] - distance)
+                        <= BULLSEYE_TOLERANCE_NM), None)
         # Angels: the call states the altitude in thousands of feet. Only
         # checked when the pilot actually said it (it is optional in the SOP
         # call), and only when we have a live altitude.
@@ -2575,8 +2608,7 @@ class AtcBrain:
         actual_angels = track.alt_ft / 1000.0
         off_angels = (abs(reported_angels - actual_angels)
                       if reported_angels is not None else 0.0)
-        if (off_bearing <= BULLSEYE_TOLERANCE_DEG
-                and off_range <= BULLSEYE_TOLERANCE_NM
+        if (matched is not None
                 and off_angels <= ANGELS_TOLERANCE_FT / 1000.0):
             return None
         return {"point": label, "bearing": f"{bearing:03.0f}",

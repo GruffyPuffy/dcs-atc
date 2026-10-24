@@ -409,7 +409,7 @@ function parsePictureCall(text, af) {
   const t = foldAngels(foldPictureFigures(text));
   const m = /\bmarking\s+([a-z']+)\s*,?\s*(\d{2,3})\s*(?:for|at|,)\s*(\d{1,3})\b/i
     .exec(t)
-    || /\bbull'?s?eye\b\s*(\d{2,3})\s*(?:for|at)\s*(\d{1,3})/i.exec(t);
+    || /\bbull'?s?eye\b\s*,?\s*(\d{2,3})\s*(?:for|at|,)\s*(\d{1,3})/i.exec(t);
   if (!m) return null;
   let point, lat, lon;
   if (m.length === 4) {
@@ -431,7 +431,7 @@ function parsePictureCall(text, af) {
   }
   const bearing = Number(m[m.length - 2]);
   const range = Number(m[m.length - 1]);
-  const a = /\bangels\s*(\d{1,3})\b/i.exec(t);
+  const a = /\bangels\s*,?\s*(\d{1,3})\b/i.exec(t);
   return { point, lat, lon, bearing, range,
            angels: a ? Number(a[1]) : null };
 }
@@ -451,6 +451,22 @@ function drawBullseyeCalls(aircraft, af) {
     for (const c of (ac.comms || [])) {
       const call = parsePictureCall(c.text, af);
       if (!call) continue;
+      // Match the brain's STT repair: accept a dropped leading "four" only
+      // when a candidate BRA agrees with this recorded aircraft position.
+      if (c.lat != null && c.lon != null) {
+        const bearings = [call.bearing];
+        const ranges = [call.range];
+        if (call.bearing >= 360) bearings.push(call.bearing % 100);
+        if (call.range >= 400 && call.range < 500)
+          ranges.push(call.range % 100);
+        const candidates = bearings.flatMap((bearing) =>
+          ranges.map((range) => [bearing, range]));
+        const actual = bearingRange(call.lat, call.lon, c.lat, c.lon);
+        const match = candidates.find(([b, r]) =>
+          Math.abs((b - actual[0] + 180) % 360 - 180) <= BULLSEYE_TOL_DEG
+          && Math.abs(r - actual[1]) <= BULLSEYE_TOL_NM);
+        if (match) [call.bearing, call.range] = match;
+      }
       // Where the pilot *said* they were: from the named point, along the
       // reported bearing, at the reported range.
       const tip = destMeters(call.lat, call.lon, call.bearing,
@@ -482,6 +498,19 @@ function drawBullseyeCalls(aircraft, af) {
       }
     }
   }
+}
+
+function bearingRange(lat1, lon1, lat2, lon2) {
+  const rad = Math.PI / 180;
+  const p1 = lat1 * rad, p2 = lat2 * rad;
+  const dl = (lon2 - lon1) * rad;
+  const y = Math.sin(dl) * Math.cos(p2);
+  const x = Math.cos(p1) * Math.sin(p2)
+    - Math.sin(p1) * Math.cos(p2) * Math.cos(dl);
+  const bearing = (Math.atan2(y, x) / rad + 360) % 360;
+  const a = Math.sin((p2-p1)/2) ** 2
+    + Math.cos(p1) * Math.cos(p2) * Math.sin(dl/2) ** 2;
+  return [bearing, 3440.065 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a))];
 }
 
 function destMeters(lat, lon, deg, meters) {

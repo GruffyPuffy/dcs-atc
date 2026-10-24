@@ -3095,6 +3095,19 @@ def test_spoken_bullseye_call_is_folded(brain):
             "bullseye zero six five for four zero"))) == (65.0, 40.0)
 
 
+def test_stt_commas_and_joined_four_are_verified_against_track(brain):
+    from ctr import AircraftTrack
+    brain.set_bullseye(42.05, 42.40)
+    track = AircraftTrack(callsign="Colt 1", inside=False, lat=42.6, lon=42.5,
+                          alt_ft=18000, distance_nm=33, relative="north",
+                          heading=0)
+    _stingray(brain)
+    reply = brain.handle(
+        "Stingray, Colt 1, Bullseye, 408, 433, Angels, 18, as fragged",
+        controller=Controller.STINGRAY, track=track)
+    assert "radar contact" in reply.lower(), reply
+
+
 def test_spoken_marking_call_is_folded(brain):
     # "marking Kutaisi two zero zero for twenty" -> "marking kutaisi 200 for 20".
     folded = _fold_bullseye_figures(_fold_spoken_figures(
