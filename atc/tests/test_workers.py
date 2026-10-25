@@ -3,7 +3,7 @@
 import threading
 import time
 
-from brain import Controller
+from brain import Controller, Phase
 from workers import ControllerWorker, SharedState, _state_changes, _state_snapshot
 
 
@@ -85,3 +85,31 @@ def test_worker_survives_bad_transcription(brain):
     worker.submit("PilotA", b"Tower, Colt 1, ready for departure", 2.0)
     worker.queue.join()
     assert spoken
+
+
+def test_worker_uses_the_keyup_position(brain):
+    """The brain verifies against the position at transmission START, not at
+    parse time: the pilot reads their instruments while speaking, and the
+    aircraft has moved on by the time Whisper finishes (see AGENTS-era saga:
+    'bullseye 056' was judged against a position reached seconds later)."""
+    spoken, log = [], []
+    shared = _shared(brain, spoken, log)
+    from ctr import AircraftTrack
+    # The parse-time track would fail the bullseye check; the key-up track is
+    # correct, so the check must use it.
+    start = AircraftTrack(callsign="Colt 1", inside=True, lat=42.4, lon=42.4,
+                          alt_ft=15000.0, distance_nm=40.0, relative="north",
+                          heading=90.0)
+    stingray = ControllerWorker(Controller.STINGRAY, 265_000_000, shared)
+    stingray.start()
+    stingray.submit("PilotA", b"Stingray, Colt 1, bullseye 056 for 36", 2.0,
+                    start_track=start)
+    stingray.queue.join()
+    # With the parse-time track (None -> shared.track_for) the call could not
+    # be verified; with the key-up snapshot it is acknowledged.
+    pilot = brain.pilots["Colt 1"]
+    assert pilot.phase == Phase.STINGRAY or "radar contact" in spoken[0][2]
+    # A transmission WITHOUT a snapshot still works (falls back to live track).
+    stingray.submit("PilotA", b"Stingray, Colt 1, help", 2.0)
+    stingray.queue.join()
+    assert len(spoken) == 2

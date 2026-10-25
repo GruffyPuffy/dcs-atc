@@ -1113,7 +1113,11 @@ with the debrief, so a replay shows it too.
 from the bullseye along the *reported* bearing/range, and a magenta ring around
 the aircraft's *actual* position at the tolerance radius. If the arrow tip lands
 inside the ring, the reported position was good enough — readable at a glance
-from the trail, without re-running the check.
+from the trail, without re-running the check. The actual position is the
+aircraft's **key-up** position (captured from the bridge at transmission
+start), not the parse-time one: Whisper takes seconds, and the aircraft has
+moved on by the time the call text exists (the pilot read the instruments
+while speaking).
 
 **Practising.** A pilot can fly around and make as many bullseye calls as they
 like; each is checked on its own merits. An **air-start** can check in with

@@ -732,12 +732,30 @@ def main() -> None:
     shared.coach = coach_note
 
 
+    # Position snapshots at key-up: the pilot reads their instruments while
+    # speaking, so the state that matches what they SAYS is the track at
+    # transmission START — not at parse time, where seconds of Whisper STT
+    # have already moved the aircraft past the reported position.
+    _start_tracks: dict[str, object] = {}
+    start_tracks_lock = threading.Lock()
+
+    def on_start(freq: float, who: str) -> None:
+        try:
+            track = track_for(who)
+        except Exception:
+            track = None
+        with start_tracks_lock:
+            if track is not None:
+                _start_tracks[who] = track
+
     def on_end(freq: float, who: str, pcm: bytes, duration: float) -> None:
         """SRS rx callback: enqueue to the right controller worker (never blocks)."""
+        with start_tracks_lock:
+            start_track = _start_tracks.pop(who, None)
         worker = workers.get(round(freq))
         if worker is None or duration < MIN_TRANSMISSION_SECONDS:
             return
-        worker.submit(who, apply_gain(pcm), duration)
+        worker.submit(who, apply_gain(pcm), duration, start_track)
 
     # TopGun easter egg: the tower position (from the bridge, cached) and the
     # per-callsign bust timer (close + low + fast held for BUST_HOLD_S).
@@ -1104,6 +1122,7 @@ def main() -> None:
         c.ignore_guids = set(own_guids)  # ignore every bot client, incl. self
     # Single RX entry point: the Tower client delivers every transmission.
     clients[Controller.TOWER].on_transmission_end = on_end
+    clients[Controller.TOWER].on_transmission_start = on_start
     client = clients[Controller.TOWER]  # SRS roster (positions) is shared
     for c in all_clients:
         c.start()

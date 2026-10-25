@@ -108,26 +108,34 @@ class ControllerWorker:
     def start(self) -> None:
         self._thread.start()
 
-    def submit(self, who: str, pcm: bytes, duration: float) -> None:
-        """Enqueue a finished transmission (called from the SRS rx thread)."""
-        self.queue.put((who, pcm, duration))
+    def submit(self, who: str, pcm: bytes, duration: float,
+               start_track=None) -> None:
+        """Enqueue a finished transmission (called from the SRS rx thread).
+
+        `start_track` is the aircraft's position at key-up (captured by the
+        SRS client on transmission start); parse-time snapshots lag the spoken
+        position by the whole Whisper pass, so the brain prefers this one.
+        """
+        self.queue.put((who, pcm, duration, start_track))
 
     def _run(self) -> None:
         while True:
-            who, pcm, duration = self.queue.get()
+            item = self.queue.get()
             try:
-                self._handle(who, pcm, duration)
+                self._handle(*item)
             except Exception as error:  # keep the worker alive
                 self.shared.log(f"{self.controller.value} worker error: {error}")
             finally:
                 self.queue.task_done()
 
-    def _handle(self, who: str, pcm: bytes, duration: float) -> None:
+    def _handle(self, who: str, pcm: bytes, duration: float,
+                start_track: object = None) -> None:
         tag = f"{self.controller.value}@{self.freq_hz / 1e6:.3f}"
         text = self.shared.transcribe(pcm, who, duration, self.controller)
         if not text:
             return
-        track = self.shared.track_for(who)
+        track = start_track if start_track is not None \
+            else self.shared.track_for(who)
         traffic = self.shared.traffic()
         with self.shared.lock:
             before = _state_snapshot(self.shared.brain)

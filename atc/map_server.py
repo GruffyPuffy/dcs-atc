@@ -447,6 +447,12 @@ def _airspace_payload(airfield: Airfield, basemap: str | None = None) -> dict:
         "elevation_ft": airfield.elevation_ft,
         "active_runway": airfield.active_runway,
         "center": [airfield.ctr.center_lat, airfield.ctr.center_lon],
+        # Instrument bearing convention (see ATC.md): geodesic true minus this
+        # offset = what the pilot's instruments/rulers display. The review
+        # needs it to compare spoken BRA digits with the recorded position
+        # while still drawing everything in the truthful geodesic frame.
+        "cockpit_bearing_offset_deg":
+            -(airfield.magnetic_variation_deg + airfield.map_rotation_deg),
         "ctr": {
             "ceiling_ft_agl": airfield.ctr.ceiling_ft_agl,
             "polygon": [list(p) for p in airfield.ctr.polygon_latlon],

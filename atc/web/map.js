@@ -451,6 +451,18 @@ function drawBullseyeCalls(aircraft, af) {
   // recorded position marks which interpretation, if any, agrees with the
   // flight; it does not erase the raw reading from the review.
   //
+  // Spoken BRA digits are in the pilot's *instrument* units (see ATC.md,
+  // "Instrument bearing convention"); the map itself is in geodesic truth.
+  // Rays are therefore drawn at the true-equivalent bearing (so they line up
+  // with the recorded trail), the match check compares instrument digits
+  // against the instrument-converted actual, and labels note the true value
+  // so the review stays readable in both units.
+  const cbOff = af.cockpit_bearing_offset_deg || 0;
+  const toTrue = (spoken) => (spoken - cbOff + 360) % 360;
+  const toInstrument = (trueBearing) =>
+    (trueBearing + cbOff + 360) % 360;
+  const fmtInst = (bearing) => String(Math.round(toInstrument(bearing)) % 360)
+    .padStart(3, '0');
   // Colours are chosen to stay visible on the map's green/tan terrain: the
   // arrow is amber, repaired readings blue, and the accuracy ring magenta (a
   // green ring vanished against the terrain).
@@ -474,33 +486,45 @@ function drawBullseyeCalls(aircraft, af) {
         ranges.map((range) => [bearing, range]));
       const actual = c.lat != null && c.lon != null
         ? bearingRange(call.lat, call.lon, c.lat, c.lon) : null;
+      // Matching happens in instrument units (the pilot speaks those).
+      const actualInst = actual
+        ? [toInstrument(actual[0]), actual[1]] : null;
       const matches = actual ? candidates.filter(([bearing, range]) =>
-        Math.abs((bearing - actual[0] + 180) % 360 - 180)
+        Math.abs((bearing - actualInst[0] + 180) % 360 - 180)
           <= BULLSEYE_TOL_DEG
-        && Math.abs(range - actual[1]) <= BULLSEYE_TOL_NM) : [];
+        && Math.abs(range - actualInst[1]) <= BULLSEYE_TOL_NM) : [];
       const raw = candidates[0];
       const rawMatches = matches.some(([bearing, range]) =>
         bearing === raw[0] && range === raw[1]);
-      // If a repair matches the recorded position, it is the useful alternate
-      // to show. If none match (or there is no recorded position), show every
-      // plausible repair so the review makes the uncertainty visible.
-      const repairs = candidates.slice(1);
-      const repairsToDraw = rawMatches ? [] : (matches.length
-        ? matches.filter(([bearing, range]) =>
-          bearing !== raw[0] || range !== raw[1])
-        : repairs);
+      // If any reading matches the recorded position, draw ONLY the matches —
+      // the other interpretations are noise once the flight proves which one
+      // is right. With no match (or no recorded position), draw every
+      // plausible reading so the review makes the uncertainty visible.
+      const arrows = rawMatches
+        ? [[raw[0], raw[1], false, true]]
+        : (matches.length
+          ? matches.map(([bearing, range]) =>
+            [bearing, range, bearing !== raw[0] || range !== raw[1], true])
+          : candidates.map(([bearing, range]) =>
+            [bearing, range, bearing !== raw[0] || range !== raw[1], false]));
       const angels = call.angels != null ? `, angels ${call.angels}` : '';
       const stamp = ` · ${c.t || ''}`;
 
-      const drawArrow = (bearing, range, repaired, matched) => {
-        const tip = destMeters(call.lat, call.lon, bearing, range * 1852);
-        const bearingText = String(bearing).padStart(3, '0');
+      const drawArrow = (spoken, range, repaired, matched) => {
+        // Ray at the true-equivalent of the spoken digits so it lines up
+        // with the recorded trail; the label carries the number as said.
+        const bearing = toTrue(spoken);
+        const tip = destMeters(
+          call.lat, call.lon, bearing, range * 1852);
+        const bearingText = String(spoken).padStart(3, '0');
         let label = `${repaired ? 'Possible STT repair' : 'STT reading'}: `
           + `${call.point} ${bearingText} for ${range}${angels}`;
+        if (cbOff) label += ` (instrument; true `
+          + `${String(Math.round(bearing) % 360).padStart(3, '0')})`;
         if (repaired) {
           label += ` (from ${String(raw[0]).padStart(3, '0')} for ${raw[1]})`;
           label += actual ? (matched ? ' · matches recorded position'
-                                     : ' · does not match recorded position')
+                                      : ' · does not match recorded position')
             : ' · position unavailable';
         }
         label += stamp;
@@ -508,7 +532,7 @@ function drawBullseyeCalls(aircraft, af) {
         const style = { color, weight: 2, opacity: 0.95 };
         if (repaired) style.dashArray = '6 5';
         const popupKeyBase = `${ac.callsign}|${c.t || ''}|${c.lat},${c.lon}|`
-          + `${c.text}|${repaired ? 'repair' : 'raw'}|${bearing},${range}`;
+          + `${c.text}|${repaired ? 'repair' : 'raw'}|${spoken},${range}`;
         const mainLine = L.polyline([[call.lat, call.lon], tip], {
           ...style, bubblingMouseEvents: false,
         });
@@ -530,10 +554,8 @@ function drawBullseyeCalls(aircraft, af) {
         bindBullseyePopup(dot, `${popupKeyBase}|dot`, label);
       };
 
-      drawArrow(raw[0], raw[1], false, rawMatches);
-      for (const [bearing, range] of repairsToDraw) {
-        const matched = matches.some(([b, r]) => b === bearing && r === range);
-        drawArrow(bearing, range, true, matched);
+      for (const [bearing, range, repaired, matched] of arrows) {
+        drawArrow(bearing, range, repaired, matched);
       }
       // Where the aircraft *actually* was, with the tolerance as a ring.
       if (c.lat != null && c.lon != null) {
@@ -550,12 +572,14 @@ function drawBullseyeCalls(aircraft, af) {
         const angels = altitude == null ? ''
           : `, Angels ${Math.round(altitude / 1000)}`;
         const popupText = `Actual ${call.point}: ${actualBearing} for `
-          + `${actualRange}${angels}`;
+          + `${actualRange}${angels}`
+          + (cbOff ? ` · ${fmtInst(actualBRA[0])} instrument` : '');
         const popupKey = `${ac.callsign}|${c.t || ''}|${c.lat},${c.lon}|`
           + `${c.text}|actual`;
         ring.addTo(bullseyeLayer);
-        const showCompass = () => drawActualBullseyeCompass(
-          call.lat, call.lon, c.lat, c.lon, actualBRA[0]);
+      const showCompass = () => drawActualBullseyeCompass(
+        call.lat, call.lon, c.lat, c.lon, actualBRA[0], cbOff,
+        cbOff ? fmtInst(actualBRA[0]) : null);
         bindBullseyePopup(ring, popupKey, popupText, showCompass);
       }
     }
@@ -592,7 +616,8 @@ function bindBullseyePopup(layer, key, text, onClick = null) {
 }
 
 function drawActualBullseyeCompass(bullLat, bullLon, actualLat, actualLon,
-                                   bearing) {
+                                   bearing, cbOff, instrumentText) {
+  cbOff = cbOff || 0;
   clearBullseyeCompass();
   if (!bullseyeCompassLayer) return;
   const bull = [bullLat, bullLon];
@@ -612,12 +637,41 @@ function drawActualBullseyeCompass(bullLat, bullLon, actualLat, actualLon,
   }
 
   // A north reference and an arc make the actual bearing readable as an
-  // angle, rather than just another long line across the map.
+  // angle, rather than just another long line across the map. With an
+  // instrument convention configured we also draw instrument north — the
+  // direction the ghetto cockpit calls "000" (true − offset) — so the pilot
+  // can read the picture in the same units they call out.
   const northEnd = destMeters(bullLat, bullLon, 0, 10 * 1852);
   L.polyline([bull, northEnd], {
     color: '#8b949e', weight: 2, opacity: 0.85, dashArray: '5 5',
     interactive: false,
   }).addTo(bullseyeCompassLayer);
+  L.marker([bullLat, bullLon], {
+    icon: L.divIcon({
+      className: '',
+      html: '<div style="color:#8b949e;font-weight:700;font-size:11px;'
+        + 'text-shadow:0 1px 2px #fff,0 0 4px #fff">N</div>',
+      iconSize: [16, 14], iconAnchor: [8, 7],
+    }),
+    interactive: false, keyboard: false,
+  }).addTo(bullseyeCompassLayer);
+  if (cbOff) {
+    const instNorth = destMeters(bullLat, bullLon, (-cbOff + 360) % 360,
+                                 10 * 1852);
+    L.polyline([bull, instNorth], {
+      color: '#d29922', weight: 2, opacity: 0.85, dashArray: '2 6',
+      interactive: false,
+    }).addTo(bullseyeCompassLayer);
+    L.marker(destMeters(bullLat, bullLon, (-cbOff + 360) % 360, 4 * 1852), {
+      icon: L.divIcon({
+        className: '',
+        html: '<div style="color:#d29922;font-weight:700;font-size:11px;'
+          + 'text-shadow:0 1px 2px #fff,0 0 4px #fff">instrument N</div>',
+        iconSize: [80, 14], iconAnchor: [40, 7],
+      }),
+      interactive: false, keyboard: false,
+    }).addTo(bullseyeCompassLayer);
+  }
   const arcRadiusM = 8 * 1852;
   const arc = [];
   for (let degree = 0; degree < bearing; degree += 3)
@@ -632,12 +686,14 @@ function drawActualBullseyeCompass(bullLat, bullLon, actualLat, actualLon,
   const midpoint = bearing / 2;
   const labelPos = destMeters(bullLat, bullLon, midpoint, 10 * 1852);
   const bearingText = String(Math.round(bearing) % 360).padStart(3, '0');
+  const arcLabel = cbOff && instrumentText
+    ? `${bearingText}° / ${instrumentText}°` : `${bearingText}°`;
   L.marker(labelPos, {
     icon: L.divIcon({
       className: '',
       html: `<div style="color:${color};font-weight:700;white-space:nowrap;`
-        + `text-shadow:0 1px 2px #fff,0 0 4px #fff">${bearingText}°</div>`,
-      iconSize: [44, 18], iconAnchor: [22, 9],
+        + `text-shadow:0 1px 2px #fff,0 0 4px #fff">${arcLabel}</div>`,
+      iconSize: [78, 18], iconAnchor: [22, 9],
     }),
     interactive: false, keyboard: false,
   }).addTo(bullseyeCompassLayer);
