@@ -137,3 +137,46 @@ Georeferenced earlier; see `atc/georef.py` `CHARTS["kutaisi"]` and
   and table rules. The click tool avoids the whole problem.
 - **Set the crop** to the map panel, or the overlay includes the title/legend.
 - **Attribute the source** when shipping someone else's chart (MA / Hoggit).
+
+---
+
+## 6. Memory: the DCS instrument bearing offset (why BRA never matched reality)
+
+Forensic saga, 2026-10-25 — recorded so no one has to re-derive this.
+
+**Positions are exact; *bearings* are not.** During the bullseye field test the
+bot said "bullseye 070 for 36" and the pilot read "056" off the instruments —
+14° apart, without either side being wrong. Three independent DCS readouts all
+sit ~12.5–14° counterclockwise of the geodesic truth the bot computes
+(haversine, textbook great-circle — verified exact):
+
+| instrument | geodesic truth | cockpit display | offset |
+|---|---|---|---|
+| bullseye BRA (16:12 test point) | 069.9 | 056 | −14 |
+| HSI runway-07 course | 080.4 | 068 | −12.4 |
+| HSI runway-25 course | 260.4 | 248 | −12.4 |
+| F10 ruler "T" field | 092.0 | 086 | −6 |
+| F10 ruler "M" field | 092.0 | 079 | −13 |
+
+**The decomposition** (community-documented, ED forums "Heading offset?",
+"carrier course heading", and the HUD-vs-HSI 2026 bug report):
+
+1. ~7° of it is **real physics** — Caucasus magnetic variation (the jet's own
+   TACAN page detects MVAR E 6°39').
+2. ~6° of it is a **DCS quirk**: the F10 map view and its ruler sit a few
+   degrees off the world's true meridian (the ruler measures against a rotated
+   XYZ grid; measuring a longitude line does not give 180). Cockpit bulls
+   readouts and course dials inherit the same reference.
+
+DCS disagrees with itself (runway data implies 12.5°E, the TACAN MVAR says
+6°39'), world vectors (`getHeading`-style, our bridge) are true, and clicked
+**coordinates** match the bot to the metre. It is a display-convention bug
+class, not a geometry bug.
+
+**Resolution we ship:** `airspace.json` per-airfield `magnetic_variation_deg`
++ `map_rotation_deg` (Kutaisi: 7 + 6); the brain converts every bearing-style
+number spoken to the pilot into **instrument units** ("cockpit display =
+true − variation − rotation"), while internal math/text readbacks/the web map
+stay geodesic. Wind stays true end-to-end. Verify and challenge speak in
+whichever units the pilot's instruments show — call it *instrument heading*.
+Details: ATC.md §Stingray, "Instrument bearing convention".
