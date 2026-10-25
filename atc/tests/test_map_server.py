@@ -255,6 +255,25 @@ def test_chatter_callsign_from_text_before_learned(brain, airfield):
     assert service.chatter()[-1]["callsign"] == "Colt 1"
 
 
+def test_chatter_coach_note_lands_in_the_pilot_debrief(brain, airfield):
+    # Coach mode delivers a wording note to ONE pilot as a direct in-game
+    # message and as a "coach" chatter entry: the note must carry that flight's
+    # callsign, so (a) the per-spawn debrief includes it (_filter_chatter),
+    # (b) it is pinned to the pilot's position on their trail and (c) it does
+    # NOT leak into another pilot's debrief.
+    service = MapService(airfield, brain, FakeState([]))
+    service.log_chatter("coach", 0.0, "Colt 1",
+                        "Apollo suggests: requesting taxi.", "coach")
+    entry = service.chatter()[-1]
+    assert entry["kind"] == "coach"
+    assert entry["callsign"] == "Colt 1"
+    theirs = service._filter_chatter("Caveman", "Colt 1")
+    assert any(e["kind"] == "coach" and "requesting taxi" in e["text"]
+               for e in theirs)
+    other = service._filter_chatter("Oscar", "Ford 2")
+    assert not [e for e in other if e["kind"] == "coach"]
+
+
 def test_chatter_uses_live_position_when_no_trail(brain, airfield):
     # The very first exchange has no trail point yet; the call must still be
     # pinned to the pilot's live position (asked from the state client).

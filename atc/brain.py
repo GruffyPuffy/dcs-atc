@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
+import coach
 import topgun
 from atis import wind_speed_kt
 from callsigns import CallsignRegistry, flight_name
@@ -517,10 +518,19 @@ class PilotState:
     last_clearance: str = ""  # last clearance issued, for readback verification
     last_controller: str = ""  # last agency talked to (for the map view)
     readback_fails: int = 0  # consecutive incomplete readbacks of one clearance
+    # Last transmission was judged as a READBACK (verified via _check_readback/
+    # _readback_coaching), so the coach can attach readback-specific wording
+    # notes (e.g. a callsign leading the readback). Reset on every call.
+    last_readback: bool = False
     # Ground has read out the runway/QNH (or weather) info, so a later call
     # naming "in use"/QNH is a readback of it. Without this, any transmission
     # that merely mentions "in use" was answered "readback correct".
     info_issued: bool = False
+    # Wording-coach note for the LAST transmission (coach mode only), to be
+    # delivered as a direct in-game message (not spoken on the radio). Set by
+    # AtcBrain.handle; the controller worker takes and clears it after the
+    # call ("take_coach") — never replayed by "say again".
+    pending_coach: str = ""
 
 
 class Phraseology:
@@ -586,6 +596,13 @@ class AtcBrain:
         # TTS output volume, adjustable at runtime with "trainer, volume 0.3".
         # None = use the --tx-volume default.
         self.tx_volume: float | None = None
+        # Trainer mode (GLOBAL, like tx_volume — not per pilot). Coach (the
+        # default) is the teaching persona: wording-suggestion talkback lives
+        # here later. Casual is the same semantic standards but relaxed — no
+        # wording suggestions, just ATC. Readback VALUES stay checked in both
+        # (they are semantics, not wording); there is deliberately no
+        # in-flight "strict" — strictness lives in the debrief scoring.
+        self.mode = "coach"
         # Rotates the departure exit gate between flights (no traffic), so a
         # pilot practises different exits instead of always the straight-out one.
         self._exit_rotation = 0
@@ -1233,6 +1250,7 @@ class AtcBrain:
         """
         agency = self._agency(controller)
         item = self._readback_item(low, clearance)
+        pilot.last_readback = True
         if item is None:
             corrected = pilot.readback_fails > 0
             pilot.readback_fails = 0
@@ -1255,6 +1273,7 @@ class AtcBrain:
         For the takeoff clearance (always given), so the pilot still gets the
         "incomplete — continue" feedback without the clearance being withheld.
         """
+        pilot.last_readback = True
         item = self._readback_item(low, clearance)
         if item is None:
             pilot.readback_fails = 0
@@ -1369,6 +1388,12 @@ class AtcBrain:
             return None
         low = text.lower()
         pilot = self._pilot(callsign)
+        # One-shot state of the PREVIOUS transmission: the pending coach note
+        # belongs to exactly one exchange, and the readback flag only truthful
+        # for the call being judged. A caller that never took the note (headless
+        # test, worker crash) must not be taught a stale clearance.
+        pilot.pending_coach = ""
+        pilot.last_readback = False
         pilot.last_controller = controller.value
         self._note_formation(pilot, low)
         # STT normalisation, applied once, at the point where every intent is
@@ -1385,6 +1410,30 @@ class AtcBrain:
             # made a later "repeat" replay the "say again" itself, an endless
             # loop that hid the real clearance (debrief 2026-10-18 12:44:32).
             pilot.last_reply = reply
+        # Coach step (AFTER last_reply is stored, so a coached clearance is
+        # replayed clean by "say again" — the coach note is not part of the
+        # clearance). Coach mode ONLY: casual mode never sets a note, so its
+        # behaviour is byte-identical to the pre-coach bot.
+        #
+        # The note is NOT spoken on the radio: it would pollute the frequency
+        # for everyone on the server. It is stored as `pending_coach` on the
+        # pilot and the caller (controller worker) delivers it as a direct
+        # in-game message to THAT pilot — the real ATC voice stays clean, and
+        # a call that was RESOLVED fine (e.g. a readback that opened with the
+        # callsign) still gets its teaching note in the pilot's feed.
+        # The coach is a post-step on the utterance text: intent recognition
+        # is untouched, and a note is never set on semantic feedback
+        # ("readback incomplete" already corrected this transmission) or meta
+        # chatter (trainer commands).
+        if self.mode == "coach" \
+                and not ("trainer" in reply.lower() if reply else False) \
+                and "readback incomplete" not in (reply or "").lower():
+            proper = coach.note(low)
+            if not proper and pilot.last_readback:
+                proper = coach.note_readback(low, callsign)
+            if proper:
+                pilot.pending_coach = self._say("coach_wording", callsign,
+                                                proper=proper)
         return reply
 
     def _is_meta_reply(self, reply: str) -> bool:
@@ -1717,7 +1766,9 @@ class AtcBrain:
         """Handle a "trainer, ..." command (trainer aid, any frequency).
 
         Currently: "trainer, echo on|off" toggles the in-game comms mirror for
-        THIS pilot. Unknown trainer commands get a short usage hint.
+        THIS pilot; "trainer, volume X" sets the GLOBAL TTS volume;
+        "trainer, coach mode|casual mode" sets the GLOBAL trainer mode.
+        Unknown trainer commands get a short usage hint.
         """
         agency = self._agency(controller)
         if re.search(r"\b(help|assist|what do i do|what now|remind me)\b", low):
@@ -1735,12 +1786,31 @@ class AtcBrain:
                 self.tx_volume = max(0.0, min(1.0, float(match.group(1))))
                 return self._say("trainer_volume", callsign, agency=agency,
                                  volume=f"{self.tx_volume:.2f}")
+        if re.search(r"\b(coach|teaching)\b", low):
+            self.mode = "coach"
+            return self._say("trainer_mode_coach", callsign, agency=agency)
+        if re.search(r"\bcasual\b", low):
+            self.mode = "casual"
+            return self._say("trainer_mode_casual", callsign, agency=agency)
         return self._say("trainer_unknown", callsign, agency=agency)
 
     def mirror_enabled(self, callsign: str) -> bool:
         """True if this pilot asked for the in-game comms mirror."""
         pilot = self.pilots.get(callsign)
         return bool(pilot and pilot.mirror_logs)
+
+    def take_coach(self, callsign: str) -> str:
+        """Take and clear the pending wording-coach note (one-shot).
+
+        Called by the controller worker after `handle`; the note is then
+        delivered as a direct in-game message to that pilot. "" = nothing
+        pending (casual mode, a proper call, or no such pilot).
+        """
+        pilot = self.pilots.get(callsign or "")
+        if pilot is None:
+            return ""
+        note, pilot.pending_coach = pilot.pending_coach, ""
+        return note
 
     def _reset(self, callsign: str, pilot: PilotState,
                controller: Controller) -> str:
@@ -1766,6 +1836,7 @@ class AtcBrain:
         pilot.lineup_readback = False
         pilot.descend_readback = False
         pilot.landing_handoff_announced = False
+        pilot.pending_coach = ""
         return self._say("state_reset", callsign,
                          agency=self._agency(controller))
 

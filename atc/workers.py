@@ -86,6 +86,10 @@ class SharedState:
     log: Callable[[str], None]
     debug: Callable[[str], None] = lambda _line: None
     traffic: Callable[[], list] = lambda: []
+    # Deliver a wording-coach note as a direct in-game message to one pilot.
+    # Set by atc_bot (mirror); default is a no-op so offline tests can construct
+    # a SharedState without wiring the message bridge.
+    coach: Callable[[str, str], None] = lambda _who, _note: None
 
 
 class ControllerWorker:
@@ -135,8 +139,16 @@ class ControllerWorker:
                 self.shared.brain.remember_speaker(who, callsign)
             after = _state_snapshot(self.shared.brain)
             changes = _state_changes(before, after)
+            # The wording-coach note (coach mode) rides the SAME lock as the
+            # brain call that produced it, so a note can never be taken by the
+            # wrong worker or left for the next transmission.
+            coach_note = self.shared.brain.take_coach(callsign or who)
         if changes:
             self.shared.debug(f"[{tag}] state: " + " | ".join(changes))
+        if coach_note:
+            # Log-only coaching: a direct in-game message to THAT pilot, never
+            # spoken on the radio (immersion for everyone else on frequency).
+            self.shared.coach(callsign or who, coach_note)
         state = self.shared.brain.pilots.get(callsign or "")
         if reply:
             self.shared.debug(

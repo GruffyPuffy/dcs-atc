@@ -720,6 +720,17 @@ def main() -> None:
         except (OSError, RuntimeError):
             pass  # bridge down / no message API; the debug log is best-effort
 
+    # Wording coach (coach mode): a coaching note is a direct in-game message
+    # to the pilot who made the call — never spoken on the radio, so the
+    # frequency stays clean for everyone else. Logged to the map chatter too
+    # (kind "coach") so a debrief shows what was taught.
+    def coach_note(who: str, note: str) -> None:
+        _mirror(f"COACH: {note}", who)
+        if map_service is not None:
+            map_service.log_chatter("coach", 0.0, who, note, "coach")
+
+    shared.coach = coach_note
+
 
     def on_end(freq: float, who: str, pcm: bytes, duration: float) -> None:
         """SRS rx callback: enqueue to the right controller worker (never blocks)."""

@@ -775,7 +775,7 @@ class MapService:
 
     def log_chatter(self, kind: str, freq_mhz: float, who: str,
                     text: str, controller: str = "") -> None:
-        """Record one radio event (kind: 'rx' pilot, 'tx' ATC, 'sys')."""
+        """Record one radio event (kind: 'rx' pilot, 'tx' ATC, 'coach' note)."""
         if self.replay:
             return  # reviewing a saved sortie: keep its log, don't add live ones
         # Resolve the flight callsign for a pilot transmission (the brain learns
@@ -795,6 +795,12 @@ class MapService:
             # reply to the pilot's position on the path.
             with self.lock:
                 callsign = self.brain.callsigns.extract(text) or ""
+        elif kind == "coach" and who:
+            # A wording-coach note goes to ONE pilot (log-only, not radio).
+            # `who` is that flight's callsign — the note is pinned to the
+            # pilot's position and lands in their per-spawn debrief, so the
+            # post-flight review shows what was taught (and where).
+            callsign = who
         stamp = time.strftime("%H:%M:%S")
         entry = {
             "t": stamp,

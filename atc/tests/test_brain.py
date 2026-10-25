@@ -1463,6 +1463,63 @@ def test_trainer_does_not_change_phase(brain):
     assert brain.pilots["Colt 1"].phase == phase
 
 
+def test_trainer_mode_switches_globally(brain):
+    # Mode is GLOBAL (one bot persona), not per pilot: a different flight is
+    # affected by Colt 1's mode command.
+    reply = brain.handle("Trainer, Colt 1, casual mode", controller=Controller.TOWER)
+    assert reply and "casual mode" in reply
+    assert brain.mode == "casual"
+    brain.handle("Trainer, Ford 2, teaching mode", controller=Controller.GROUND)
+    assert brain.mode == "coach"
+
+
+def test_trainer_mode_is_the_default(brain):
+    # Coach is the MasterArms teaching persona; no command needed at start.
+    assert brain.mode == "coach"
+
+
+def test_trainer_mode_without_a_word_hints(brain):
+    # "trainer, mode" with no coach/casual in it must not change anything and
+    # must give the usage hint.
+    reply = brain.handle("Trainer, Colt 1, mode", controller=Controller.TOWER)
+    assert reply and "trainer commands" in reply
+    assert brain.mode == "coach"
+
+
+def test_trainer_mode_does_not_change_phase(brain):
+    brain.handle("Ground, Colt 1, requesting taxi", controller=Controller.GROUND)
+    phase = brain.pilots["Colt 1"].phase
+    brain.handle("Trainer, Colt 1, casual mode", controller=Controller.GROUND)
+    assert brain.pilots["Colt 1"].phase == phase
+
+
+def test_trainer_mode_checks_readback_values_in_casual_too():
+    # Semantic standards do not change with the mode: a missing readback item
+    # is flagged in CASUAL exactly as in COACH. (Wording coaching has no
+    # mechanism yet; when it lands, casual must silence it but not this.)
+    from brain import AtcBrain
+    b = AtcBrain()
+    b.handle("Ground, Colt 1, requesting taxi", controller=Controller.GROUND)
+    clearance = b.pilots["Colt 1"].last_clearance or b.pilots["Colt 1"].last_reply
+    b.mode = "casual"
+    # A readback omitting the clearance's numbers is still incomplete.
+    reply = b.handle("Colt 1, roger, hold short", controller=Controller.GROUND)
+    assert reply and "readback incomplete" in reply.lower(), (clearance, reply)
+
+
+def test_trainer_mode_works_on_every_agency(brain):
+    from brain import PilotState
+    for controller in (Controller.GROUND, Controller.TOWER, Controller.CONTROL):
+        for mode_word, expected in (("casual mode", "casual"),
+                                    ("coach mode", "coach")):
+            brain.pilots.clear()
+            brain.pilots["Colt 1"] = PilotState(callsign="Colt 1")
+            reply = brain.handle(f"Trainer, Colt 1, {mode_word}",
+                                 controller=controller)
+            assert reply and expected in reply, (controller, mode_word, reply)
+            assert brain.mode == expected, (controller, mode_word)
+
+
 # ---------- Escape hatches (never get stuck in a wrong state) ----------
 
 def test_reset_returns_to_idle(brain):

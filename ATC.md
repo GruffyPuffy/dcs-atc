@@ -333,7 +333,9 @@ not say "state reset", but in a trainer it is better to be unstuck than stuck.
 Some aids are not ATC phraseology at all, so they live behind a **`trainer`**
 keyword — a namespace that can never be confused with a clearance. Like the
 escape hatches, they work on **every controller frequency** and in **every
-phase**, and are **per pilot** (each pilot controls their own).
+phase**, and are **per pilot** (each pilot controls their own) — except the
+**trainer mode**, which is **global** (one bot persona for the whole server:
+a mixed strict/relaxed trainer would be confusing on broadcast radio).
 
 | Pilot says | Effect | Reply |
 | --- | --- | --- |
@@ -341,6 +343,8 @@ phase**, and are **per pilot** (each pilot controls their own).
 | **"Trainer, Colt 1, echo on"** | Echo this pilot's radio exchanges (what was heard + the reply) into their **in-game DCS message feed** | "Colt 1, Tower, trainer echo on. I will echo our exchanges to your in-game message feed." |
 | **"Trainer, Colt 1, echo off"** | Stop the echo | "Colt 1, Tower, trainer echo off." |
 | **"Trainer, Colt 1, volume 0.3"** | Set the ATC voice output volume (0–1, clamped) for the rest of the session | "Colt 1, Tower, trainer volume set to 0.30." |
+| **"Trainer, Colt 1, coach mode"** / **"teaching mode"** | The teaching persona (the **default**): wording suggestions are spoken when a call is poorly phrased | "Colt 1, Tower, trainer coach mode. I will suggest the better call when your wording is off." |
+| **"Trainer, Colt 1, casual mode"** | Relaxed persona for casual flying: no wording comments — just ATC | "Colt 1, Tower, trainer casual mode. Relaxed: I will not comment on wording." |
 
 With no callsign ("Trainer, echo on") the bot uses the known speaker's callsign.
 
@@ -353,6 +357,38 @@ everyone (and adds the verbose `DBG` log).
 > Design note: the `trainer` keyword is matched **before** everything else in
 > `_dispatch`, so a trainer command can never be mistaken for a clearance. An
 > unrecognised trainer command gets a short usage hint rather than "say again".
+>
+> Trainer mode design note: **readback values and other clearance semantics are
+> checked identically in both modes** — the mode only governs how the trainer
+> *comments on wording* (coach suggests the better call; casual is silent).
+> There is deliberately no in-flight "strict" that blocks a fumbled call: same
+> **never-block** rule as everywhere else, and the strictness lives in the
+> post-flight debrief scoring instead.
+
+### 3c-1. Wording coach (log-only, coach mode only)
+
+A **coach** post-step recognizes a handful of demonstrated *wording* habits
+(`atc/coach.py` — pure regex, no intent work: the call is handled exactly as
+before, and the coach never touches the radio). When one fires, the ATC voice
+stays silent and the pilot gets a **direct in-game message** to their own feed:
+
+| Pilot says (on the radio) | Radio reply | In-game feed (that pilot only) |
+| --- | --- | --- |
+| "give me taxi" / "I need taxi" | the normal taxi clearance | "Apollo suggests: requesting taxi." |
+| "ready for takeoff" | normal line-up/takeoff flow | "Apollo suggests: ready for departure." |
+| a readback that **begins** with their callsign ("Colt 1, cleared taxi…") | normal (silent or "readback correct") | "Apollo suggests: a readback ends with your callsign — there is none before it." |
+
+Notes are one-shot (expire with the transmission they were for), never replayed
+by `say again`, and never stack on semantic feedback ("readback incomplete"
+takes priority). Coach mode is the default; in casual mode nothing fires. The
+teaching target is always the canonical pilot call from the MA SOP dialogs —
+the same wording the kneeboard cards train.
+
+The note is also saved **in the debrief**: as a `coach` entry in the chatter
+log pinned to the pilot's trail (map: purple "COACH" dot, `commColor`),
+filtered into THAT pilot's per-spawn debrief file — so the post-flight review
+shows what was taught and where on the path it happened. The radio traffic of
+everyone else is untouched.
 
 ---
 

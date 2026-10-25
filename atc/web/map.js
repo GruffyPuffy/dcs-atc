@@ -831,6 +831,7 @@ function drawPath(ac) {
 function commColor(kind) {
   if (kind === 'tx') return '#3fb950';       // ATC
   if (kind === 'state') return '#d29922';    // phase change
+  if (kind === 'coach') return '#a371f7';    // wording-coach note (log-only)
   return '#58a6ff';                          // pilot
 }
 
@@ -842,6 +843,7 @@ function commLine(c) {
   let sender;
   if (c.kind === 'tx') sender = 'ATC' + (c.controller ? '-' + c.controller : '');
   else if (c.kind === 'state') sender = 'STATE';
+  else if (c.kind === 'coach') sender = 'COACH';
   else sender = 'PILOT' + (c.controller ? '-' + c.controller : '');
   sender = sender.toUpperCase();
   const body = c.kind === 'state' ? `phase → <b>${c.text}</b>` : c.text;

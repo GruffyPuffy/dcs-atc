@@ -84,6 +84,8 @@ working tree without committing, bind-mount it and skip the git update:
 ## Layout
 
 - `atc/` — the bot: `atc_bot.py` (wiring), `brain.py` (rules/state machine),
+  `coach.py` (wording-coach notes, coach mode only, delivered as direct
+  in-game messages),
   `callsigns.py` + `phonetics.py` (STT tolerance), `airspace.py` + `ctr.py`
   (geometry), `atis.py`, `phraseology.json`, `map_server.py` + `web/` (map),
   `workers.py` (per-controller threads), `srs_client.py`, `speech.py`.
