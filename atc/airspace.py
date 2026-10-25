@@ -147,6 +147,23 @@ class Airfield:
     # Optional: an airfield without it simply has no Stingray controller.
     stingray: str = ""
     stingray_frequency_mhz: float = 0.0
+    # How the cockpit displays bearings, in two separate pieces (both add up
+    # to a clockwise offset subtracted from geodesic true; measured against
+    # the 2026-10-25 Kutaisi test flight — see ATC.md §5b).
+    #   magnetic_variation_deg — REAL physics: local declination, east
+    #     positive (Caucasus ≈ 7°E; the jet's TACAN page detects MVAR
+    #     E 6°39'). Also drives magnetic-format wind calls later.
+    #   map_rotation_deg — DCS-quirk (not physics): the F10 map image and its
+    #     ruler's "T" field sit a few degrees off the world's true meridian
+    #     (ED forum thread "Heading offset?": the ruler measures against the
+    #     XYZ grid in a rotated view). Cockpit bullseye readouts and course
+    #     dials inherit the same rotation.
+    # Total cockpit convention: cockpit_display = true − variation − rotation.
+    # Kutaisi: −13° total = cockpit 056 where truth is 070; HSI courses 068
+    # (runway 07) / 248 (runway 25) where the drawn runway is 080/260 true.
+    # 0.0 = the cockpit reads geodesic true.
+    magnetic_variation_deg: float = 0.0
+    map_rotation_deg: float = 0.0
     runways: dict[str, tuple[float, float]] = field(default_factory=dict)
     gates: dict[str, tuple[float, float]] = field(default_factory=dict)
     # Taxi routes to the runway, per runway and per starting ramp:
@@ -926,6 +943,8 @@ def _build_airfield(name: str, spec: dict, defaults: dict,
         control_frequency_mhz=float(spec.get("control_frequency_mhz", 0.0)),
         stingray=spec.get("stingray", "Stingray"),
         stingray_frequency_mhz=float(spec.get("stingray_frequency_mhz", 0.0)),
+        magnetic_variation_deg=float(spec.get("magnetic_variation_deg", 0.0)),
+        map_rotation_deg=float(spec.get("map_rotation_deg", 0.0)),
         runways=runways,
         gates=gates,
         taxi_routes=taxi_routes,

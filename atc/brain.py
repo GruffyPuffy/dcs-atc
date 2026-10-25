@@ -593,6 +593,14 @@ class AtcBrain:
         # (lat, lon). None until the bridge supplies it; a bullseye call is then
         # acknowledged without a position check rather than inventing a point.
         self.bullseye: tuple[float, float] | None = None
+        # Cockpit bearing convention (see airspace.py): how the pilot's
+        # instruments display a geodesic-true bearing. Bullseye calls are
+        # reported and answered in cockpit units, and every heading the bot
+        # speaks is given in cockpit units so the HSI shows what it asked for.
+        # Internal math, the bridge and the web map stay geodesic.
+        self.cockpit_bearing_offset_deg = -float(
+            getattr(airfield, "magnetic_variation_deg", 0.0)
+            + getattr(airfield, "map_rotation_deg", 0.0))
         # TTS output volume, adjustable at runtime with "trainer, volume 0.3".
         # None = use the --tx-volume default.
         self.tx_volume: float | None = None
@@ -2350,7 +2358,8 @@ class AtcBrain:
             key = ("control_join_requested" if turn
                    else "control_join_requested_straight")
             return self._say(key, callsign, gate=requested,
-                             heading=f"{heading:03.0f}", turn=turn)
+                             heading=f"{self._cockpit_bearing(heading):03.0f}",
+                             turn=turn)
         # Readback of the join clearance ("150 to join via Entry East") ->
         # Control issues the descent to 1500 ft (once). The pilot's readback of
         # *that* descent then hands the flight to Tower — but only once they are
@@ -2435,7 +2444,8 @@ class AtcBrain:
             turn = self._join_turn(track, heading)
             key = "control_join" if turn else "control_join_straight"
             return self._say(key, callsign, gate=gate,
-                             heading=f"{heading:03.0f}", turn=turn)
+                             heading=f"{self._cockpit_bearing(heading):03.0f}",
+                             turn=turn)
         # Departure check-in ("airborne, 5 miles east climbing" / "at 1500 ft"):
         # radar contact and a climb clearance. Only the *first* check-in gets the
         # climb — a readback or a follow-up level report ("climbing angels 15",
@@ -2616,6 +2626,12 @@ class AtcBrain:
 
         return None
 
+    def _cockpit_bearing(self, bearing: float) -> float:
+        """A geodesic-true bearing converted to the cockpit's display
+        convention (true − magnetic variation − DCS map rotation; see
+        airspace.py Airfield.magnetic_variation_deg/map_rotation_deg)."""
+        return (bearing + self.cockpit_bearing_offset_deg) % 360
+
     def _bullseye_reply(self, callsign: str, pilot: PilotState, low: str,
                         track: AircraftTrack | None) -> str:
         """Acknowledge a bullseye/marking picture call, coaching if it is off.
@@ -2680,6 +2696,9 @@ class AtcBrain:
             return None
         label, (plat, plon) = point
         bearing, distance = bearing_distance(plat, plon, track.lat, track.lon)
+        # The pilot reports BRA in cockpit units (true − variation − rotation,
+        # see _cockpit_bearing); the challenge answers the same way.
+        bearing = self._cockpit_bearing(bearing)
         # STT sometimes joins a spoken "four" to the next figure: "for 57"
         # becomes 457 and "for 40" becomes 440. Consider those interpretations
         # only when the aircraft's actual BRA confirms one within tolerance.
@@ -3196,7 +3215,8 @@ class AtcBrain:
             return ""
         bearing, distance = bearing_distance(
             self.bullseye[0], self.bullseye[1], track.lat, track.lon)
-        return (f"bullseye {bearing:03.0f} for {distance:.0f}, "
+        return (f"bullseye {self._cockpit_bearing(bearing):03.0f} for "
+                f"{distance:.0f}, "
                 f"angels {track.alt_ft / 1000.0:.0f}")
 
     def _directions(self, callsign: str, low: str,
@@ -3254,7 +3274,8 @@ class AtcBrain:
         if heading is None:
             return self._say("directions_unknown", callsign, agency=agency)
         return self._say("vectors", callsign, agency=agency,
-                         heading=f"{heading:03.0f}", vector_runway=runway)
+                          heading=f"{self._cockpit_bearing(heading):03.0f}",
+                          vector_runway=runway)
 
     def working_controller(self, callsign: str) -> Controller:
         """Last agency this pilot talked to; Tower if they have never checked in.

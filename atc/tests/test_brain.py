@@ -2813,6 +2813,7 @@ def test_stingray_bullseye_call_verified_against_the_mission(brain, airfield):
     _stingray(brain)
     alat, alon = 42.6667, 42.5  # 40 NM north of the bullseye
     bearing, distance = bearing_distance(blat, blon, alat, alon)
+    bearing = (bearing + brain.cockpit_bearing_offset_deg) % 360
     track = AircraftTrack(callsign="Colt 1", inside=False, lat=alat, lon=alon,
                           alt_ft=15000.0, distance_nm=40.0, relative="north",
                           heading=0.0)
@@ -2823,9 +2824,45 @@ def test_stingray_bullseye_call_verified_against_the_mission(brain, airfield):
     assert "negative" not in reply.lower()
 
 
+def test_cockpit_bearing_convention_is_applied(brain, airfield):
+    # Kutaisi's cockpit displays bearings ~13° counterclockwise of geodesic
+    # truth (magnetic variation 7°E + DCS map rotation 6°, configured in
+    # airspace.json). Measured in the 2026-10-25 test flight: the pilot called
+    # "bullseye 056" where the bot's geodesic math says 070 — and 056 was the
+    # instrument value. The bot must verify and answer in these cockpit units,
+    # while its internal math and challenge stay in the same units the pilot
+    # reads.
+    from airspace import bearing_distance
+    from ctr import AircraftTrack
+    assert (airfield.magnetic_variation_deg, airfield.map_rotation_deg) == \
+        (7.0, 6.0)
+    blat, blon = 42.2000, 41.6417  # the mission bullseye of the test flight
+    brain.set_bullseye(blat, blon)
+    _stingray(brain)
+    alat, alon = 42.40428, 42.40491  # 16:12:12 position of the test sortie
+    bearing, distance = bearing_distance(blat, blon, alat, alon)
+    assert abs(bearing - 70.0) < 0.5  # geodesic truth (the bot's math)
+    cockpit = (bearing + brain.cockpit_bearing_offset_deg) % 360
+    assert abs(cockpit - 57.0) < 0.5  # what the pilot's instruments showed
+    track = AircraftTrack(callsign="Colt 1", inside=False, lat=alat, lon=alon,
+                          alt_ft=15000.0, distance_nm=36.0, relative="northeast",
+                          heading=70.0)
+    # The pilot reads the instrument value -> acknowledged...
+    reply = brain.handle(
+        "Stingray, Colt 1, bullseye 057 for 36, angels 15",
+        controller=Controller.STINGRAY, track=track)
+    assert "radar contact" in reply.lower(), reply
+    # ...and the challenge speaks the same units (057, the cockpit display).
+    reply = brain.handle(
+        "Stingray, Colt 1, bullseye 200 for 10",
+        controller=Controller.STINGRAY, track=track)
+    assert "negative" in reply.lower() and "057" in reply, reply
+    # A spoken heading is also given in cockpit units (true − 13).
+    assert abs((70.0 + brain.cockpit_bearing_offset_deg) % 360 - 57.0) < 0.1
+
+
 def test_stingray_bullseye_call_off_is_coached_not_blocked(brain):
     # ...and a clearly wrong call gets the real bearing/range, but the flight
-    # continues (never a block — same rule as the position cross-check).
     from ctr import AircraftTrack
     brain.set_bullseye(42.0, 42.5)
     pilot = _stingray(brain)
@@ -2905,10 +2942,10 @@ def test_stingray_bullseye_calls_are_repeatable(brain):
     track = AircraftTrack(callsign="Colt 1", inside=False, lat=42.6, lon=42.5,
                           alt_ft=15000.0, distance_nm=33.0, relative="north",
                           heading=0.0)
-    # True position is 008 for 33; all three are within tolerance (±10° / ±3 NM).
-    for text in ("Stingray, Colt 1, bullseye 008 for 33",
-                 "Stingray, Colt 1, bullseye 010 for 34",
-                 "Stingray, Colt 1, bullseye 007 for 32"):
+    # True (instrument) position is 355 for 33; all three are within tolerance (±10° / ±3 NM).
+    for text in ("Stingray, Colt 1, bullseye 355 for 33",
+                 "Stingray, Colt 1, bullseye 358 for 34",
+                 "Stingray, Colt 1, bullseye 354 for 32"):
         reply = brain.handle(text, controller=Controller.STINGRAY, track=track)
         assert "radar contact" in reply.lower(), text
     # A clearly wrong call is still coached, not blocked.
@@ -3045,11 +3082,11 @@ def test_stingray_bullseye_angels_is_checked(brain):
     # Correct (and within ±1 angel) -> acknowledged.
     for angels in (15, 14, 16):
         reply = brain.handle(
-            f"Stingray, Colt 1, bullseye 008 for 33, angels {angels}",
+            f"Stingray, Colt 1, bullseye 355 for 33, angels {angels}",
             controller=Controller.STINGRAY, track=track)
         assert "radar contact" in reply.lower(), angels
     # Clearly wrong -> coached, and the real angels is stated.
-    reply = brain.handle("Stingray, Colt 1, bullseye 008 for 33, angels 25",
+    reply = brain.handle("Stingray, Colt 1, bullseye 355 for 33, angels 25",
                          controller=Controller.STINGRAY, track=track)
     assert "negative" in reply.lower()
     assert "angels 15" in reply
@@ -3064,7 +3101,7 @@ def test_stingray_bullseye_angels_is_optional(brain):
     track = AircraftTrack(callsign="Colt 1", inside=False, lat=42.6, lon=42.5,
                           alt_ft=15000.0, distance_nm=33.0, relative="north",
                           heading=0.0)
-    reply = brain.handle("Stingray, Colt 1, bullseye 008 for 33",
+    reply = brain.handle("Stingray, Colt 1, bullseye 355 for 33",
                          controller=Controller.STINGRAY, track=track)
     assert "radar contact" in reply.lower()
 
@@ -3155,7 +3192,7 @@ def test_spoken_bullseye_call_is_folded(brain):
 def test_stt_commas_and_joined_four_are_verified_against_track(brain):
     from scenario import _bearing_range_point
     brain.set_bullseye(42.05, 42.40)
-    lat, lon = _bearing_range_point(42.05, 42.40, 57, 40)
+    lat, lon = _bearing_range_point(42.05, 42.40, 70, 40)
     track = _track(brain.airfield, lat, lon, alt_ft=18000)
     _stingray(brain)
     reply = brain.handle(
@@ -3167,7 +3204,7 @@ def test_stt_commas_and_joined_four_are_verified_against_track(brain):
 def test_stt_joined_four_is_repaired_for_named_marking_point(brain, airfield):
     from scenario import _bearing_range_point
     lat, lon = _bearing_range_point(airfield.ctr.center_lat,
-                                    airfield.ctr.center_lon, 57, 40)
+                                    airfield.ctr.center_lon, 70, 40)
     track = _track(airfield, lat, lon, alt_ft=18000)
     _stingray(brain)
     reply = brain.handle(
@@ -3194,10 +3231,10 @@ def test_stt_joined_four_repairs_one_digit_bearing_and_range(brain, airfield):
     # "for 5" can become "45" in either BRA field. Position verification
     # disambiguates that from a literal 045-degree bearing / 45-NM range.
     brain.set_bullseye(42.05, 42.40)
-    bull_lat, bull_lon = _bearing_range_point(42.05, 42.40, 5, 5)
+    bull_lat, bull_lon = _bearing_range_point(42.05, 42.40, 18, 5)
     bull_track = _track(airfield, bull_lat, bull_lon, alt_ft=18000)
     mark_lat, mark_lon = _bearing_range_point(
-        airfield.ctr.center_lat, airfield.ctr.center_lon, 5, 5)
+        airfield.ctr.center_lat, airfield.ctr.center_lon, 18, 5)
     mark_track = _track(airfield, mark_lat, mark_lon, alt_ft=18000)
 
     _stingray(brain)
@@ -3235,6 +3272,7 @@ def test_marking_a_named_point_is_verified_against_the_airfield(brain):
     clon = brain.airfield.ctr.center_lon
     alat, alon = 42.0, 42.2  # somewhere south-west of Kutaisi
     bearing, distance = bearing_distance(clat, clon, alat, alon)
+    bearing = (bearing + brain.cockpit_bearing_offset_deg) % 360
     track = AircraftTrack(callsign="Colt 1", inside=False, lat=alat, lon=alon,
                           alt_ft=5000.0, distance_nm=distance,
                           relative="southwest", heading=200.0)
@@ -3309,7 +3347,7 @@ def test_rounded_angels_are_still_accepted(brain):
     track = AircraftTrack(callsign="Colt 1", inside=False, lat=42.6, lon=42.5,
                           alt_ft=15703.0, distance_nm=33.0, relative="north",
                           heading=0.0)
-    reply = brain.handle("Stingray, Colt 1, bullseye 008 for 33, angels 16",
+    reply = brain.handle("Stingray, Colt 1, bullseye 355 for 33, angels 16",
                          controller=Controller.STINGRAY, track=track)
     assert "radar contact" in reply.lower()
 

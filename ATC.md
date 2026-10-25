@@ -1062,6 +1062,34 @@ the package channel:
   ("request Control", "bugout") — which is exactly what a trainee does — and the
   request is answered normally. The same holds for the position cross-check on
   Control and Tower: a challenge is coaching, never a gate.
+  **Instrument bearing convention.** All bearing-style numbers spoken to the
+  pilot (bullseye BRA — in both the verify and the coaching challenge — and
+  every heading the bot assigns) are given in **cockpit/instrument units**, not
+  geodesic truth, so what the pilot reads on the HSI always matches what the
+  bot says. The conversion per airfield is configured in `airspace.json` as two
+  separate pieces (see `Airfield.magnetic_variation_deg` /
+  `Airfield.map_rotation_deg` in `airspace.py`):
+
+    cockpit display = geodesic true − magnetic_variation − map_rotation
+
+  - `magnetic_variation_deg` — real physics (local declination; Caucasus
+    ≈ 7°E, the jet's TACAN page detects MVAR E 6°39').
+  - `map_rotation_deg` — a DCS quirk, not physics: the F10 map image and its
+    ruler's "T" field sit a few degrees off the world's true meridian (ED
+    forum "Heading offset?": the ruler measures against the XYZ grid in a
+    rotated view), and cockpit bullseye readouts / course dials inherit it.
+
+  Kutaisi values were measured in the 2026-10-25 test flight: cockpit 056
+  where geodesic truth is 070, HSI runway courses 068/248 where the drawn
+  runway is 080.4/260.4 true — one offset (−13°) fitting all three readouts.
+  Positions are NOT affected (the bridge's positions, the F10 clicked
+  coordinates and `airspace.json` agree to the metre — the offset is a
+  bearing-display convention only), and the bot's internal math, readback
+  checks (text-level, so both sides stay in whatever units were spoken), and
+  the web map stay in geodesic truth.
+  Wind follows the same rule: the mission's weather wind is true, and both
+  the spoken call and the map arrow state/draw true — consistent with each
+  other and with the mission state, no conversion applied.
 - **RTB**: *"Adder1 Miller Time, requesting RTB"* → *"copy, RTB"*. Every way a
   flight says "I am going home" is accepted, and **the reason is never
   questioned** — a trainer flight may be a strike, a fuel check, or just a pilot

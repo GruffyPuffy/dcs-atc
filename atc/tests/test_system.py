@@ -200,7 +200,7 @@ def test_full_departure_two_ship(airfield, brain):
     r = sc.say("Stingray, Colt 1", Controller.STINGRAY)
     assert r == "Colt 1, Stingray."  # the check-in ack, not "say again"
     assert sc.phase() == Phase.STINGRAY
-    bearing, distance = sc.true_bullseye()
+    bearing, distance = sc.cockpit_bullseye()
     r = sc.say(sc.bullseye_call(bearing, distance), Controller.STINGRAY)
     assert "radar contact" in r.lower()
     r = sc.say("Colt 1, bugout", Controller.STINGRAY)
@@ -221,7 +221,7 @@ def test_full_arrival_two_ship(airfield, brain):
     sc.at_bullseye(90, 40).set_alt(15000)
     r = sc.say("Stingray, Colt 1", Controller.STINGRAY)
     assert r == "Colt 1, Stingray."  # the check-in ack, not "say again"
-    bearing, distance = sc.true_bullseye()
+    bearing, distance = sc.cockpit_bullseye()
     r = sc.say(sc.bullseye_call(bearing, distance), Controller.STINGRAY)
     assert "radar contact" in r.lower()
     r = sc.say("Colt 1 Miller Time, requesting RTB", Controller.STINGRAY)

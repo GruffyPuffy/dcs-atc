@@ -165,10 +165,18 @@ class Scenario:
                 f"{range_nm:.0f}, Angels 15, as fragged")
 
     def true_bullseye(self) -> tuple[float, float]:
-        """The true (bearing, range) from the mission bullseye to the pilot."""
+        """The geodesic-true (bearing, range) from the bullseye to the pilot."""
         from airspace import bearing_distance
         blat, blon = self.brain.bullseye
         return bearing_distance(blat, blon, self.lat, self.lon)
+
+    def cockpit_bullseye(self) -> tuple[float, float]:
+        """(bearing, range) as the pilot's cockpit displays them (true minus
+        the airfield's cockpit bearing convention — see airspace.py); this is
+        the number the pilot would actually say."""
+        bearing, distance = self.true_bullseye()
+        return ((bearing + self.brain.cockpit_bearing_offset_deg) % 360,
+                distance)
 
     # ---- traffic helpers ----
 

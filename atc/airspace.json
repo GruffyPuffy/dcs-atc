@@ -39,6 +39,8 @@
       "control_frequency_mhz": 257.0,
       "stingray": "Stingray",
       "stingray_frequency_mhz": 265.0,
+      "magnetic_variation_deg": 7.0,
+      "map_rotation_deg": 6.0,
       "elevation_ft": 148,
       "tower_pos": [
         42.1797,
