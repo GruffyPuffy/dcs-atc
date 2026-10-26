@@ -56,7 +56,6 @@
     "contact_control": "{callsign}, {tower}, contact {control} on channel {channel}.",
     "contact_stingray": "{callsign}, {control}, contact Stingray on channel {stingray_channel}.",
     "exit_deviation": "{callsign}, {tower}, you did not exit through {assigned_gate}; continue as cleared.",
-    "continue_to_exit": "{callsign}, {tower}, continue outbound to {gate}; expect Control after passing the exit.",
     "control_join": "{callsign}, {control}, radar contact, turn {turn} heading {heading} to join via {gate}.",
     "control_join_straight": "{callsign}, {control}, radar contact, fly heading {heading} to join via {gate}.",
     "control_join_nohdg": "{callsign}, {control}, radar contact, join via {gate}.",
@@ -117,9 +116,9 @@
     "authentication_not_implemented": "{callsign}, {agency}, authentication is not implemented in this trainer. Continue as fragged.",
     "capability_not_implemented": "{callsign}, {agency}, {capability} is not implemented in this trainer. Continue as fragged.",
     "emergency_not_implemented": "{callsign}, {agency}, copy your emergency. Emergency handling is not implemented in this trainer. Continue as fragged.",
-    "help_stingray": "{callsign}, {help_prefix}: you are with Stingray. Give a bullseye picture — you are {bullseye} — then \"as fragged\". To head home, call \"bugout\" (or bingo / Miller Time / requesting RTB) — the reason is never questioned — then request Control on channel {channel}.",
+    "help_stingray": "{callsign}, {help_prefix}: you are with Stingray. Give a bullseye picture — you are {bullseye} — then \"as fragged\". To head home, call \"bugout\" (or bingo / Miller Time / requesting RTB). Stingray will push Control between 25 and 80 miles from Kutaisi; if you have not heard the push by 25 miles, request Control on channel {channel}.",
     "agency_ack": "{callsign}, {agency}.",
     "contact_agency": "{callsign}, {agency}, contact {target} on channel {target_channel}.",
-    "help_stingray_nobullseye": "{callsign}, {help_prefix}: you are with Stingray. Give a bullseye picture (\"bullseye 065 for 40, Angels 15, as fragged\"). To head home, call \"bugout\" (or bingo / Miller Time / requesting RTB) — the reason is never questioned — then request Control on channel {channel}."
+    "help_stingray_nobullseye": "{callsign}, {help_prefix}: you are with Stingray. Give a bullseye picture (\"bullseye 065 for 40, Angels 15, as fragged\"). To head home, call \"bugout\" (or bingo / Miller Time / requesting RTB). Stingray will push Control between 25 and 80 miles from Kutaisi; if you have not heard the push by 25 miles, request Control on channel {channel}."
   }
 }

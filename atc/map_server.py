@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 import time
 import traceback
@@ -188,7 +189,7 @@ class TrackHistory:
         self.comm_max = comm_max
         # Where to report save failures (the bot's log()); no-op by default.
         self.log = log or _noop_log
-        self._tracks: dict[str, deque[tuple[float, float, float]]] = {}
+        self._tracks: dict[str, deque[tuple[float, float, float, str]]] = {}
         self._comms: dict[str, deque[dict]] = {}
         self._active: set[str] = set()
         # Last known position per callsign, even when off-station (where we do
@@ -197,7 +198,8 @@ class TrackHistory:
         self._last_pos: dict[str, tuple[float, float]] = {}
 
     def update(self, callsign: str, lat: float, lon: float,
-               distance_nm: float, alt_ft: float = 0.0) -> None:
+               distance_nm: float, alt_ft: float = 0.0,
+               agency: str = "") -> None:
         """Record a position for a callsign (skips off-station / tiny moves)."""
         self._active.add(callsign)
         self._last_pos[callsign] = (lat, lon)
@@ -208,10 +210,12 @@ class TrackHistory:
             track = deque(maxlen=self.max_points)
             self._tracks[callsign] = track
         if track:
-            plat, plon, _ = track[-1]
+            plat, plon = track[-1][0], track[-1][1]
             if _nm_between(plat, plon, lat, lon) < self.min_move_nm:
+                if track[-1][3] != agency:
+                    track[-1] = (track[-1][0], track[-1][1], track[-1][2], agency)
                 return  # barely moved
-        track.append((lat, lon, alt_ft))
+        track.append((lat, lon, alt_ft, agency))
 
     def add_comm(self, callsign: str, lat: float, lon: float, kind: str,
                  text: str, controller: str = "", t: str = "") -> None:
@@ -231,8 +235,9 @@ class TrackHistory:
         # position so a call is still pinned somewhere on the map.
         return self._last_pos.get(callsign)
 
-    def path(self, callsign: str) -> list[list[float]]:
-        return [[lat, lon, alt] for lat, lon, alt in self._tracks.get(callsign, ())]
+    def path(self, callsign: str) -> list[list[float | str]]:
+        return [[lat, lon, alt, agency] if agency else [lat, lon, alt]
+                for lat, lon, alt, agency in self._tracks.get(callsign, ())]
 
     def comms(self, callsign: str) -> list[dict]:
         return list(self._comms.get(callsign, ()))
@@ -293,7 +298,8 @@ class TrackHistory:
             for p in pts:
                 try:
                     track.append((float(p[0]), float(p[1]),
-                                  float(p[2]) if len(p) > 2 else 0.0))
+                                  float(p[2]) if len(p) > 2 else 0.0,
+                                  str(p[3]) if len(p) > 3 else ""))
                 except (TypeError, ValueError, IndexError):
                     continue
             if track:
@@ -778,7 +784,9 @@ class MapService:
                 callsign = self.brain.callsign_for_speaker(ac.player)
                 pilot = self.brain.pilots.get(callsign)
                 distance = self.airfield.ctr.distance_nm(ac.lat, ac.lon)
-                self.tracks.update(callsign, ac.lat, ac.lon, distance, ac.alt_ft)
+                self.tracks.update(callsign, ac.lat, ac.lon, distance,
+                                   ac.alt_ft,
+                                   pilot.checked_in_at if pilot else "")
                 phase = pilot.phase.value if pilot else "Unknown"
                 if pilot is not None and self._last_phase.get(callsign) != phase:
                     self._last_phase[callsign] = phase
@@ -840,6 +848,21 @@ class MapService:
         if not key and kind == "rx" and who:
             key = who
         if key:
+            map_kind = kind
+            if kind == "tx" and re.search(
+                    r"\bcontact\s+(?:(?:kutaisi|[\w-]+)\s+)?"
+                    r"(?:ground|tower|control|stingray)\b", text, re.I):
+                map_kind = "handoff"
+            elif kind == "rx" and re.search(
+                    r"\b(?:request(?:ing)?|ask(?:ing)? for|permission to|"
+                    r"can i|when can i)\b.*\b(?:channel|ground|tower|"
+                    r"control|stingray|awacs|magic|overlord)\b", text, re.I):
+                map_kind = "request"
+            elif kind == "rx":
+                with self.lock:
+                    pilot = self.brain.pilots.get(key)
+                    if pilot and pilot.pending_handoff_to == controller.lower():
+                        map_kind = "checkin"
             pos = self.tracks.last_position(key)
             if pos is None and who and who != key:
                 pos = self.tracks.last_position(who)
@@ -849,7 +872,7 @@ class MapService:
                 # is ever dropped from the trail.
                 pos = self._live_position(who or key)
             if pos is not None:
-                self.tracks.add_comm(key, pos[0], pos[1], kind, text,
+                self.tracks.add_comm(key, pos[0], pos[1], map_kind, text,
                                      controller, stamp)
 
     def _live_position(self, who: str) -> tuple[float, float] | None:
@@ -990,7 +1013,8 @@ class MapService:
                     pilot = self.brain.pilots.get(callsign)
                     distance = self.airfield.ctr.distance_nm(ac.lat, ac.lon)
                     self.tracks.update(callsign, ac.lat, ac.lon, distance,
-                                       ac.alt_ft)
+                                       ac.alt_ft,
+                                       pilot.checked_in_at if pilot else "")
                     phase = pilot.phase.value if pilot else "Unknown"
                     # Record a phase transition as a timeline event, so the path
                     # shows *when* the brain changed state (not just the calls).
@@ -1011,6 +1035,11 @@ class MapService:
                             "coalition": ac.coalition,
                             "phase": phase,
                             "controller": pilot.last_controller if pilot else "",
+                            "checked_in_at": pilot.checked_in_at if pilot else "",
+                            "pending_handoff_to": (pilot.pending_handoff_to
+                                                   if pilot else ""),
+                            "requested_handoff_to": (pilot.requested_handoff_to
+                                                     if pilot else ""),
                             "entry_gate": pilot.entry_gate if pilot else "",
                             "exit_gate": pilot.exit_gate if pilot else "",
                             "active": True,

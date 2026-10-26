@@ -986,18 +986,15 @@ def main() -> None:
                         log(f"LANDED: {callsign} ({ac.player}) -> Ground")
                         speak(handoff, controller=Controller.TOWER,
                               callsign=callsign)
-                    # Departure handoff: Tower pushes a departure to Control once it is
-                    # past the runway (MA SOP: "expect instructions to switch
-                    # to control"). The pilot does not have to report "airborne".
+                    # Tower hands the flight to Control at its outbound exit arc.
                     with lock:
                         dep_handoff = brain.check_departure_handoff(callsign, tr)
                     if dep_handoff:
                         log(f"AIRBORNE: {callsign} ({ac.player}) -> Control")
                         speak(dep_handoff, controller=Controller.TOWER,
                               callsign=callsign)
-                    # Departure climb: a departure that checked in with Control
-                    # while still inside the CTR is climbed once it leaves the
-                    # zone (Control watches on radar; no report needed).
+                    # Control may issue a climb only after the pilot checks in.
+                    # If still inside the CTR, wait until the aircraft clears it.
                     with lock:
                         climb = brain.check_departure_climb(callsign, tr)
                     if climb:
@@ -1013,6 +1010,26 @@ def main() -> None:
                         log(f"STINGRAY: {callsign} ({ac.player})")
                         speak(stingray, freq=freq_for(Controller.CONTROL),
                               controller=Controller.CONTROL, callsign=callsign)
+                    # After an RTB call, AWACS makes one distance-based push
+                    # back to Control. A pilot who misses it can still check in
+                    # directly on Control; no repeated push is needed.
+                    with lock:
+                        rtb_handoff = brain.check_stingray_rtb_handoff(
+                            callsign, tr)
+                    if rtb_handoff:
+                        log(f"RTB HANDOFF: {callsign} ({ac.player}) -> Control")
+                        speak(rtb_handoff, freq=freq_for(Controller.STINGRAY),
+                              controller=Controller.STINGRAY, callsign=callsign)
+                    # Control transfers an inbound flight when it reaches the
+                    # CTR footprint, giving Tower time to work the arrival even
+                    # when the pilot is descending slowly.
+                    with lock:
+                        tower_handoff = brain.check_arrival_tower_handoff(
+                            callsign, tr)
+                    if tower_handoff:
+                        log(f"CTR ARRIVAL: {callsign} ({ac.player}) -> Tower")
+                        speak(tower_handoff, freq=freq_for(Controller.CONTROL),
+                              controller=Controller.CONTROL, callsign=callsign)
                     # Arrival descent: after the far-out step-down, Control
                     # issues the final "descend to 1500 feet" once the aircraft
                     # reaches the entry area.
@@ -1021,15 +1038,6 @@ def main() -> None:
                     if descend:
                         log(f"DESCEND: {callsign} ({ac.player})")
                         speak(descend, freq=freq_for(Controller.CONTROL),
-                              controller=Controller.CONTROL, callsign=callsign)
-                    # Arrival handoff: after the "descend to 1500" readback,
-                    # wait until they are actually at 1500 before pushing to
-                    # Tower (they may still be at Angels 8).
-                    with lock:
-                        desc_hand = brain.check_descent_handoff(callsign, tr)
-                    if desc_hand:
-                        log(f"LEVEL 1500: {callsign} ({ac.player}) -> Tower")
-                        speak(desc_hand, freq=freq_for(Controller.CONTROL),
                               controller=Controller.CONTROL, callsign=callsign)
                     # Takeoff clearance: after the pilot reads back "line up and
                     # wait", wait until they are actually lined up on the runway

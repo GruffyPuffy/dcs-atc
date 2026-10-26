@@ -37,7 +37,7 @@ def test_light_path_departure(airfield, brain):
     r = sc.say("Line up and wait 25, Colt 1", Controller.TOWER)
     assert "cleared for takeoff" in r.lower()
     r = sc.say("Tower, Colt 1, airborne", Controller.TOWER)
-    assert "continue outbound" in r
+    assert r == ""  # no extra phrase; radar triggers the handoff at the exit
     assert brain.pilots["Colt 1"].phase == Phase.TAKEOFF
     r = _pass_departure_exit(sc, brain, airfield)
     assert r and "contact Control" in r
@@ -75,9 +75,9 @@ def test_control_checkin_outside_ctr_clears_climb(airfield, brain):
     assert brain.pilots["Colt 1"].climb_issued
 
 
-def test_tower_hands_departure_to_control_past_the_runway(airfield, brain):
-    # MA SOP: Tower pushes a departure to Control once airborne ("expect
-    # instructions to switch to control") — the pilot need not report "airborne".
+def test_tower_hands_departure_to_control_at_the_exit_arc(airfield, brain):
+    # The kneeboard sequence hands off at the departure exit, not at the CTR
+    # boundary or on an airborne radio report.
     sc = _scenario(airfield, brain).at_threshold("25")
     sc.say("Tower, Colt 1, ready for departure", Controller.TOWER)
     sc.say("Line up and wait 25, Colt 1", Controller.TOWER)
@@ -98,8 +98,8 @@ def test_tower_hands_departure_to_control_past_the_runway(airfield, brain):
 
 
 def test_control_climbs_departure_on_radar_once_clear_of_ctr(airfield, brain):
-    # A departure that checked in too early (inside the CTR) is climbed by
-    # Control on radar once it leaves the zone — no second report needed.
+    # A departure that checked in too early is held below the ceiling, then
+    # receives the climb after clearing the CTR.
     sc = _scenario(airfield, brain).at_threshold("25")
     sc.say("Tower, Colt 1, ready for departure", Controller.TOWER)
     sc.say("Line up and wait 25, Colt 1", Controller.TOWER)
@@ -109,7 +109,7 @@ def test_control_climbs_departure_on_radar_once_clear_of_ctr(airfield, brain):
     assert not brain.pilots["Colt 1"].climb_issued
     # Still inside the CTR: no climb yet.
     assert brain.check_departure_climb("Colt 1", sc._track()) is None
-    # Now clear of the CTR: Control issues the climb unprompted.
+    # Now clear of the CTR: Control issues the climb after the check-in.
     sc.at_gate("East").set_alt(airfield.elevation_ft + 1500)
     call = brain.check_departure_climb("Colt 1", sc._track())
     assert call and "climb to Angels 15" in call
@@ -195,7 +195,7 @@ def test_full_departure_two_ship(airfield, brain):
     assert sc.phase() == Phase.TAKEOFF
 
     r = sc.say("Tower, Colt 1, airborne", Controller.TOWER)
-    assert "continue outbound" in r
+    assert r == ""
     r = _pass_departure_exit(sc, brain, airfield)
     assert r and "contact Control" in r
     assert sc.phase() == Phase.AIRBORNE
@@ -222,7 +222,8 @@ def test_full_departure_two_ship(airfield, brain):
     assert "RTB" in r
     r = sc.say("Stingray, Colt 1, request Control", Controller.STINGRAY)
     assert "contact Control" in r and "channel 8" in r
-    assert sc.phase() == Phase.INBOUND
+    assert sc.phase() == Phase.STINGRAY
+    assert brain.pilots["Colt 1"].pending_handoff_to == Controller.CONTROL.value
 
 
 # ---------- Full arrival: inbound -> break -> land -> park ----------
@@ -243,7 +244,8 @@ def test_full_arrival_two_ship(airfield, brain):
     assert "RTB" in r
     r = sc.say("Stingray, Colt 1, request Control", Controller.STINGRAY)
     assert "contact Control" in r and "channel 8" in r
-    assert sc.phase() == Phase.INBOUND
+    assert sc.phase() == Phase.STINGRAY
+    assert brain.pilots["Colt 1"].pending_handoff_to == Controller.CONTROL.value
 
     # Control: inbound, join, readback (descend), then hand to Tower.
     # Reset the altitude: the Stingray leg left the fake track at Angels 15, and
@@ -256,7 +258,17 @@ def test_full_arrival_two_ship(airfield, brain):
     assert "descend to 1500 feet" in r.lower()
     # Readback of the descent -> Control hands off to Tower (MA flow, kn. page 2)
     r = sc.say("Descend to 1500 feet, Colt 1", Controller.CONTROL)
-    assert "contact Tower" in r
+    assert r == ""
+    assert sc.phase() == Phase.INBOUND
+    # The monitor hands off only after the final descent readback and CTR entry.
+    r = brain.check_arrival_tower_handoff("Colt 1", sc._track())
+    if r is None:
+        # Move into the CTR after the final descent is read back.
+        sc.lat, sc.lon = airfield.ctr.center_lat, airfield.ctr.center_lon
+        r = brain.check_arrival_tower_handoff("Colt 1", sc._track())
+    assert r and "contact Tower" in r
+    assert sc.phase() == Phase.INBOUND
+    sc.say("Tower, Colt 1", Controller.TOWER)
     assert sc.phase() == Phase.LANDING
 
     # Tower: entry, runway in sight (break), on final (land).
@@ -478,6 +490,9 @@ def test_entry_report_at_gate_hands_to_tower(airfield, brain):
     sc.say("150 to join via Entry East, Colt 1", Controller.CONTROL)
     r = sc.say("Control, Colt 1, entry west", Controller.CONTROL)
     assert "contact Tower" in r
+    assert sc.phase() == Phase.INBOUND
+    assert brain.pilots["Colt 1"].pending_handoff_to == Controller.TOWER.value
+    sc.say("Tower, Colt 1", Controller.TOWER)
     assert sc.phase() == Phase.LANDING
 
 
@@ -595,38 +610,37 @@ def test_takeoff_readback_is_silent(airfield, brain):
     assert r == ""
 
 
-def test_descent_handoff_waits_until_at_1500(airfield, brain):
-    """Control does not push to Tower on the descend readback if still high.
+def test_ctr_handoff_waits_for_final_descent_readback(airfield, brain):
+    """CTR entry alone cannot skip the final descent/readback in the SOP."""
+    sc = _scenario(airfield, brain).set_alt(5000.0)
+    pilot = brain._pilot("Colt 1")
+    pilot.phase = Phase.INBOUND
+    pilot.checked_in_at = Controller.CONTROL.value
+    pilot.entry_gate = "East"
+    pilot.descend_intermediate = True
+    pilot.descend_readback = True  # readback of the 5000 ft step only
 
-    The final descent itself also waits: an arrival still above the
-    step-down altitude (5000 ft) gets silence on the readback (debrief
-    2026-10-18 20:46:38 — "descend to 1500" at 8000 ft), the descent is
-    issued once 5000 is reached, and the Tower handoff fires at 1500.
-    """
-    sc = _scenario(airfield, brain).at_gate("East")
-    sc.alt = 8000.0
-    sc.say("Kutaisi Control, Colt 1, inbound 10 miles east at Angels 8",
-           Controller.CONTROL)
-    sc.say("150 to join via Entry East, Colt 1", Controller.CONTROL)
-    r = sc.say("Descend to 1500 feet, Colt 1", Controller.CONTROL)
-    assert r == ""
-    assert sc.phase() == Phase.INBOUND
-    assert brain.check_descent_handoff("Colt 1", sc._track()) is None
-    # Still above 5000: no final descent yet.
-    assert brain.check_arrival_descent("Colt 1", sc._track()) is None
-    # At 5000: Control issues the final descent.
-    sc.alt = 5000.0
+    # The aircraft is in the CTR. A prior intermediate readback isn't enough.
+    assert brain.check_arrival_tower_handoff("Colt 1", sc._track()) is None
+
+    # Control issues the final 1500 ft clearance; still wait for its readback.
     descend = brain.check_arrival_descent("Colt 1", sc._track())
     assert descend and "1500" in descend
-    # The pilot reads it back; the handoff still waits for 1500.
-    sc.alt = 3000.0
+    assert not pilot.descend_readback
+    assert brain.check_arrival_tower_handoff("Colt 1", sc._track()) is None
+
+    # The pilot reads it back. Tower can now be offered because the aircraft
+    # is already inside the chosen "near the field" boundary.
     assert sc.say("Descend to 1500 feet, Colt 1", Controller.CONTROL) == ""
-    assert brain.check_descent_handoff("Colt 1", sc._track()) is None
-    sc.alt = 1500.0
-    call = brain.check_descent_handoff("Colt 1", sc._track())
+    call = brain.check_arrival_tower_handoff("Colt 1", sc._track())
     assert call and "contact Tower" in call
-    assert sc.phase() == Phase.LANDING
-    assert brain.check_descent_handoff("Colt 1", sc._track()) is None
+    assert pilot.phase == Phase.INBOUND
+    assert pilot.pending_handoff_to == Controller.TOWER.value
+    assert brain.check_arrival_tower_handoff("Colt 1", sc._track()) is None
+    # A direct Tower check-in completes the handoff.
+    sc.say("Tower, Colt 1", Controller.TOWER)
+    assert pilot.phase == Phase.LANDING
+    assert not pilot.pending_handoff_to
 
 
 def test_holding_point_beside_runway_is_not_lined_up(airfield):
@@ -1004,7 +1018,7 @@ def test_full_lifecycle_all_pages(airfield, brain):
     assert sc.phase() == Phase.TAKEOFF
 
     r = sc.say("Tower, Colt 1, airborne", Controller.TOWER)
-    assert "continue outbound" in r
+    assert r == ""
     r = _pass_departure_exit(sc, brain, airfield)
     assert r and "contact Control" in r
     assert sc.phase() == Phase.AIRBORNE

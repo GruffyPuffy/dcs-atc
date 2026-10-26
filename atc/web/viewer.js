@@ -34,6 +34,7 @@ async function loadDebrief(name) {
     drawOverlay(data.airfield);
     drawAirspace(data.airfield);
     drawAircraft(data.aircraft);
+    fitReplayPaths(data.aircraft);
     drawBullseyeCalls(data.aircraft, data.airfield);
     drawTable(data.aircraft);
     drawChatter(data.chatter || [], data.airfield.agencies || []);
@@ -44,6 +45,8 @@ async function loadDebrief(name) {
     const status = document.getElementById('status');
     status.textContent = 'server offline';
     status.className = 'status bad';
+    status.title = String(e);
+    console.error('Debrief viewer load failed:', e);
   }
 }
 

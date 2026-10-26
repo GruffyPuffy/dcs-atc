@@ -193,7 +193,7 @@ channel.
 | "Climbing to Angels 15, Colt 1" | **climb readback** | *(silent)* — then, once at Angels 15, "Colt 1, Control, contact Stingray on channel 3." (Stingray is a real controller — see §11) |
 | "Kutaisi Control, Colt 1, inbound 35 miles north at Angels 12" | **inbound** | "Colt 1, Control, radar contact, turn right heading 150 to join via Entry East." (heading **and turn** computed from the live position; a pilot already pointing at the gate gets "fly heading 150" instead; entry is the best/straight-in gate for runway 25) |
 | "150 to join via Entry East, Colt 1" | **readback** | "Colt 1, Control, descend and maintain 5000 feet." (far out) / "…descend to 1500 feet." (within 15 NM of the entry) — the descent is **stepped by distance** |
-| "Descend to 1500 feet, Colt 1" | **readback** | *(silent if still high)* — then, once at 1500 ft, "Colt 1, Control, contact Tower on channel 7." unprompted. Already at 1500 on the readback → handoff immediately. |
+| "Descend to 1500 feet, Colt 1" | **readback** | *(silent)* — Control pushes Tower when the inbound flight enters the CTR horizontally. A valid entry/final report on Control can still request an earlier handoff. |
 | "Tower, Colt 1, Entry East" | **entry** | "Colt 1, Tower, report runway in sight." |
 | "Tower, Colt 1, runway in sight" | **runway in sight** | "2-ship Colt 1, Tower, wind calm, cleared for left overhead break runway 25." (the "2-ship" prefix appears once a formation size has been heard) | |
 | "cleared for left overhead break runway 25, Colt 1" | **readback** | *(silent)* |
@@ -278,7 +278,7 @@ follows.) The marker is the `help_prefix` variable in `phraseology.json`
 | Departure | "you are cleared for takeoff runway 25. After departure Exit West, 1500 ft or below, then contact Control on channel 8." |
 | Airborne (**on Tower**) | "contact Control on channel 8 and report your position and intentions." |
 | Airborne (**already on Control**) | "report inbound when you turn back, or push Stingray on channel 3 once you are at Angels 15." — the hint is controller-aware, so it never tells a pilot who is *already* on Control to "contact Control" |
-| Stingray (**or an air-start on Stingray**) | "you are with Stingray. Give a bullseye picture — **you are bullseye 008 for 33, angels 15** — then \"as fragged\". To head home, call \"bugout\" (or bingo / Miller Time / requesting RTB) — the reason is never questioned — then request Control on channel 8." — the hint states the pilot's **actual** bullseye position (computed from the mission bullseye and their live track), so they can check their numbers before calling them out. Without a bullseye or a live position it falls back to the generic example. |
+| Stingray (**or an air-start on Stingray**) | "you are with Stingray. Give a bullseye picture — **you are bullseye 008 for 33, angels 15** — then \"as fragged\". To head home, call \"bugout\" (or bingo / Miller Time / requesting RTB). Stingray will push Control between 25 and 80 miles from Kutaisi; if you have not heard the push by 25 miles, request Control. If you miss the push, you can still check in directly." — the hint states the pilot's **actual** bullseye position (computed from the mission bullseye and their live track), so they can check their numbers before calling them out. Without a bullseye or a live position it falls back to the generic example. |
 | Inbound | "report entering the control zone, then report runway in sight." |
 | Landing | "runway 25 is active. Report on final for landing clearance." |
 
@@ -1007,10 +1007,12 @@ never broadcast their arrival; pilots call them). Disable it with
   An **inbound** call wins over the departure keywords, so *"inbound 35 miles
   north at Angels 12"* is routed as an arrival (not answered with "climb to
   Angels 15").
-- readback of the descent (or an entry report) → handoff to Tower:
-  *"contact Tower on channel 7"*. This matches the Master Arms flow (kneeboard
-  page 2): Control hands off right after the descend readback — there is no
-  separate "passing the entry point" call, and Control never re-issues the join.
+- entering the CTR horizontally, after the final descent clearance has been
+  read back → automatic handoff to Tower: *"contact Tower on channel 7"*.
+  Achieving 1500 ft is not required, so a slow descent does not delay the
+  transfer. A valid entry/final report or explicit request can ask for an
+  earlier handoff. A pending handoff does not change the active agency until
+  the pilot checks in on Tower.
 - "airborne" / "climbing" / "at 1500 ft" / "checking in" / "request climb" /
   "ready to climb" (departure check-in) →
   *"radar contact, climb to Angels 15"*. If the pilot checks in while **still
@@ -1097,9 +1099,12 @@ the package channel:
   (fuel to return), `Joker` (fuel to head home), `Bugout` (leaving the
   engagement), `Winchester` (no ordnance), plus plain `RTB` / `requesting RTB` /
   `returning to base` / `recovering`.
-- **Handoff back**: *"request Control"* → *"contact Kutaisi Control on channel
-  8"*, which re-enters the normal Control arrival flow, so the inbound dialogs
-  are unchanged.
+- **Handoff back**: after an RTB call, Stingray automatically issues one
+  *"contact Kutaisi Control on channel 8"* push at 50 NM from the airfield
+  reference point (a midpoint in the SOP's usual 25–80 NM window). The push is
+  not repeated; a pilot can request Control at any time or check in directly if
+  the push was missed. Control accepts that check-in and continues the inbound
+  flow.
 
 **Not implemented yet:** RAMROD authentication (the two-letter challenge with
 the in-between answer). The SOP has it, but it needs a prebriefed key, which is
@@ -1136,6 +1141,13 @@ The bot issues the standard Master Arms handoffs as the flight progresses:
   it is issued by the position monitor (`check_departure_handoff`, every ~2 s),
   so the pilot does **not** have to report "airborne" — the aircraft simply
   leaving the runway is enough. It is not a reply to a transmission.
+- Stingray → Control (RTB): one automatic push at 50 NM after the pilot reports
+  RTB. A direct Control check-in is accepted if the push is missed.
+- Control → Tower (arrivals): automatically when a Control-checked-in inbound
+  flight has read back the final descent clearance and enters the CTR's
+  horizontal boundary. The aircraft need not have reached 1500 ft. A valid
+  entry/final report or explicit request on Control can also ask for an earlier
+  handoff.
 - Tower → Ground (after landing): *"contact Ground on channel 6"*
   (`contact_ground`).
 
@@ -1216,7 +1228,7 @@ in, give a bullseye picture, and later request RTB.)
 |---|------|-----------|-------------|
 | 1 | Control | "Kutaisi Control, Colt 1, inbound 35 miles north at Angels 12." | "Colt 1, Control, radar contact, turn right heading 150 to join via Entry East." (heading + turn computed; entry = best/straight-in gate for the runway) |
 | 2 | Control | "150 to join via Entry East, Colt 1." | "Colt 1, Control, descend to 1500 feet." |
-| 3 | Control | "Descend to 1500 feet, Colt 1." | *(silent if still high)* — then, once at 1500 ft, "Colt 1, Control, contact Tower on channel 7." |
+| 3 | Control | "Descend to 1500 feet, Colt 1." | *(silent)* — then, on horizontal CTR entry, "Colt 1, Control, contact Tower on channel 7." |
 | 4 | Tower | "Tower, Colt 1, Entry North." | "Colt 1, Tower, report runway in sight." |
 | 5 | Tower | "Tower, Colt 1, runway in sight." | "2-ship Colt 1, Tower, wind calm, cleared for left overhead break runway 25." |
 | 6 | Tower | "Tower, Colt 1, on final." | "Colt 1, Tower, wind calm, runway 25, cleared to land." |
@@ -1290,7 +1302,7 @@ Every reply here is the bot's actual output. Kneeboard card:
 |---|------|-----------|-------------|
 | 5 | Control | "Kutaisi Control, Colt 1, inbound 35 miles north at Angels 12." | "Colt 1, Control, radar contact, turn right heading 150 to join via Entry East." *(heading + turn computed)* |
 | 6 | Control | "150 to join via Entry East, Colt 1." | "Colt 1, Control, descend to 1500 feet." |
-| 7 | Control | "Descend to 1500 feet, Colt 1." | *(silent if still high)* — then, once at 1500 ft, "Colt 1, Control, contact Tower on channel 7." |
+| 7 | Control | "Descend to 1500 feet, Colt 1." | *(silent)* — then, on horizontal CTR entry, "Colt 1, Control, contact Tower on channel 7." |
 | 8 | Tower | "Tower, Colt 1, Entry East." | "Colt 1, Tower, report runway in sight." |
 | 9 | Tower | "Colt 1, runway in sight." | "Colt 1, Tower, wind calm, cleared for left overhead break runway 25." |
 | 10 | Tower | "Colt 1, on final." | "Colt 1, Tower, wind calm, runway 25, cleared to land." |

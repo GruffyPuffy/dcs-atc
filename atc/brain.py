@@ -70,6 +70,9 @@ RADAR_CLEAR_NM = 3.0
 # to Stingray on channel 3 once they are there.
 ANGELS_HANDOFF_FT = 15000
 ANGELS_HANDOFF_SLOP_FT = 500
+# Master Arms describes the RTB handoff as usually occurring 25–80 NM from
+# base. Use a single midpoint trigger; a pilot can still request Control early.
+RTB_CONTROL_HANDOFF_NM = 50.0
 
 # Bullseye picture-call tolerance. The pilot reads bullseye off their HSI and
 # STT mangles numbers, so a call is only "off" when it is clearly wrong; an off
@@ -464,6 +467,7 @@ class PilotState:
     descend_issued: bool = False  # Control has issued the descent to 1500 ft
     descend_intermediate: bool = False  # Control issued the far-out step-down
     climb_issued: bool = False  # Control has issued the departure climb
+    control_checkin_received: bool = False  # pilot checked in after handoff
     # Control has pushed the departure to Stingray (AWACS). Fires once; we do
     # not simulate channel 3, but the SOP call still goes out on Control.
     stingray_handoff_announced: bool = False
@@ -483,8 +487,9 @@ class PilotState:
     # The pilot has read back "line up and wait" but is not yet lined up on the
     # runway. The takeoff clearance waits until they are (see check_lineup).
     lineup_readback: bool = False
-    # The pilot has read back "descend to 1500 feet" but is not yet there.
-    # Control holds the Tower handoff until they are (see check_descent_handoff).
+    # The pilot has read back the current descent clearance. Reset when the
+    # final 1500 ft clearance is issued so an earlier 5000 ft readback cannot
+    # trigger the Tower handoff.
     descend_readback: bool = False
     # Tower has pushed a landed flight to Ground (Master Arms SOP: "after
     # landing, tower will push you to the Ground channel"). Fires once per
@@ -496,6 +501,8 @@ class PilotState:
     # The flight has told Stingray it is returning to base ("Miller Time",
     # "Bingo", "requesting RTB"). Arms the handoff back to Control.
     rtb_requested: bool = False
+    rtb_control_handoff_announced: bool = False
+    tower_handoff_announced: bool = False
     formation: int = 0  # flight size (2+ = multi-ship), learned from calls
     # Trainer aid: this pilot asked for the in-game comms mirror ("trainer,
     # echo on"). Per-pilot, so each pilot controls their own feed.
@@ -507,6 +514,12 @@ class PilotState:
     last_reply: str = ""  # last clearance, replayed on "say again"
     last_clearance: str = ""  # last clearance issued, for readback verification
     last_controller: str = ""  # last agency talked to (for the map view)
+    # Radio handoff state is explicit so the map/debrief can distinguish the
+    # agency last heard, the agency ATC asked the pilot to contact, and an
+    # agency the pilot requested.
+    checked_in_at: str = ""
+    pending_handoff_to: str = ""
+    requested_handoff_to: str = ""
     readback_fails: int = 0  # consecutive incomplete readbacks of one clearance
     # Last transmission was judged as a READBACK (verified via _check_readback/
     # _readback_coaching), so the coach can attach readback-specific wording
@@ -1392,7 +1405,26 @@ class AtcBrain:
         # test, worker crash) must not be taught a stale clearance.
         pilot.pending_coach = ""
         pilot.last_readback = False
+        previous_controller = pilot.checked_in_at or pilot.last_controller
+        if previous_controller and previous_controller != controller.value:
+            # A received check-in completes a transfer, even if the pilot
+            # missed the push or changed frequency without one. Do not advance
+            # the phase when ATC merely issues a handoff.
+            self._enter_agency(pilot, controller)
+            if (controller == Controller.TOWER
+                    and previous_controller == Controller.CONTROL.value
+                    and pilot.phase == Phase.INBOUND):
+                pilot.phase = Phase.LANDING
+            if (pilot.pending_handoff_to
+                    and pilot.pending_handoff_to != controller.value):
+                # A direct check-in on another agency supersedes an old push.
+                pilot.pending_handoff_to = ""
         pilot.last_controller = controller.value
+        pilot.checked_in_at = controller.value
+        if pilot.pending_handoff_to == controller.value:
+            pilot.pending_handoff_to = ""
+        if pilot.requested_handoff_to == controller.value:
+            pilot.requested_handoff_to = ""
         self._note_formation(pilot, low)
         # STT normalisation, applied once, at the point where every intent is
         # matched against the text: see `_fold_spoken_figures`. Done *after*
@@ -1403,6 +1435,12 @@ class AtcBrain:
         low = _fold_bullseye_figures(low)
         reply = self._dispatch(callsign, pilot, low, track, controller, traffic,
                                speaker)
+        if reply:
+            handoff = re.search(
+                r"\bcontact\s+(?:(?:kutaisi|[\w-]+)\s+)?"
+                r"(ground|tower|control|stingray)\b", reply, re.I)
+            if handoff:
+                pilot.pending_handoff_to = handoff.group(1).lower()
         if reply and not self._is_meta_reply(reply):
             # Remember the last clearance so the pilot can ask for it again
             # ("say again") — a trainer aid for missed readbacks. Meta replies
@@ -1684,6 +1722,7 @@ class AtcBrain:
             # Asking for the agency they are already on: just acknowledge.
             return self._say("agency_ack", callsign,
                              agency=self._agency(controller))
+        pilot.requested_handoff_to = target.value
         # Tower retains the departure until it passes its exit arc. An early
         # request is acknowledged with the expected point; the normal radar
         # handoff will happen automatically when that point is reached.
@@ -1692,10 +1731,7 @@ class AtcBrain:
             handoff = self.check_departure_handoff(callsign, track)
             if handoff:
                 return handoff
-            return self._say("continue_to_exit", callsign,
-                             gate=self._exit_label(
-                                 pilot.exit_gate or self._pick_exit_gate()))
-        self._enter_agency(pilot, target)
+            return ""
         return self._say("contact_agency", callsign,
                          agency=self._agency(controller),
                          target=self._agency(target),
@@ -1755,12 +1791,17 @@ class AtcBrain:
         """
         if target == Controller.STINGRAY:
             pilot.phase = Phase.STINGRAY
+            pilot.rtb_requested = False
+            pilot.rtb_control_handoff_announced = False
         elif target == Controller.CONTROL:
             # A departure moving from Tower to Control stays in the departure
-            # flow. Other Control requests (notably Stingray RTB) begin arrival.
-            pilot.phase = (Phase.AIRBORNE
-                           if pilot.phase in (Phase.TAKEOFF, Phase.AIRBORNE)
-                           else Phase.INBOUND)
+            # flow. An arrival that returns to Control after a Tower check-in
+            # stays in Landing, so it is sent back to Tower instead of being
+            # given a fresh join. Stingray RTB and other arrivals begin inbound.
+            if pilot.phase in (Phase.TAKEOFF, Phase.AIRBORNE):
+                pilot.phase = Phase.AIRBORNE
+            elif pilot.phase != Phase.LANDING:
+                pilot.phase = Phase.INBOUND
             pilot.cleared_inbound = False
         elif target == Controller.TOWER:
             if pilot.phase in (Phase.IDLE, Phase.CLEARANCE, Phase.TAXI):
@@ -1850,6 +1891,7 @@ class AtcBrain:
         pilot.descend_issued = False
         pilot.descend_intermediate = False
         pilot.climb_issued = False
+        pilot.control_checkin_received = False
         pilot.stingray_handoff_announced = False
         pilot.exit_gate = ""
         pilot.entry_gate = ""
@@ -1862,6 +1904,11 @@ class AtcBrain:
         pilot.lineup_readback = False
         pilot.descend_readback = False
         pilot.landing_handoff_announced = False
+        pilot.rtb_requested = False
+        pilot.rtb_control_handoff_announced = False
+        pilot.tower_handoff_announced = False
+        pilot.pending_handoff_to = ""
+        pilot.requested_handoff_to = ""
         pilot.pending_coach = ""
         return self._say("state_reset", callsign,
                          agency=self._agency(controller))
@@ -2215,9 +2262,7 @@ class AtcBrain:
                 pilot.departure_previous_bearing_deg = None
                 note = self._exit_deviation_note(pilot, gate)
                 return note + self._say("contact_control", callsign)
-            return self._say("continue_to_exit", callsign,
-                             gate=self._exit_label(pilot.exit_gate
-                                                   or self._pick_exit_gate()))
+            return ""
         # Departure handoff: once airborne, Tower hands the flight to Control.
         # "rolling" alone is NOT a departure call — a landing pilot says
         # "rolling off runway 25" (handled below), so require a departure word.
@@ -2231,9 +2276,7 @@ class AtcBrain:
                 handoff = self.check_departure_handoff(callsign, track)
                 if handoff:
                     return handoff
-                return self._say("continue_to_exit", callsign,
-                                 gate=self._exit_label(
-                                     pilot.exit_gate or self._pick_exit_gate()))
+                return ""
             pilot.phase = Phase.AIRBORNE
             return self._say("contact_control", callsign)
         # Readback of "report runway in sight" ("Report runway in sight, Adder11")
@@ -2264,7 +2307,7 @@ class AtcBrain:
         if re.search(r"\bentry\b", low) or (
                 pilot.phase in (Phase.INBOUND, Phase.LANDING)
                 and self._spoken_gate(low)):
-            pilot.phase = Phase.INBOUND
+            pilot.phase = Phase.LANDING
             pilot.cleared_inbound = True
             return self._say("report_runway_in_sight", callsign)
         # Overhead-break calls. "overhead break" / "initial" is the request for
@@ -2408,6 +2451,8 @@ class AtcBrain:
 
     def _handle_control(self, callsign: str, pilot: PilotState, low: str,
                         track: AircraftTrack | None) -> str | None:
+        if pilot.pending_handoff_to == Controller.TOWER.value:
+            return self._say("control_handoff_repeat", callsign)
         # Already handed off to Tower (Landing): Control has nothing further to
         # say. Without this, a later Control call parsed as an inbound/entry
         # report re-cleared a join and pulled the arrival back off Tower — the
@@ -2441,10 +2486,9 @@ class AtcBrain:
                              heading=f"{self._cockpit_bearing(heading):03.0f}",
                              turn=turn)
         # Readback of the join clearance ("150 to join via Entry East") ->
-        # Control issues the descent to 1500 ft (once). The pilot's readback of
-        # *that* descent then hands the flight to Tower — but only once they are
-        # actually at 1500 (the readback is just the acknowledgement; they may
-        # still be at Angels 8). An explicit entry report is handled below.
+        # Control issues the descent to 1500 ft (once). The Tower handoff is
+        # position-driven at the horizontal CTR boundary, not the altitude
+        # readback; an explicit entry/final report can request it earlier.
         # NOTE: a *request* for a heading/vector/azimuth is a trainer aid and is
         # matched in `_dispatch` BEFORE controller dispatch, so it never reaches
         # this readback branch. Only a genuine readback ("150 to join via Entry
@@ -2461,19 +2505,12 @@ class AtcBrain:
                 # their readback is remembered, so the handoff monitor fires
                 # at pattern altitude without another call.
                 if pilot.descend_readback:
-                    # Already read back the descent plan; still descending.
-                    # Stay silent unless at pattern altitude already.
-                    if self._at_pattern_alt(track):
-                        pilot.phase = Phase.LANDING
-                        return self._say("contact_tower_from_control",
-                                         callsign)
+                    # Already read back the descent plan. Tower takes over at
+                    # the CTR boundary, not merely because altitude is met.
                     return ""
                 return self._descend_reply(callsign, pilot, track)
-            if not self._at_pattern_alt(track):
-                pilot.descend_readback = True
-                return ""
-            pilot.phase = Phase.LANDING
-            return self._say("contact_tower_from_control", callsign)
+            pilot.descend_readback = True
+            return ""
         # Already inbound / handed off, and the pilot reports being at or near
         # the entry point -> hand to Tower. NEVER re-issue the join here: once
         # the join has been given, an "entry" mention must not loop the arrival
@@ -2498,7 +2535,8 @@ class AtcBrain:
             gate = self._spoken_gate(low) or pilot.entry_gate
             if gate and not self._at_entry(track, gate):
                 return self._challenge(callsign, self.control_short, track)
-            pilot.phase = Phase.LANDING
+            pilot.pending_handoff_to = Controller.TOWER.value
+            pilot.tower_handoff_announced = True
             return self._say("contact_tower_from_control", callsign)
         # First arrival check-in ("inbound ..."). Blocked once the flight has
         # been handed to Tower (Landing), so a stray "inbound" cannot loop the
@@ -2511,6 +2549,7 @@ class AtcBrain:
         if pilot.phase != Phase.LANDING and re.search(
                 r"\binbound\b|\bentry\b", low):
             pilot.phase = Phase.INBOUND
+            pilot.tower_handoff_announced = False
             pilot.cleared_inbound = True
             gate = self._pick_entry_gate(track, low, pilot)
             pilot.entry_gate = gate
@@ -2541,6 +2580,7 @@ class AtcBrain:
             # flow). The arrival flow is armed by an explicit inbound call.
             if pilot.phase not in (Phase.INBOUND, Phase.LANDING):
                 pilot.phase = Phase.AIRBORNE
+            pilot.control_checkin_received = True
             # A pilot who checks in with Control while still inside the CTR
             # (below the ceiling) is on the wrong frequency: Tower owns the
             # zone up to the ceiling. Real Control would not clear them up
@@ -2576,7 +2616,8 @@ class AtcBrain:
                      r"established\s+on\b|"
                      r"request(?:ing)?\s+(?:to\s+)?land|request\s+landing|"
                      r"landing)\b", low):
-            pilot.phase = Phase.LANDING
+            pilot.pending_handoff_to = Controller.TOWER.value
+            pilot.tower_handoff_announced = True
             return self._say("contact_tower_from_control", callsign)
         # Common short-hands for returning to base. A pilot who says "RTB" or
         # "returning to base" is inbound, and answering "say again" strands them.
@@ -2653,6 +2694,8 @@ class AtcBrain:
             repeated = pilot.rtb_requested
             pilot.phase = Phase.STINGRAY
             pilot.rtb_requested = True
+            if not repeated:
+                pilot.rtb_control_handoff_announced = False
             if repeated:
                 return ""
             return self._say("stingray_rtb_copy", callsign)
@@ -2679,8 +2722,6 @@ class AtcBrain:
         if re.search(r"\b(control|channel\s*8|channel eight|inbound|"
                      r"request(?:ing)?\s+(?:to\s+)?(?:land|landing|approach)|"
                      r"approach)\b", low):
-            pilot.phase = Phase.INBOUND
-            pilot.cleared_inbound = False
             return self._say("stingray_contact_control", callsign)
 
         # Package-channel reports that need no answer from AWACS: the flight
@@ -2954,6 +2995,8 @@ class AtcBrain:
         pilot.departure_handoff_announced = False
         pilot.departure_previous_range_nm = None
         pilot.departure_previous_bearing_deg = None
+        pilot.control_checkin_received = False
+        pilot.climb_issued = False
         turnout = self._takeoff_turnout(pilot)
         if turnout == "right":
             return self._say("lineup_readback", callsign, turnout=turnout)
@@ -3079,8 +3122,8 @@ class AtcBrain:
 
         In both cases the pilot's readback is remembered
         (`descend_readback`), so the monitors issue the final descent once
-        they are actually low and close, and the Tower handoff follows at
-        pattern altitude without another call.
+        they are actually low and close. The Tower handoff is a separate
+        horizontal CTR-boundary event.
         """
         gate = pilot.entry_gate or self._pick_entry_gate(track, None, pilot)
         distance = self._distance_to_gate(track, gate)
@@ -3104,23 +3147,25 @@ class AtcBrain:
             # still above the step-down altitude itself: the descent to
             # 5000 is in progress. Stay silent — the monitor issues the
             # final descent once 5000 is reached. The pilot HAS
-            # acknowledged the descent plan, so remember the readback: the
-            # handoff monitor (check_descent_handoff) can then fire as
-            # soon as they reach pattern altitude, without another call.
+            # acknowledged the descent plan, so remember the readback; the
+            # separate CTR-boundary monitor can hand off without another call.
             pilot.descend_readback = True
             return ""
         pilot.descend_issued = True
+        # `descend_readback` tracks the most recent clearance. If this is the
+        # final 1500 ft clearance, a readback of the earlier 5000 ft step must
+        # not satisfy the Tower handoff prerequisite.
+        pilot.descend_readback = False
         return self._say("control_descend", callsign)
 
     def check_departure_handoff(self, callsign: str,
                                 track: AircraftTrack | None) -> str | None:
         """Push a departure to Control after it crosses an outbound gate arc.
 
-        Master Arms SOP: after takeoff, "expect instructions to switch to
-        control" — Tower initiates the handoff, the pilot does not have to
-        report "airborne". The handoff waits until it passes the assigned exit
-        arc. If the pilot leaves through a different configured departure gate,
-        we still hand off there and coach the deviation.
+        Tower initiates the Control handoff when radar shows the flight passing
+        an outbound exit arc. A pilot report is not needed to trigger it. If
+        the pilot passes a different configured departure gate, hand off there
+        and coach the deviation.
         """
         pilot = self._pilot(callsign)
         if (pilot.phase != Phase.TAKEOFF or pilot.departure_handoff_announced
@@ -3144,18 +3189,14 @@ class AtcBrain:
                                     and previous_bearing is not None) else
                                 self.airfield.gate_arc_passed_outbound(
                                     track.lat, track.lon, gate))), None)
-        # Do not strand a departure in the Tower phase when it leaves the CTR
-        # without crossing any configured exit arc. The angular gate still
-        # decides whether the assigned exit was used; leaving the zone is the
-        # safety fallback that completes the handoff and reports a miss.
-        if (passed_gate is None
-                and not self.airfield.ctr.contains_horizontal(
-                    track.lat, track.lon)):
-            passed_gate = ""
         if passed_gate is None:
             return None
         pilot.departure_handoff_announced = True
+        # Crossing the departure exit makes the flight physically airborne,
+        # even though its checked-in radio agency remains Tower until it calls
+        # Control. These are separate pieces of state.
         pilot.phase = Phase.AIRBORNE
+        pilot.pending_handoff_to = Controller.CONTROL.value
         note = self._exit_deviation_note(pilot, passed_gate)
         pilot.departure_previous_range_nm = None
         pilot.departure_previous_bearing_deg = None
@@ -3183,14 +3224,14 @@ class AtcBrain:
                               track: AircraftTrack | None) -> str | None:
         """Climb a departure once it is clear of the control zone.
 
-        A departure that checks in with Control while still inside the CTR is
-        told to remain below the ceiling (Tower owns the zone). Real Control
-        then watches on radar and issues the climb as soon as the aircraft
-        leaves the zone — the pilot does not have to report again. Fires once.
+        Control must have received the pilot's check-in before issuing a climb.
+        If the pilot checks in inside the CTR, Control tells them to remain
+        below the ceiling; the climb then goes out automatically once clear.
+        Fires once.
         """
         pilot = self._pilot(callsign)
-        if (pilot.phase != Phase.AIRBORNE or pilot.climb_issued
-                or track is None):
+        if (pilot.phase != Phase.AIRBORNE or not pilot.control_checkin_received
+                or pilot.climb_issued or track is None):
             return None
         if self._inside_ctr(track):
             return None
@@ -3207,7 +3248,8 @@ class AtcBrain:
         until the inbound call. Fires once.
         """
         pilot = self._pilot(callsign)
-        if (pilot.phase != Phase.AIRBORNE or not pilot.climb_issued
+        if (pilot.phase != Phase.AIRBORNE or not pilot.control_checkin_received
+                or not pilot.climb_issued
                 or pilot.stingray_handoff_announced or track is None):
             return None
         if self._inside_ctr(track):
@@ -3215,7 +3257,53 @@ class AtcBrain:
         if track.alt_ft < ANGELS_HANDOFF_FT - ANGELS_HANDOFF_SLOP_FT:
             return None
         pilot.stingray_handoff_announced = True
+        pilot.pending_handoff_to = Controller.STINGRAY.value
         return self._say("contact_stingray", callsign)
+
+    def check_stingray_rtb_handoff(self, callsign: str,
+                                   track: AircraftTrack | None) -> str | None:
+        """One automatic Stingray-to-Control push after an RTB call.
+
+        The MA SOP gives a broad 25–80 NM window. A single midpoint trigger
+        avoids repeated pushes when a flight orbits; pilots can request Control
+        at any time if they missed it.
+        """
+        pilot = self._pilot(callsign)
+        if (pilot.phase != Phase.STINGRAY or not pilot.rtb_requested
+                or pilot.rtb_control_handoff_announced
+                or pilot.pending_handoff_to == Controller.CONTROL.value
+                or track is None):
+            return None
+        if track.distance_nm > RTB_CONTROL_HANDOFF_NM:
+            return None
+        pilot.rtb_control_handoff_announced = True
+        pilot.pending_handoff_to = Controller.CONTROL.value
+        return self._say("stingray_contact_control", callsign)
+
+    def check_arrival_tower_handoff(self, callsign: str,
+                                    track: AircraftTrack | None) -> str | None:
+        """Push an inbound flight to Tower after final descent readback at CTR.
+
+        The horizontal CTR boundary defines "near the airfield", but the MA
+        dialog requires the pilot to receive and read back the final descent
+        before Control hands them to Tower. The aircraft need not have reached
+        1500 ft; the clearance readback, not achieved altitude, is the gate.
+        The handoff is latched so an orbit cannot trigger repeated pushes.
+        """
+        pilot = self._pilot(callsign)
+        if (pilot.phase != Phase.INBOUND
+                or not pilot.descend_issued
+                or not pilot.descend_readback
+                or pilot.checked_in_at != Controller.CONTROL.value
+                or pilot.tower_handoff_announced
+                or pilot.pending_handoff_to == Controller.TOWER.value
+                or track is None or self.airfield is None):
+            return None
+        if not self.airfield.ctr.contains_horizontal(track.lat, track.lon):
+            return None
+        pilot.tower_handoff_announced = True
+        pilot.pending_handoff_to = Controller.TOWER.value
+        return self._say("contact_tower_from_control", callsign)
 
     def check_arrival_descent(self, callsign: str,
                               track: AircraftTrack | None) -> str | None:
@@ -3230,7 +3318,9 @@ class AtcBrain:
         never stepped down at all (21:17:59).
         """
         pilot = self._pilot(callsign)
-        if (pilot.phase != Phase.INBOUND or pilot.descend_issued
+        if (pilot.phase != Phase.INBOUND
+                or pilot.pending_handoff_to == Controller.TOWER.value
+                or pilot.descend_issued
                 or not (pilot.descend_intermediate
                         or pilot.descend_readback)):
             return None
@@ -3240,26 +3330,16 @@ class AtcBrain:
             if track is not None and track.alt_ft > DESCENT_INTERMEDIATE_FT:
                 return None
             pilot.descend_issued = True
+            # Require a readback of this final clearance; a prior 5000 ft
+            # readback does not complete the arrival sequence.
+            pilot.descend_readback = False
             return self._say("control_descend", callsign)
         return None
 
     def check_descent_handoff(self, callsign: str,
                               track: AircraftTrack | None) -> str | None:
-        """Hand an arrival to Tower once it is actually at 1500 ft.
-
-        After "descend to 1500 feet" the pilot reads it back, but they may still
-        be at Angels 8. Control waits until the aircraft is at pattern altitude,
-        then pushes them to Tower unprompted. Fires once.
-        """
-        pilot = self._pilot(callsign)
-        if (pilot.phase != Phase.INBOUND or not pilot.descend_issued
-                or not pilot.descend_readback or track is None):
-            return None
-        if not self._at_pattern_alt(track):
-            return None
-        pilot.descend_readback = False
-        pilot.phase = Phase.LANDING
-        return self._say("contact_tower_from_control", callsign)
+        """Compatibility entry point for the CTR-driven arrival handoff."""
+        return self.check_arrival_tower_handoff(callsign, track)
 
     def _spoken_parking(self, low: str) -> str | None:
         """Parking area named in the transmission, e.g. 'ramp north'."""
@@ -3686,5 +3766,6 @@ class AtcBrain:
                 and not pilot.landing_handoff_announced):
             pilot.landing_handoff_announced = True
             pilot.phase = Phase.TAXI
+            pilot.pending_handoff_to = Controller.GROUND.value
             return self._say("contact_ground", callsign)
         return None

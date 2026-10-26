@@ -10,7 +10,8 @@
   --ctr: #58a6ff;
 }
 * { box-sizing: border-box; }
-html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+html, body { margin: 0; width: 100%; height: 100%; overflow: hidden;
+  background: var(--bg); color: var(--text);
   font: 13px/1.4 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
 .topbar { display: flex; align-items: center; gap: 16px; padding: 8px 14px;
   background: var(--panel); border-bottom: 1px solid var(--line);
@@ -53,6 +54,7 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
 .dot.ground { background: var(--ground); }
 .dot.tower { background: var(--tower); }
 .dot.control { background: var(--control); }
+.dot.stingray { background: #bc8cff; }
 /* Aircraft markers: a divIcon with no default Leaflet box/border. */
 .ac { background: none; border: none; }
 .ac .ac-arrow {
@@ -71,8 +73,8 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
   font-size: 11px; color: #79c0ff; white-space: nowrap; font-weight: 600;
   text-shadow: 0 0 3px #000; margin-left: 10px; margin-top: -6px;
 }
-#map { position: absolute; inset: 44px 260px 0 0; }
-#panel { position: absolute; top: 44px; right: 0; bottom: 0; width: 260px;
+#map { position: fixed; inset: var(--topbar-height, 44px) 260px 0 0; }
+#panel { position: fixed; top: var(--topbar-height, 44px); right: 0; bottom: 0; width: 260px;
   background: var(--panel); border-left: 1px solid var(--line); padding: 10px 12px;
   overflow: auto; z-index: 1100; }
 #panel h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em;
@@ -85,7 +87,7 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
 
 /* Chatter log drawer (bottom). z-index above Leaflet's panes (which go up to
    ~1000), or the map draws over it. */
-#chatter { position: absolute; left: 0; right: 260px; bottom: 0;
+#chatter { position: fixed; left: 0; right: 260px; bottom: 0;
   background: var(--panel); border-top: 1px solid var(--line); display: flex;
   flex-direction: column; height: 35vh; z-index: 1100; }
 #chatter.collapsed { height: 34px; }

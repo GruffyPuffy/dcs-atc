@@ -5,6 +5,7 @@ const PHASE_COLOR = {
   ground: '#d29922',   // Ground agency
   tower: '#3fb950',    // Tower agency
   control: '#58a6ff',  // Control agency
+  stingray: '#bc8cff', // Stingray agency
 };
 
 let map, ctrLayer, staticLayer, aircraftLayer, aiLayer, chartLayer, pathLayer, commLayer;
@@ -27,6 +28,29 @@ const commMarkers = new Map();  // callsign -> L.layerGroup
 let commPopupKey = null;
 let bullseyePopupKey = null;
 let bullseyePopup = null;
+let displayedReplayName = '';
+
+function syncMapLayout() {
+  const topbar = document.querySelector('.topbar');
+  if (!topbar) return;
+  document.documentElement.style.setProperty(
+    '--topbar-height', `${Math.ceil(topbar.getBoundingClientRect().height)}px`);
+  if (map) requestAnimationFrame(() => map.invalidateSize({ pan: false }));
+}
+
+function fitReplayPaths(aircraft) {
+  const points = [];
+  for (const ac of aircraft || []) {
+    for (const p of ac.path || []) {
+      if (Number.isFinite(p[0]) && Number.isFinite(p[1])) points.push([p[0], p[1]]);
+    }
+  }
+  if (points.length) {
+    map.fitBounds(L.latLngBounds(points), {
+      padding: [36, 36], maxZoom: 11, animate: false,
+    });
+  }
+}
 
 function initMap(center) {
   map = L.map('map', { preferCanvas: true }).setView(center, 11);
@@ -69,6 +93,12 @@ function initMap(center) {
     else clearVectors();
   });
   initChatter();
+  syncMapLayout();
+  const topbar = document.querySelector('.topbar');
+  if (topbar && window.ResizeObserver) {
+    new ResizeObserver(syncMapLayout).observe(topbar);
+  }
+  window.addEventListener('resize', syncMapLayout);
 }
 
 function drawOverlay(af) {
@@ -877,16 +907,32 @@ function splitPath(pts, maxNm = PATH_JUMP_NM) {
   return segs;
 }
 
+const AGENCY_COLORS = {
+  ground: '#d29922', tower: '#3fb950', control: '#58a6ff',
+  stingray: '#bc8cff',
+};
+
+function splitAgencyPath(pts) {
+  const out = [];
+  let cur = [], agency = '';
+  for (const p of pts) {
+    const nextAgency = String(p[3] || '');
+    const jump = cur.length && nmBetween(cur[cur.length - 1], p) > PATH_JUMP_NM;
+    if (cur.length && (jump || (nextAgency && agency && nextAgency !== agency))) {
+      if (cur.length >= 2) out.push({ pts: cur, agency });
+      cur = jump ? [] : [cur[cur.length - 1]];
+    }
+    if (!cur.length || nextAgency) agency = nextAgency || agency;
+    cur.push(p);
+  }
+  if (cur.length >= 2) out.push({ pts: cur, agency });
+  return out;
+}
+
 function drawPath(ac) {
   const pts = ac.path || [];
-  const segs = splitPath(pts);
+  const segs = splitAgencyPath(pts);
   const active = ac.active !== false;
-  // A green trail reads clearly over the beige DCS chart (the controller-hued
-  // gray melted into the apron). Active flight: brighter + solid; a completed /
-  // replay sortie: slightly dimmer but still green and solid.
-  const style = active
-    ? { color: '#3fb950', weight: 3, opacity: 0.9, dashArray: null }
-    : { color: '#2ea043', weight: 2.5, opacity: 0.85, dashArray: null };
   let group = paths.get(ac.callsign);
   if (!group) {
     group = L.layerGroup().addTo(pathLayer);
@@ -894,11 +940,22 @@ function drawPath(ac) {
   }
   group.clearLayers();
   for (const seg of segs) {
-    L.polyline(seg, { ...style, interactive: false }).addTo(group);
+    const fallback = active ? '#3fb950' : '#2ea043';
+    // The fourth value is our agency label for coloring, not a Leaflet
+    // coordinate. Leaflet accepts [lat, lon] or [lat, lon, alt], and rejects
+    // [lat, lon, alt, agency] as an invalid LatLng.
+    L.polyline(seg.pts.map((p) => p.slice(0, 3)), {
+      color: AGENCY_COLORS[seg.agency] || fallback,
+      weight: active ? 3 : 2.5, opacity: active ? 0.9 : 0.85,
+      interactive: false,
+    }).addTo(group);
   }
 }
 
 function commColor(kind) {
+  if (kind === 'handoff') return '#f0883e';
+  if (kind === 'request') return '#bc8cff';
+  if (kind === 'checkin') return '#ffffff';
   if (kind === 'tx') return '#3fb950';       // ATC
   if (kind === 'state') return '#d29922';    // phase change
   if (kind === 'coach') return '#a371f7';    // wording-coach note (log-only)
@@ -912,6 +969,9 @@ function commColor(kind) {
 function commLine(c) {
   let sender;
   if (c.kind === 'tx') sender = 'ATC' + (c.controller ? '-' + c.controller : '');
+  else if (c.kind === 'handoff') sender = 'HANDOFF';
+  else if (c.kind === 'request') sender = 'PILOT-REQUEST';
+  else if (c.kind === 'checkin') sender = 'CHECK-IN';
   else if (c.kind === 'state') sender = 'STATE';
   else if (c.kind === 'coach') sender = 'COACH';
   else sender = 'PILOT' + (c.controller ? '-' + c.controller : '');
@@ -1125,6 +1185,7 @@ async function tick() {
   const status = document.getElementById('status');
   try {
     const res = await fetch('/api/atc', { cache: 'no-store' });
+    if (!res.ok) throw new Error(`/api/atc returned HTTP ${res.status}`);
     const data = await res.json();
     showBuildVersion(data.version);
     if (!map) initMap(data.airfield.center);
@@ -1135,6 +1196,11 @@ async function tick() {
     drawAirspace(data.airfield);
     drawAiAir(data.ai_air || []);
     drawAircraft(data.aircraft);
+    const replayName = data.replay ? (data.replay_name || '') : '';
+    if (replayName && replayName !== displayedReplayName) {
+      fitReplayPaths(data.aircraft);
+    }
+    displayedReplayName = replayName;
     drawBullseyeCalls(data.aircraft, data.airfield);
     drawTable(data.aircraft);
     drawChatter(data.chatter || [], data.airfield.agencies || []);
@@ -1153,6 +1219,8 @@ async function tick() {
   } catch (e) {
     status.textContent = 'server offline';
     status.className = 'status bad';
+    status.title = String(e);
+    console.error('ATC map refresh failed:', e);
   }
 }
 
@@ -1303,6 +1371,8 @@ async function loadDebrief(name) {
     /* tick() will surface the state */
   }
   resetClientState();
+  // Force the next snapshot to fit bounds even when reloading the same sortie.
+  displayedReplayName = '';
   tick();
 }
 

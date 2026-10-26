@@ -609,7 +609,7 @@ def test_control_join_readback_descends(brain):
 
 
 def test_control_descent_readback_uses_the_noun(brain):
-    """A readback phrased "descent of 1,500 feet" must hand off to Tower.
+    """A readback phrased "descent of 1,500 feet" is accepted silently.
 
     The pilot reads the clearance back with the *noun* ("descent"), not the
     verb ("descend"). The readback regexes only matched "descend", so the
@@ -623,8 +623,9 @@ def test_control_descent_readback_uses_the_noun(brain):
     reply = brain.handle("descent of 1,500 feet, Colt 1",
                          controller=Controller.CONTROL)
     assert "say again" not in (reply or "").lower()
-    assert "contact Tower" in reply
-    assert brain.pilots["Colt 1"].phase == Phase.LANDING
+    assert reply == ""
+    assert brain.pilots["Colt 1"].phase == Phase.INBOUND
+    assert brain.pilots["Colt 1"].descend_readback
 
 
 def test_tower_entry_call_reports_runway_in_sight(brain):
@@ -638,8 +639,10 @@ def test_entry_report_accepted_without_the_word_entry(brain):
     brain.handle("Control, Colt 1, inbound 35 miles north at Angels 12",
                  controller=Controller.CONTROL)
     assert brain.pilots["Colt 1"].phase == Phase.INBOUND
+    # The pilot then checks in on Tower; the radio agency/phase advance there.
     reply = brain.handle("Tower, Colt 1, and 3 East", controller=Controller.TOWER)
     assert "report runway in sight" in reply
+    assert brain.pilots["Colt 1"].phase == Phase.LANDING
 
 
 def test_bare_gate_direction_ignored_before_inbound(brain):
@@ -663,24 +666,27 @@ def test_tower_inbound_without_track(brain):
 
 
 def test_tower_airborne_hands_off_to_control(brain):
+    brain._pilot("Colt 1").phase = Phase.TAKEOFF
     reply = brain.handle("Tower, Colt 1, airborne", controller=Controller.TOWER)
-    assert "Control" in reply
-    assert "channel 8" in reply
-    assert brain.pilots["Colt 1"].phase == Phase.AIRBORNE
+    assert reply == ""  # wait for radar to show the exit arc crossing
+    assert brain.pilots["Colt 1"].phase == Phase.TAKEOFF
 
 
 def test_tower_wheels_up_hands_off_to_control(brain):
-    # MA departure report variant: "wheels up" behaves like "airborne".
+    # "Wheels up" does not trigger an invented handoff phrase; radar controls
+    # the Tower-to-Control transfer at the exit arc.
+    brain._pilot("Colt 1").phase = Phase.TAKEOFF
     reply = brain.handle("Tower, Colt 1, wheels up", controller=Controller.TOWER)
-    assert "Control" in reply
-    assert brain.pilots["Colt 1"].phase == Phase.AIRBORNE
+    assert reply == ""
+    assert brain.pilots["Colt 1"].phase == Phase.TAKEOFF
 
 
 def test_tower_off_the_ground_hands_off_to_control(brain):
+    brain._pilot("Colt 1").phase = Phase.TAKEOFF
     reply = brain.handle("Tower, Colt 1, off the ground",
                          controller=Controller.TOWER)
-    assert "Control" in reply
-    assert brain.pilots["Colt 1"].phase == Phase.AIRBORNE
+    assert reply == ""
+    assert brain.pilots["Colt 1"].phase == Phase.TAKEOFF
 
 
 def test_tower_wheels_up_on_the_go_is_not_departure(brain):
@@ -1054,7 +1060,7 @@ def test_arrival_ready_for_departure_is_guided_not_cleared(brain):
                          controller=Controller.TOWER)
     assert "negative" in reply.lower()
     assert "takeoff" not in reply.lower()
-    assert brain.pilots["Colt 1"].phase == Phase.INBOUND
+    assert brain.pilots["Colt 1"].phase == Phase.LANDING
 
 
 # ---------- Shared / fallback ----------
@@ -2007,6 +2013,9 @@ def test_control_passing_entry_hands_to_tower(brain):
     reply = brain.handle("Control, Colt 1, passing entry east, inbound",
                          controller=Controller.CONTROL)
     assert "contact Tower" in reply
+    assert brain.pilots["Colt 1"].phase == Phase.INBOUND
+    assert brain.pilots["Colt 1"].pending_handoff_to == Controller.TOWER.value
+    brain.handle("Tower, Colt 1", controller=Controller.TOWER)
     assert brain.pilots["Colt 1"].phase == Phase.LANDING
 
 
@@ -2026,13 +2035,15 @@ def test_control_never_reissues_join_after_handoff(brain):
                  controller=Controller.CONTROL)
     brain.handle("150 to join via Entry East, Colt 1", controller=Controller.CONTROL)
     reply = brain.handle("Descend to 1500 feet, Colt 1", controller=Controller.CONTROL)
-    assert "contact Tower" in reply
-    assert brain.pilots["Colt 1"].phase == Phase.LANDING
-    # A later "entry" report stays a handoff, never a re-issued join.
+    assert reply == ""
+    assert brain.pilots["Colt 1"].phase == Phase.INBOUND
+    # A valid entry report requests the Tower transfer, never a new join.
     reply = brain.handle("Colt 1, entry southeast", controller=Controller.CONTROL)
     assert "join via" not in reply
     assert "contact Tower" in reply
-    assert brain.pilots["Colt 1"].phase == Phase.LANDING
+    assert brain.pilots["Colt 1"].phase == Phase.INBOUND
+    assert brain.handle("Control, Colt 1, inbound", controller=Controller.CONTROL)
+    assert brain.pilots["Colt 1"].phase == Phase.INBOUND
 
 
 # ---------- Regressions from the 2026-10-18 pancake debrief ----------
@@ -2046,6 +2057,9 @@ def test_bare_control_checkin_after_handoff_does_not_rearm_join(brain):
     brain.handle("150 to join via Entry East, Colt 1",
                  controller=Controller.CONTROL)
     brain.handle("Descend to 1500 feet, Colt 1", controller=Controller.CONTROL)
+    assert brain.pilots["Colt 1"].phase == Phase.INBOUND
+    brain.handle("Control, Colt 1, entry east", controller=Controller.CONTROL)
+    brain.handle("Tower, Colt 1", controller=Controller.TOWER)
     assert brain.pilots["Colt 1"].phase == Phase.LANDING
     reply = brain.handle("Control, Colt 1", controller=Controller.CONTROL)
     assert reply and "Control" in reply
@@ -2486,13 +2500,13 @@ def test_step_down_issued_when_high_even_inside_the_gate(brain, airfield):
     reply = brain.check_arrival_descent("Colt 1", t2)
     assert reply and "1500" in reply
     assert brain.pilots["Colt 1"].descend_issued
-    # The descent readback at pattern altitude hands off to Tower.
+    # The final descent readback alone does not hand off to Tower.
     t3 = _Track(callsign="Colt 1", inside=True, lat=gate[0], lon=gate[1],
                 alt_ft=1500, distance_nm=14, relative="at entry west")
     reply = brain.handle("descend to 1500 feet, Colt 1", t3,
                          controller=Controller.CONTROL)
-    assert "contact Tower" in reply
-    assert brain.pilots["Colt 1"].phase == Phase.LANDING
+    assert reply == ""
+    assert brain.pilots["Colt 1"].phase == Phase.INBOUND
 
 
 def test_final_descent_direct_when_low_and_close(brain, airfield):
@@ -2725,12 +2739,14 @@ def test_arrival_completes_after_control_handoff(brain, airfield):
     reply = brain.handle("Control, Colt 1, request landing", sc._track(),
                          controller=Controller.CONTROL)
     assert "contact Tower" in reply
-    assert pilot.phase == Phase.LANDING
+    assert pilot.phase == Phase.INBOUND
+    assert pilot.pending_handoff_to == Controller.TOWER.value
 
     # Tower acknowledges the check-in (previously "say again", which stranded
     # the pilot with no way to reach Tower).
     assert brain.handle("Tower, Colt 1", sc._track(),
                         controller=Controller.TOWER) == "Colt 1, Tower."
+    assert pilot.phase == Phase.LANDING
 
     # "on final" completes the arrival.
     reply = brain.handle("Tower, Colt 1, on final", sc._track(),
@@ -2843,6 +2859,7 @@ def test_departure_handoff_is_radar_driven_not_a_pilot_report(brain, airfield):
     pilot = brain._pilot("Colt 1")
     pilot.phase = Phase.TAKEOFF
     pilot.exit_gate = "West"
+    pilot.checked_in_at = Controller.TOWER.value
     # Still over the runway: no handoff yet (a readback is not airborne).
     thr = airfield.runway_threshold("25")
     on_rwy = AircraftTrack(callsign="Colt 1", inside=True, lat=thr[0], lon=thr[1],
@@ -2859,6 +2876,8 @@ def test_departure_handoff_is_radar_driven_not_a_pilot_report(brain, airfield):
     assert reply is not None and "contact Control" in reply
     assert "did not exit" not in reply
     assert pilot.phase == Phase.AIRBORNE
+    assert pilot.checked_in_at == Controller.TOWER.value
+    assert pilot.pending_handoff_to == Controller.CONTROL.value
 
 
 def test_departure_hands_off_and_reports_wrong_configured_exit(brain, airfield):
@@ -2873,19 +2892,17 @@ def test_departure_hands_off_and_reports_wrong_configured_exit(brain, airfield):
     assert pilot.phase == Phase.AIRBORNE
 
 
-def test_departure_leaving_ctr_outside_all_arcs_still_hands_off(brain, airfield):
+def test_departure_leaving_ctr_outside_all_arcs_does_not_handoff(brain, airfield):
     pilot = brain._pilot("Colt 1")
     pilot.phase = Phase.TAKEOFF
     pilot.exit_gate = "West"
     # East is the arrival gate for runway 25, so it is outside every permitted
-    # departure arc. Leaving the CTR there must not strand the pilot with Tower.
+    # departure arc. Crossing the CTR boundary alone is not a gate handoff.
     east = airfield.gates["East"]
     assert not airfield.ctr.contains_horizontal(*east)
-    reply = brain.check_departure_handoff(
-        "Colt 1", _track(airfield, *east, alt_ft=2000.0))
-    assert reply and "did not exit through Exit West" in reply
-    assert "contact Control" in reply
-    assert pilot.phase == Phase.AIRBORNE
+    assert brain.check_departure_handoff(
+        "Colt 1", _track(airfield, *east, alt_ft=2000.0)) is None
+    assert pilot.phase == Phase.TAKEOFF
 
 
 def test_departure_inside_ctr_does_not_handoff_before_an_exit(brain, airfield):
@@ -2907,9 +2924,25 @@ def test_early_control_request_does_not_bypass_exit_arc(brain, airfield):
     reply = brain.handle("Tower, Colt 1, request Control",
                          _track(airfield, lat, lon, alt_ft=1000.0),
                          controller=Controller.TOWER)
-    assert "continue outbound" in reply.lower()
+    assert reply == ""
     assert pilot.phase == Phase.TAKEOFF
     assert pilot.last_controller == Controller.TOWER.value
+
+
+def test_control_does_not_climb_until_departure_checks_in(brain, airfield):
+    pilot = brain._pilot("Colt 1")
+    pilot.phase = Phase.AIRBORNE
+    pilot.departure_handoff_announced = True
+    track = _track(airfield, *airfield.gates["West"], alt_ft=airfield.elevation_ft + 1200)
+    assert brain.check_departure_climb("Colt 1", track) is None
+    assert not pilot.climb_issued
+
+    reply = brain.handle("Control, Colt 1, at 1200 feet", track,
+                         controller=Controller.CONTROL)
+    assert "radar contact" in reply
+    assert "climb to Angels" in reply
+    assert pilot.control_checkin_received
+    assert pilot.climb_issued
 
 
 # ---------- Stingray (AWACS) — Master Arms SOP, kneeboard page 3 ----------
@@ -3040,6 +3073,29 @@ def test_repeated_stingray_rtb_does_not_repeat_ack(brain):
     assert second == ""
 
 
+def test_stingray_rtb_push_is_one_shot_and_a_missed_push_is_recoverable(brain):
+    from ctr import AircraftTrack
+
+    pilot = _stingray(brain)
+    pilot.rtb_requested = True
+    far = AircraftTrack(callsign="Colt 1", inside=False, lat=42.0, lon=42.0,
+                        alt_ft=15000, distance_nm=55, relative="55 miles")
+    assert brain.check_stingray_rtb_handoff("Colt 1", far) is None
+
+    near = AircraftTrack(callsign="Colt 1", inside=False, lat=42.0, lon=42.0,
+                         alt_ft=15000, distance_nm=49, relative="49 miles")
+    reply = brain.check_stingray_rtb_handoff("Colt 1", near)
+    assert reply and "contact Control" in reply
+    assert pilot.pending_handoff_to == Controller.CONTROL.value
+    assert pilot.phase == Phase.STINGRAY
+    assert brain.check_stingray_rtb_handoff("Colt 1", near) is None
+
+    # If the pilot misses the push, a direct check-in still completes it.
+    brain.handle("Control, Colt 1", near, controller=Controller.CONTROL)
+    assert pilot.phase == Phase.INBOUND
+    assert not pilot.pending_handoff_to
+
+
 def test_stingray_hands_back_to_control(brain):
     # "request Control" re-enters the normal arrival flow (Control inbound).
     pilot = _stingray(brain)
@@ -3047,6 +3103,9 @@ def test_stingray_hands_back_to_control(brain):
                          controller=Controller.STINGRAY)
     assert "Control" in reply
     assert "channel 8" in reply
+    assert pilot.phase == Phase.STINGRAY
+    assert pilot.pending_handoff_to == Controller.CONTROL.value
+    brain.handle("Control, Colt 1", controller=Controller.CONTROL)
     assert pilot.phase == Phase.INBOUND
 
 
@@ -3129,6 +3188,8 @@ def test_stingray_pilot_can_self_move_to_control(brain):
         pilot = _stingray(brain)
         reply = brain.handle(text, controller=Controller.STINGRAY)
         assert "Control" in reply and "channel 8" in reply, text
+        assert pilot.phase == Phase.STINGRAY, text
+        brain.handle("Control, Colt 1", controller=Controller.CONTROL)
         assert pilot.phase == Phase.INBOUND, text
 
 
@@ -3176,6 +3237,9 @@ def test_self_move_sets_the_phase_for_the_new_agency(brain):
     pilot = _airborne(brain, callsign="Colt 1", phase=Phase.STINGRAY)
     brain.handle("Stingray, Colt 1, request Control",
                  controller=Controller.STINGRAY)
+    assert pilot.phase == Phase.STINGRAY
+    brain.handle("Control, Colt 1, inbound 35 miles north at Angels 12",
+                 controller=Controller.CONTROL)
     assert pilot.phase == Phase.INBOUND
     # And the arrival flow then works on Control.
     reply = brain.handle("Control, Colt 1, inbound 35 miles north at Angels 12",
@@ -3600,14 +3664,17 @@ def test_emergency_never_gets_say_again_on_every_frequency(brain):
 
 
 def test_self_move_to_tower_from_airborne_is_an_arrival(brain):
-    # An airborne pilot who self-moves to Tower is arriving, not departing:
-    # the phase must become Inbound so Tower recognises the arrival.
+    # The request creates a pending transfer. Arrival state changes only once
+    # the pilot actually checks in on Tower.
     for phase in (Phase.AIRBORNE, Phase.STINGRAY, Phase.INBOUND,
                   Phase.LANDING):
         pilot = _airborne(brain, callsign="Colt 1", phase=phase)
+        pilot.checked_in_at = Controller.CONTROL.value
         brain.handle("Control, Colt 1, request Tower",
                      controller=Controller.CONTROL)
-        assert pilot.phase == Phase.INBOUND, phase
+        assert pilot.phase == phase
+        brain.handle("Tower, Colt 1", controller=Controller.TOWER)
+        assert pilot.phase == Phase.LANDING, phase
 
 
 def test_self_move_to_ground_from_airborne_is_taxi(brain):
@@ -3615,6 +3682,9 @@ def test_self_move_to_ground_from_airborne_is_taxi(brain):
     # handling, so the phase must become Taxi (Ground has no airborne handler).
     for phase in (Phase.AIRBORNE, Phase.STINGRAY):
         pilot = _airborne(brain, callsign="Colt 1", phase=phase)
+        pilot.checked_in_at = Controller.CONTROL.value
         brain.handle("Control, Colt 1, request Ground",
                      controller=Controller.CONTROL)
+        assert pilot.phase == phase
+        brain.handle("Ground, Colt 1", controller=Controller.GROUND)
         assert pilot.phase == Phase.TAXI, phase
