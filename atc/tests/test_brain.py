@@ -3473,6 +3473,24 @@ def test_marking_bull_means_the_bullseye(brain):
     assert parse_marking_call(folded) == ("bullseye", 77.0, 440.0)
 
 
+def test_marking_bulls_stt_four_is_repaired_as_for(brain):
+    from scenario import _bearing_range_point
+
+    # Whisper rendered "for" as a separate 4 in the debrief:
+    # "marking bulls, 63, 4, 46". The extra group must not make 4 NM the range.
+    brain.cockpit_bearing_offset_deg = 0
+    bull_lat, bull_lon = 42.05, 42.40
+    brain.set_bullseye(bull_lat, bull_lon)
+    lat, lon = _bearing_range_point(bull_lat, bull_lon, 63, 46)
+    track = _track(brain.airfield, lat, lon, alt_ft=15000)
+    _stingray(brain)
+
+    reply = brain.handle(
+        "Stingray, Colt 1, marking bulls, 63, 4, 46, angels, 15, as flagged",
+        controller=Controller.STINGRAY, track=track)
+    assert "radar contact" in reply.lower(), reply
+
+
 def test_stt_mocking_bulls_is_normalized_to_marking_bull(brain):
     _stingray(brain)
     reply = brain.handle(

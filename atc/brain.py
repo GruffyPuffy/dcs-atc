@@ -248,7 +248,17 @@ def _fold_bullseye_figures(text: str) -> str:
             out += "".join(match.group(i) or "" for i in sep_groups)
         return out
 
-    return _BULLSEYE_FOLD_RE.sub(merge, text)
+    folded = _BULLSEYE_FOLD_RE.sub(merge, text)
+    # Whisper sometimes renders the spoken separator "for" as a stray 4,
+    # leaving three comma-separated groups: "marking bulls, 63, 4, 46".
+    # Without this repair parse_marking_call consumes "63, 4" as the BRA and
+    # silently ignores the actual range (46). Restrict the repair to a
+    # bullseye/marking phrase and keep the existing live-position verification
+    # as the authority on whether the resulting BRA is correct.
+    return re.sub(
+        r"(\b(?:bulls?|bull'?s?eye|marking(?:\s+[a-z']+)?)[\s,]+"
+        r"\d{2,3})\s*,\s*(?:4|four)\s*,\s*(\d{1,3})\b",
+        r"\1 for \2", folded, flags=re.IGNORECASE)
 
 
 def _stem(word: str) -> str:
