@@ -2,9 +2,9 @@
 #   docker compose -f docker-compose.yml -f docker-compose.atc.yml up -d atc-bot
 # (or use ./scripts/dcs.sh atc-up).
 #
-# The image is a thin runtime; the entrypoint clones/updates the repo into the
-# `atc-data` volume on start, so a restart always runs the latest `main`. The
-# bot reaches DCS and SRS by their compose service names.
+# The image is a thin runtime; the entrypoint fetches the selected ATC_REF into
+# the `atc-data` volume on start. The bot reaches DCS and SRS by their compose
+# service names.
 name: dcs-atc
 
 services:

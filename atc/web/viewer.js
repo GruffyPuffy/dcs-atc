@@ -29,6 +29,7 @@ async function loadDebrief(name) {
     if (!map) initMap(data.airfield.center);
     document.getElementById('title').textContent =
       `ATC Map · ${data.airfield.name} · RWY ${data.airfield.active_runway}`;
+    showBuildVersion(data.version);
     setBaseMap(data.airfield.basemap);
     drawOverlay(data.airfield);
     drawAirspace(data.airfield);

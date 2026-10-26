@@ -2,10 +2,10 @@
 # ATC bot container entrypoint: install/update the app, then run it.
 #
 # The image is a thin runtime; the code lives in a persistent volume. On every
-# start we clone the repo (first time) or fast-forward it (after), sync the
+# start we fetch the selected ref (first time and after), sync the
 # Python env from uv.lock, make sure the Whisper model + Piper voices are
 # present, then hand off to run_server.sh (so the web Restart/Stop buttons keep
-# working). This mirrors the DCS image's auto-installer: a restart = latest main.
+# working). Restarts reuse ATC_REF unless a different ref is selected.
 set -euo pipefail
 
 ATC_REPO="${ATC_REPO:-https://github.com/GruffyPuffy/dcs-atc.git}"
@@ -46,10 +46,20 @@ elif [[ -d "$ATC_DIR/.git" ]]; then
     git -C "$ATC_DIR" fetch --depth 1 origin "$ATC_REF"
     git -C "$ATC_DIR" checkout -q FETCH_HEAD
 else
-    log "Cloning $ATC_REPO ($ATC_REF) into $ATC_DIR..."
+    log "Initializing $ATC_DIR at $ATC_REF..."
     mkdir -p "$(dirname "$ATC_DIR")"
-    git clone --depth 1 --branch "$ATC_REF" "$ATC_REPO" "$ATC_DIR"
+    mkdir -p "$ATC_DIR"
+    git -C "$ATC_DIR" init -q
+    git -C "$ATC_DIR" remote add origin "$ATC_REPO"
+    git -C "$ATC_DIR" fetch --depth 1 origin "$ATC_REF"
+    git -C "$ATC_DIR" checkout -q --detach FETCH_HEAD
 fi
+
+# Publish the checked-out version to both web pages and the container log.
+ATC_VERSION="$(git -C "$ATC_DIR" describe --tags --exact-match HEAD 2>/dev/null \
+    || git -C "$ATC_DIR" rev-parse --short=12 HEAD)"
+export ATC_REF ATC_VERSION
+log "Running version $ATC_VERSION ($(git -C "$ATC_DIR" rev-parse --short=12 HEAD))"
 
 cd "$ATC_DIR/atc"
 

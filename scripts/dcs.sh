@@ -24,11 +24,11 @@ srs-autoconnect  Install the SRS auto-connect announcer hook (port-only by defau
   config    Prepare configuration and validate Compose without starting
   srs-logs  Follow recent SRS server logs (Ctrl+C to exit)
   srs-status Show connected SRS clients (HTTP status API)
-  atc-up    Start the ATC bot container (pulls latest main, syncs, runs)
-  atc-up-gpu Start the ATC bot container with GPU (needs nvidia-container-toolkit)
+  atc-up [REF] Start the ATC bot (latest release tag by default; REF may be a tag or SHA)
+  atc-up-gpu [REF] Start the ATC bot with GPU (needs nvidia-container-toolkit)
   atc-down  Stop the ATC bot container
   atc-logs  Follow the ATC bot container logs (Ctrl+C to exit)
-  atc-update Recreate the ATC bot container (pulls latest on start; keeps GPU mode)
+  atc-update [REF] Recreate the bot (keeps current version if omitted; keeps GPU mode)
   help      Show this help
 EOF
 }
@@ -81,6 +81,23 @@ require_gpu() {
 atc_gpu_running() {
   docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' dcs-atc-bot 2>/dev/null \
     | grep -q '^ATC_GPU=1'
+}
+
+latest_atc_tag() {
+  local repo="${ATC_REPO:-https://github.com/GruffyPuffy/dcs-atc.git}"
+  local tag
+  tag="$(git ls-remote --tags --refs "$repo" 'refs/tags/v[0-9]*' \
+    | awk '{sub("refs/tags/", "", $2); print $2}' | sort -V | tail -n 1)"
+  if [[ -z "$tag" ]]; then
+    echo "No release tag found at $repo (expected tags like v2026.10.26.1)." >&2
+    return 1
+  fi
+  printf '%s\n' "$tag"
+}
+
+current_atc_sha() {
+  docker exec dcs-atc-bot git -c safe.directory=/data/atc/src \
+    -C /data/atc/src rev-parse HEAD 2>/dev/null
 }
 
 # Read-only health summary: containers, bot mode, map, SRS clients, DCS bridge.
@@ -239,8 +256,10 @@ deploy_hook() {
 }
 
 command="${1:-help}"
-# `debrief <name>` takes one argument; every other command takes none.
-if [[ "$#" -gt 1 && "$command" != "debrief" ]]; then
+# Commands with positional arguments are limited to these explicit cases.
+if [[ "$#" -gt 1 && "$command" != "debrief" \
+      && "$command" != "atc-up" && "$command" != "atc-up-gpu" \
+      && "$command" != "atc-update" ]]; then
   usage >&2
   exit 2
 fi
@@ -268,8 +287,9 @@ case "$command" in
       echo "Port 8090 is already in use (a host bot running?). Stop it first." >&2
       exit 1
     fi
-    compose_atc up -d --build atc-bot
-    echo "ATC bot starting. Follow it with: ./scripts/dcs.sh atc-logs"
+    ref="${2:-$(latest_atc_tag)}"
+    ATC_REF="$ref" compose_atc up -d --build atc-bot
+    echo "ATC bot starting at $ref. Follow it with: ./scripts/dcs.sh atc-logs"
     ;;
   atc-up-gpu)
     require_docker
@@ -279,8 +299,9 @@ case "$command" in
       exit 1
     fi
     # Needs the NVIDIA Container Toolkit on the host (see INSTALL.md).
-    compose_atc_gpu up -d --build atc-bot
-    echo "ATC bot (GPU) starting. Follow it with: ./scripts/dcs.sh atc-logs"
+    ref="${2:-$(latest_atc_tag)}"
+    ATC_REF="$ref" compose_atc_gpu up -d --build atc-bot
+    echo "ATC bot (GPU) starting at $ref. Follow it with: ./scripts/dcs.sh atc-logs"
     ;;
   atc-down)
     require_docker
@@ -292,15 +313,20 @@ case "$command" in
     ;;
   atc-update)
     require_docker
+    ref="${2:-$(current_atc_sha)}"
+    if [[ -z "$ref" ]]; then
+      echo "Could not read the running bot version; pass a tag or SHA explicitly." >&2
+      exit 1
+    fi
     # The entrypoint pulls on start, so a recreate is an update. Preserve GPU
     # mode if the running container was started with the GPU override.
     if atc_gpu_running; then
       require_gpu
-      compose_atc_gpu up -d --force-recreate atc-bot
-      echo "ATC bot (GPU) restarting (pulls latest ${ATC_REF:-main} on start)."
+      ATC_REF="$ref" compose_atc_gpu up -d --force-recreate atc-bot
+      echo "ATC bot (GPU) restarting at $ref."
     else
-      compose_atc up -d --force-recreate atc-bot
-      echo "ATC bot restarting (pulls latest ${ATC_REF:-main} on start)."
+      ATC_REF="$ref" compose_atc up -d --force-recreate atc-bot
+      echo "ATC bot restarting at $ref."
     fi
     ;;
   bridge)

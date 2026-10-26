@@ -29,7 +29,7 @@ from typing import Callable
 from urllib.parse import urlsplit
 
 from airspace import Airfield
-from brain import AtcBrain, EXIT_REPORT_RADIUS_NM
+from brain import AtcBrain
 from state_client import StateClient
 from topgun import BUST_RADIUS_M
 
@@ -470,7 +470,7 @@ def _airspace_payload(airfield: Airfield, basemap: str | None = None) -> dict:
             "final": airfield.final_zone_geometry(),
             "runway": airfield.runway_corridor_geometry(),
             "lineup": airfield.lineup_zone_geometry(),
-            "exit": airfield.exit_zone_geometry(radius_nm=EXIT_REPORT_RADIUS_NM),
+            "gate_arcs": airfield.gate_arc_geometry(),
             "pattern": airfield.pattern_zones_geometry(),
         },
         "overlay": _overlay_payload(airfield),
@@ -586,11 +586,14 @@ class MapService:
         self._chatter_lock = threading.Lock()
         # Flight-path trails (per callsign), for the map's path overlay.
         self.tracks = TrackHistory(log=self.log)
+        # A selected debrief is only a display source. Live data continues to
+        # record and save in these separate histories while it is selected.
+        self._replay_tracks: TrackHistory | None = None
+        self._replay_chatter: list[dict] = []
         # Optional debrief file: restore saved trails on startup and autosave
         # them periodically, so a sortie survives a bot/map restart. When set
-        # and the file already exists it is a *replay*: we restore it and, by
-        # default, stop recording/overwriting, so a tester can review a saved
-        # event (see `replay`).
+        # and the file already exists it is a startup *replay*: it is restored
+        # read-only so a tester cannot overwrite it by accident.
         self.tracks_file = Path(tracks_file) if tracks_file else None
         self.debrief_dir = Path(debrief_dir) if debrief_dir else None
         # player name -> current spawn file / callsign (one debrief per spawn)
@@ -603,9 +606,16 @@ class MapService:
             # Restore the saved radio log too, so the chatter window mirrors a
             # replayed sortie (older files simply have none).
             self._chatter.extend(TrackHistory.read_chatter(self.tracks_file))
-        # `replay` true forces read-only review; when a tracks_file names an
-        # existing file we default to replay too (don't clobber a saved sortie).
+        # `replay` true forces read-only startup review; an existing tracks_file
+        # also defaults to replay (don't clobber a saved sortie).
         self.replay = bool(replay or existed)
+        # A startup/CLI replay remains read-only. Web replay selection only
+        # changes the display and does not affect live recording.
+        self._recording_enabled = not self.replay
+        self._replay_path = self.tracks_file if self.replay else None
+        if self.replay:
+            self._replay_tracks = self.tracks
+            self._replay_chatter = self.chatter()
         # Last seen phase per callsign, to record phase transitions on the path.
         self._last_phase: dict[str, str] = {}
         # Live DCS tower/dispatcher lat/lon (TopGun uses the same bridge op).
@@ -618,7 +628,7 @@ class MapService:
         never leaves an empty debrief file behind (which would show up in the
         map's load dropdown as an unusable entry).
         """
-        if self.replay:
+        if not self._recording_enabled:
             return
         if self._spawn_files:
             with self.lock:
@@ -677,7 +687,7 @@ class MapService:
     def begin_spawn(self, player: str, callsign: str = "",
                     unit: str = "") -> None:
         """Open a new debrief file for this player's DCS spawn."""
-        if self.replay or self.debrief_dir is None or not player:
+        if not self._recording_enabled or self.debrief_dir is None or not player:
             return
         cs = callsign if callsign and callsign != player else ""
         name = debrief_filename(self.airfield.name, player=player, callsign=cs)
@@ -718,7 +728,7 @@ class MapService:
 
     def _maybe_save_tracks(self) -> None:
         """Autosave the trails at most every `TRACKS_SAVE_INTERVAL` seconds."""
-        if self.replay:
+        if not self._recording_enabled:
             return
         if self.tracks_file is None and not self._spawn_files:
             return
@@ -738,7 +748,7 @@ class MapService:
         No-op for a replay or when neither `tracks_file` nor `debrief_dir`
         is configured.
         """
-        if self.replay or (self.tracks_file is None and self.debrief_dir is None):
+        if not self._recording_enabled or (self.tracks_file is None and self.debrief_dir is None):
             return
 
         def _loop() -> None:
@@ -759,9 +769,9 @@ class MapService:
         Called on the bot's monitor tick so the debrief trail is captured whether
         or not a browser is polling the map. `players` is the list of live
         `Aircraft`. Idempotent with `snapshot`, which records the same way when
-        the map *is* open. A no-op while reviewing a saved replay.
+        the map *is* open. Selecting a replay changes only the map's view.
         """
-        if self.replay:
+        if not self._recording_enabled:
             return
         with self.lock:
             for ac in players:
@@ -782,8 +792,6 @@ class MapService:
     def log_chatter(self, kind: str, freq_mhz: float, who: str,
                     text: str, controller: str = "") -> None:
         """Record one radio event (kind: 'rx' pilot, 'tx' ATC, 'coach' note)."""
-        if self.replay:
-            return  # reviewing a saved sortie: keep its log, don't add live ones
         # Resolve the flight callsign for a pilot transmission (the brain learns
         # SRS-name -> callsign from what the pilot says), so the log can show
         # "Colt 1" instead of the raw DCS/SRS name. Empty for ATC/system lines.
@@ -903,24 +911,19 @@ class MapService:
         # replayed sortie (falls back to empty for older files without it).
         chatter = TrackHistory.read_chatter(path)
         with self.lock:
-            self.tracks = loaded
-            self._last_phase = {}
-            with self._chatter_lock:
-                self._chatter.clear()
-                self._chatter.extend(chatter)
-        self.tracks_file = path
-        self.replay = True  # freeze: don't record or overwrite the saved file
+            self._replay_tracks = loaded
+            self._replay_chatter = chatter
+            self._replay_path = path
+            self.replay = True
         return {"ok": True, "name": base}
 
     def unload_debrief(self) -> dict:
-        """Leave replay and resume live recording (clears the loaded trail)."""
+        """Return the display to live data without changing recording state."""
         with self.lock:
-            self.tracks = TrackHistory(log=self.log)
-            self._last_phase = {}
-            with self._chatter_lock:
-                self._chatter.clear()
-        self.tracks_file = None
-        self.replay = False
+            self._replay_tracks = None
+            self._replay_chatter = []
+            self._replay_path = None
+            self.replay = False
         return {"ok": True}
 
     @staticmethod
@@ -996,28 +999,29 @@ class MapService:
                         self.tracks.add_comm(
                             callsign, ac.lat, ac.lon, "state", phase,
                             pilot.last_controller, time.strftime("%H:%M:%S"))
-                    aircraft.append({
-                        "callsign": callsign,
-                        "player": ac.player,
-                        "type": ac.type,
-                        "lat": ac.lat,
-                        "lon": ac.lon,
-                        "alt_ft": round(ac.alt_ft),
-                        "heading": round(ac.heading),
-                        "coalition": ac.coalition,
-                        "phase": phase,
-                        "controller": pilot.last_controller if pilot else "",
-                        "entry_gate": pilot.entry_gate if pilot else "",
-                        "exit_gate": pilot.exit_gate if pilot else "",
-                        "active": True,
-                        "path": self.tracks.path(callsign),
-                        "comms": self.tracks.comms(callsign),
-                    })
+                    if not self.replay:
+                        aircraft.append({
+                            "callsign": callsign,
+                            "player": ac.player,
+                            "type": ac.type,
+                            "lat": ac.lat,
+                            "lon": ac.lon,
+                            "alt_ft": round(ac.alt_ft),
+                            "heading": round(ac.heading),
+                            "coalition": ac.coalition,
+                            "phase": phase,
+                            "controller": pilot.last_controller if pilot else "",
+                            "entry_gate": pilot.entry_gate if pilot else "",
+                            "exit_gate": pilot.exit_gate if pilot else "",
+                            "active": True,
+                            "path": self.tracks.path(callsign),
+                            "comms": self.tracks.comms(callsign),
+                        })
                 # Mark which aircraft are present, so the map can dim the rest.
                 # Trails are *retained* (not pruned) for debrief after a pilot
                 # leaves the mission or quits the slot.
-                active = {self.brain.callsign_for_speaker(ac.player)
-                          for ac in players}
+                active = ({self.brain.callsign_for_speaker(ac.player)
+                           for ac in players} if not self.replay else set())
                 self.tracks.set_active(active)
                 for callsign in list(self._last_phase):
                     if callsign not in active:
@@ -1043,12 +1047,13 @@ class MapService:
         # off) and — with no live state — a loaded replay, so a saved event can
         # be reviewed on the map without DCS running.
         with self.lock:
-            for callsign in self.tracks.callsigns():
+            shown_tracks = self._replay_tracks if self.replay else self.tracks
+            for callsign in shown_tracks.callsigns():
                 if callsign in active:
                     continue
                 aircraft.append(self._retained_entry(
-                    callsign, self.tracks.path(callsign),
-                    self.tracks.comms(callsign)))
+                    callsign, shown_tracks.path(callsign),
+                    shown_tracks.comms(callsign)))
         self._maybe_save_tracks()  # keep the debrief file reasonably fresh
         airfield = _airspace_payload(self.airfield, self.basemap)
         airfield["tower_pos"] = self._live_tower_pos()
@@ -1059,14 +1064,16 @@ class MapService:
         airfield["bullseye"] = (list(self.brain.bullseye)
                                 if self.brain.bullseye else None)
         return {
+            "version": os.environ.get("ATC_VERSION", ""),
             "airfield": airfield,
             "aircraft": aircraft,
             "ai_air": ai_air,
-            "chatter": self.chatter(),
+            "chatter": (self._replay_chatter if self.replay
+                        else self.chatter()),
             "error": error,
             "replay": self.replay,
-            "replay_name": (self.tracks_file.name
-                            if self.replay and self.tracks_file else ""),
+            "replay_name": (self._replay_path.name
+                            if self.replay and self._replay_path else ""),
             # Web-driven restart/airfield selection (None when not wired).
             "control": self.control.payload() if self.control else None,
         }

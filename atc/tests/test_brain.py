@@ -1170,10 +1170,18 @@ def test_two_pilots_have_independent_state(brain):
 # ---------- Runway / go-around ----------
 
 def test_go_around_fires_once(brain):
+    pilot = _airborne(brain, phase=Phase.LANDING)
+    pilot.cleared_landing = True
+    pilot.pattern_flown = True
+    pilot.landing_handoff_announced = True
     first = brain.check_final("Colt 1", on_final=True, runway_occupied=True)
     second = brain.check_final("Colt 1", on_final=True, runway_occupied=True)
     assert "go around" in first
     assert second is None  # only once per approach
+    assert pilot.phase == Phase.INBOUND
+    assert not pilot.cleared_landing
+    assert not pilot.pattern_flown
+    assert not pilot.landing_handoff_announced
 
 
 def test_go_around_resets_when_not_on_final(brain):
@@ -1217,6 +1225,43 @@ def test_go_around_generic_when_traffic_not_on_runway(brain, airfield):
                               traffic=[taxi_unit])
     assert "go around" in reply.lower()
     assert "occupied" in reply.lower()
+
+
+def test_pilot_reported_go_around_rearms_arrival_and_acknowledges(brain):
+    pilot = _airborne(brain, phase=Phase.LANDING)
+    pilot.cleared_landing = True
+    pilot.pattern_flown = True
+    reply = brain.handle("Tower, Colt 1, going around", controller=Controller.TOWER)
+    assert "continue climbing" in reply.lower()
+    assert "downwind" in reply.lower()
+    assert pilot.phase == Phase.INBOUND
+    assert not pilot.cleared_landing
+    assert not pilot.pattern_flown
+    assert pilot.go_around_issued
+    assert not pilot.landing_handoff_announced
+
+
+def test_touch_and_go_request_is_cleared_and_rearms_next_circuit(brain):
+    pilot = _airborne(brain, phase=Phase.LANDING)
+    pilot.cleared_landing = True
+    pilot.pattern_flown = True
+    pilot.landing_handoff_announced = True
+    reply = brain.handle("Tower, Colt 1, request touch and go",
+                         controller=Controller.TOWER)
+    assert "approved touch and go" in reply.lower()
+    assert pilot.phase == Phase.INBOUND
+    assert not pilot.cleared_landing
+    assert not pilot.pattern_flown
+    assert not pilot.landing_handoff_announced
+
+
+def test_touch_and_go_readback_is_silent(brain):
+    pilot = _airborne(brain, phase=Phase.INBOUND)
+    pilot.cleared_landing = False
+    reply = brain.handle("Colt 1, approved touch and go runway 25",
+                         controller=Controller.TOWER)
+    assert reply == ""
+    assert pilot.phase == Phase.INBOUND
 
 
 # ---------- Traffic sequencing (players + AI) ----------
@@ -1566,6 +1611,14 @@ def test_say_again_replays_last_clearance(brain):
 def test_say_again_without_history(brain):
     reply = brain.handle("Colt 1, say again", controller=Controller.TOWER)
     assert "say again" in reply
+
+
+def test_never_mind_stays_silent_without_cancelling_clearance(brain):
+    brain.handle("Ground, Colt 1, requesting taxi", controller=Controller.GROUND)
+    pilot = brain.pilots["Colt 1"]
+    reply = brain.handle("Colt 1, never mind", controller=Controller.GROUND)
+    assert reply == ""
+    assert pilot.phase == Phase.TAXI
 
 
 def test_help_mentions_escape_hatches(brain):
@@ -2064,6 +2117,20 @@ def test_say_again_still_replays_clearance(brain):
                  controller=Controller.GROUND)
     reply = brain.handle("say again, Colt 1", controller=Controller.GROUND)
     assert "exit" in reply.lower()
+
+
+def test_say_again_replays_automatic_transmission(brain):
+    automatic = "Colt 1, Tower, contact Control on channel 8."
+    brain.remember_transmission("Colt 1", automatic)
+    assert brain.handle("Colt 1, say again", controller=Controller.TOWER) == automatic
+
+
+def test_automatic_meta_transmission_does_not_replace_replay(brain):
+    pilot = brain._pilot("Colt 1")
+    pilot.last_reply = "Colt 1, Ground, cleared taxi via Whiskey."
+    brain.remember_transmission("Colt 1", "Colt 1, Tower, say again.")
+    brain.remember_transmission("Colt 1", "readback incomplete")
+    assert pilot.last_reply == "Colt 1, Ground, cleared taxi via Whiskey."
 
 
 # ---------- Zones-based landing clearance (radar-driven) ----------
@@ -2621,6 +2688,24 @@ def test_exit_note_fires_when_heading_for_a_different_gate(brain, airfield):
     assert "Exit East" in brain._exit_deviation_note(pilot, track)
 
 
+def test_entry_report_requires_crossing_the_matching_arc(brain, airfield):
+    from airspace import bearing_distance
+    from scenario import _bearing_range_point
+    gate = "East"
+    center = (airfield.ctr.center_lat, airfield.ctr.center_lon)
+    bearing, radius = bearing_distance(*center, *airfield.gates[gate])
+    inside = _bearing_range_point(*center, bearing, radius - 1.0)
+    assert brain._at_entry(_track(airfield, *inside), "Entry East")
+
+    # Close to the gate point but outside its angular window is not an entry.
+    off_arc = _bearing_range_point(*center, bearing + 25, radius - 1.0)
+    assert not brain._at_entry(_track(airfield, *off_arc), "Entry East")
+
+    # Being just outside the entry radius is too late, even on the right radial.
+    outside = _bearing_range_point(*center, bearing, radius + 0.1)
+    assert not brain._at_entry(_track(airfield, *outside), "Entry East")
+
+
 def test_arrival_completes_after_control_handoff(brain, airfield):
     """End-to-end: the sortie that ended with no landing clearance now closes.
 
@@ -2765,14 +2850,66 @@ def test_departure_handoff_is_radar_driven_not_a_pilot_report(brain, airfield):
                            relative="on runway", heading=250.0)
     assert brain.check_departure_handoff("Colt 1", on_rwy) is None
     assert pilot.phase == Phase.TAKEOFF
-    # Clear of the runway: the handoff fires unprompted.
+    # Passing the assigned Exit West arc fires the handoff unprompted.
     sc_track = AircraftTrack(
         callsign="Colt 1", inside=False, lat=airfield.gates["West"][0],
         lon=airfield.gates["West"][1], alt_ft=2000.0, distance_nm=8.0,
         relative="8 miles west", heading=250.0)
     reply = brain.check_departure_handoff("Colt 1", sc_track)
     assert reply is not None and "contact Control" in reply
+    assert "did not exit" not in reply
     assert pilot.phase == Phase.AIRBORNE
+
+
+def test_departure_hands_off_and_reports_wrong_configured_exit(brain, airfield):
+    pilot = brain._pilot("Colt 1")
+    pilot.phase = Phase.TAKEOFF
+    pilot.exit_gate = "West"
+    north = airfield.gates["North"]
+    reply = brain.check_departure_handoff(
+        "Colt 1", _track(airfield, *north, alt_ft=2000.0))
+    assert reply and "did not exit through Exit West" in reply
+    assert "contact Control" in reply
+    assert pilot.phase == Phase.AIRBORNE
+
+
+def test_departure_leaving_ctr_outside_all_arcs_still_hands_off(brain, airfield):
+    pilot = brain._pilot("Colt 1")
+    pilot.phase = Phase.TAKEOFF
+    pilot.exit_gate = "West"
+    # East is the arrival gate for runway 25, so it is outside every permitted
+    # departure arc. Leaving the CTR there must not strand the pilot with Tower.
+    east = airfield.gates["East"]
+    assert not airfield.ctr.contains_horizontal(*east)
+    reply = brain.check_departure_handoff(
+        "Colt 1", _track(airfield, *east, alt_ft=2000.0))
+    assert reply and "did not exit through Exit West" in reply
+    assert "contact Control" in reply
+    assert pilot.phase == Phase.AIRBORNE
+
+
+def test_departure_inside_ctr_does_not_handoff_before_an_exit(brain, airfield):
+    pilot = brain._pilot("Colt 1")
+    pilot.phase = Phase.TAKEOFF
+    pilot.exit_gate = "West"
+    lat, lon = airfield.parking_areas["Ramp South"]
+    assert airfield.ctr.contains_horizontal(lat, lon)
+    assert brain.check_departure_handoff(
+        "Colt 1", _track(airfield, lat, lon, alt_ft=1000.0)) is None
+    assert pilot.phase == Phase.TAKEOFF
+
+
+def test_early_control_request_does_not_bypass_exit_arc(brain, airfield):
+    pilot = brain._pilot("Colt 1")
+    pilot.phase = Phase.TAKEOFF
+    pilot.exit_gate = "West"
+    lat, lon = airfield.parking_areas["Ramp South"]
+    reply = brain.handle("Tower, Colt 1, request Control",
+                         _track(airfield, lat, lon, alt_ft=1000.0),
+                         controller=Controller.TOWER)
+    assert "continue outbound" in reply.lower()
+    assert pilot.phase == Phase.TAKEOFF
+    assert pilot.last_controller == Controller.TOWER.value
 
 
 # ---------- Stingray (AWACS) — Master Arms SOP, kneeboard page 3 ----------
@@ -2889,9 +3026,18 @@ def test_stingray_rtb_triggers(brain):
                  "Colt 1, requesting RTB",
                  "Colt 1, returning to base"):
         pilot = _stingray(brain)
+        pilot.rtb_requested = False
         reply = brain.handle(text, controller=Controller.STINGRAY)
         assert "RTB" in reply, text
         assert pilot.rtb_requested, text
+
+
+def test_repeated_stingray_rtb_does_not_repeat_ack(brain):
+    _stingray(brain)
+    first = brain.handle("Colt 1, requesting RTB", controller=Controller.STINGRAY)
+    second = brain.handle("Colt 1, requesting RTB", controller=Controller.STINGRAY)
+    assert "RTB" in first
+    assert second == ""
 
 
 def test_stingray_hands_back_to_control(brain):
@@ -2918,7 +3064,8 @@ def test_stingray_package_reports_are_silent(brain):
     # to the controller. Answering "say again" would train the pilot to stop
     # making them, so Stingray stays silent.
     for text in ("Colt 1 pushing", "Colt 1, one away", "Colt 1, rifle",
-                 "Colt 1, fox two", "Colt 1, magnum"):
+                 "Colt 1, fox two", "Colt 1, magnum", "Colt 1, copy that",
+                 "Colt 1, as fragged"):
         _stingray(brain)
         assert brain.handle(text, controller=Controller.STINGRAY) == "", text
 
@@ -3260,6 +3407,16 @@ def test_marking_bull_means_the_bullseye(brain):
     folded = _fold_bullseye_figures(_fold_spoken_figures(
         "marking bull, zero seven seven, four forty"))
     assert parse_marking_call(folded) == ("bullseye", 77.0, 440.0)
+
+
+def test_stt_mocking_bulls_is_normalized_to_marking_bull(brain):
+    _stingray(brain)
+    reply = brain.handle(
+        "Stingray, Colt 1, mocking bulls, zero seven seven, four forty, "
+        "angels fifteen, as fragged",
+        controller=Controller.STINGRAY)
+    assert reply and "radar contact" in reply.lower()
+    assert "say again" not in reply.lower()
 
 
 def test_marking_a_named_point_is_verified_against_the_airfield(brain):

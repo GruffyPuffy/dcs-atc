@@ -4,7 +4,8 @@ from dataclasses import dataclass
 
 import pytest
 
-from airspace import Airspace
+from airspace import (Airspace, GATE_ARC_HALF_ANGLE_DEG,
+                      bearing_distance)
 
 
 def test_loads_kutaisi(airfield):
@@ -76,6 +77,55 @@ def test_departure_gates_are_ordered_straight_out_first(airfield):
     # The gate closest to the runway heading comes first (the straight-out one).
     assert airfield.departure_gates("07")[0] == "East"
     assert airfield.departure_gates("25")[0] == "West"
+
+
+def _point_from_reference(lat, lon, bearing_deg, distance_nm):
+    import math
+    distance_m = distance_nm * 1852.0
+    bearing = math.radians(bearing_deg)
+    north = distance_m * math.cos(bearing)
+    east = distance_m * math.sin(bearing)
+    return (lat + north / 111_320.0,
+            lon + east / (111_320.0 * math.cos(math.radians(lat))))
+
+
+def test_gate_arc_geometry_passes_through_each_configured_exit(airfield):
+    arcs = airfield.gate_arc_geometry()
+    assert {arc["gate"] for arc in arcs} == set(airfield.gates)
+    for arc in arcs:
+        assert arc["center"] == [airfield.ctr.center_lat,
+                                 airfield.ctr.center_lon]
+        assert arc["point"] == list(airfield.gates[arc["gate"]])
+        assert arc["half_angle_deg"] == GATE_ARC_HALF_ANGLE_DEG
+        bearing, radius = bearing_distance(
+            *arc["center"], *airfield.gates[arc["gate"]])
+        assert arc["bearing_deg"] == pytest.approx(bearing)
+        assert arc["radius_nm"] == pytest.approx(radius)
+
+
+def test_gate_arc_requires_outbound_crossing_inside_angular_window(airfield):
+    gate = "West"
+    center = (airfield.ctr.center_lat, airfield.ctr.center_lon)
+    bearing, radius = bearing_distance(*center, *airfield.gates[gate])
+    previous = _point_from_reference(*center, bearing, radius - 0.2)
+    current = _point_from_reference(*center, bearing, radius + 0.2)
+    previous_bearing, previous_range = bearing_distance(*center, *previous)
+    assert airfield.gate_arc_crossed_outbound(
+        previous_range, previous_bearing, *current, gate)
+
+    # A separate crossing whose whole segment is outside the angular window
+    # must not be accepted.
+    off_bearing = bearing + GATE_ARC_HALF_ANGLE_DEG + 2
+    off_previous = _point_from_reference(*center, off_bearing, radius - 0.2)
+    off_current = _point_from_reference(*center, off_bearing, radius + 0.2)
+    off_previous_bearing, off_previous_range = bearing_distance(
+        *center, *off_previous)
+    assert not airfield.gate_arc_crossed_outbound(
+        off_previous_range, off_previous_bearing, *off_current, gate)
+    # Inbound crossings do not count as departure exits.
+    inbound = _point_from_reference(*center, bearing, radius - 0.2)
+    assert not airfield.gate_arc_crossed_outbound(
+        radius + 0.2, bearing, *inbound, gate)
 
 
 def test_distance_to_threshold(airfield):

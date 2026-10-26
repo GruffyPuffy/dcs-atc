@@ -16,6 +16,7 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
   background: var(--panel); border-bottom: 1px solid var(--line);
   position: relative; z-index: 1100; }
 .topbar strong { font-size: 15px; letter-spacing: .04em; }
+.build-version { color: var(--muted); font: 11px ui-monospace, SFMono-Regular, monospace; }
 .status { color: var(--muted); }
 .status.ok { color: var(--tower); }
 .status.bad { color: #f85149; }

@@ -226,13 +226,27 @@ function drawAirspace(af) {
       dashArray: '4 4', fillColor: '#d29922', fillOpacity: 0.05,
     }).bindTooltip(`Holding check: ${zone.label}`).addTo(staticLayer);
   }
-  // Departure "good exit" circles: a departure within this radius of its
-  // assigned gate counts as having used the exit (mirrors the brain's check).
-  for (const zone of checks.exit || []) {
-    L.circle(zone.center, {
-      radius: zone.radius_nm * 1852, color: '#3fb950', weight: 1,
-      dashArray: '6 4', fillColor: '#3fb950', fillOpacity: 0.05,
-    }).bindTooltip(`Good exit: ${zone.label} (within ${zone.radius_nm} NM)`)
+  // Entry and departure gates share radial arcs. The angular window and
+  // distance come from the same geometry used by the brain.
+  for (const gate of checks.gate_arcs || []) {
+    const c = gate.center;
+    const start = gate.start_deg;
+    let end = gate.end_deg;
+    if (end < start) end += 360;
+    const arc = [];
+    for (let i = 0; i <= 24; i++) {
+      const deg = start + (end - start) * (i / 24);
+      arc.push(i === 12 ? gate.point
+        : destMeters(c[0], c[1], deg, gate.radius_nm * 1852));
+    }
+    const style = { color: '#3fb950', weight: 2, opacity: 0.85,
+      dashArray: '6 4' };
+    L.polyline(arc, style)
+      .bindTooltip(`${gate.gate} gate arc · ±${gate.half_angle_deg}°`)
+      .addTo(staticLayer);
+    L.polyline([c, arc[0]], { ...style, weight: 1, opacity: 0.45 })
+      .addTo(staticLayer);
+    L.polyline([c, arc[arc.length - 1]], { ...style, weight: 1, opacity: 0.45 })
       .addTo(staticLayer);
   }
   if (checks.final) {
@@ -1112,6 +1126,7 @@ async function tick() {
   try {
     const res = await fetch('/api/atc', { cache: 'no-store' });
     const data = await res.json();
+    showBuildVersion(data.version);
     if (!map) initMap(data.airfield.center);
     document.getElementById('title').textContent =
       `ATC Map · ${data.airfield.name} · RWY ${data.airfield.active_runway}`;
@@ -1139,6 +1154,13 @@ async function tick() {
     status.textContent = 'server offline';
     status.className = 'status bad';
   }
+}
+
+function showBuildVersion(version) {
+  const label = document.getElementById('build-version');
+  const value = version || 'version unknown';
+  if (label) label.textContent = value;
+  document.title = `${document.getElementById('title')?.textContent || 'ATC'} · ${value}`;
 }
 
 // ---- web-driven restart / airfield switch ----

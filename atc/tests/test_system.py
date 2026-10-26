@@ -19,6 +19,13 @@ def _scenario(airfield, brain):
     return Scenario(airfield, brain)
 
 
+def _pass_departure_exit(sc, brain, airfield):
+    """Advance the radar track through the assigned outbound gate arc."""
+    gate = brain.pilots["Colt 1"].exit_gate or "West"
+    sc.at_gate(gate).set_alt(airfield.elevation_ft + 1500)
+    return brain.check_departure_handoff("Colt 1", sc._track())
+
+
 # ---------- Light path (ATC.md §12a / kneeboard page 4) ----------
 # The documented short version: straight to Tower (no Ground), report "on final"
 # (no formal break handoff). This guards the doc/card against drifting.
@@ -30,7 +37,10 @@ def test_light_path_departure(airfield, brain):
     r = sc.say("Line up and wait 25, Colt 1", Controller.TOWER)
     assert "cleared for takeoff" in r.lower()
     r = sc.say("Tower, Colt 1, airborne", Controller.TOWER)
-    assert "contact Control" in r
+    assert "continue outbound" in r
+    assert brain.pilots["Colt 1"].phase == Phase.TAKEOFF
+    r = _pass_departure_exit(sc, brain, airfield)
+    assert r and "contact Control" in r
     # Clear of the CTR (the realistic point to check in with Control).
     sc.at_gate("East").set_alt(airfield.elevation_ft + 1500)
     r = sc.say("Control, Colt 1, at 1500 ft", Controller.CONTROL)
@@ -75,8 +85,11 @@ def test_tower_hands_departure_to_control_past_the_runway(airfield, brain):
     # Still over the runway: no handoff yet (a little time to settle).
     sc.at_runway("25", along_nm=0.5).set_alt(airfield.elevation_ft + 300)
     assert brain.check_departure_handoff("Colt 1", sc._track()) is None
-    # Past the runway end: Tower hands off, unprompted.
+    # Past the runway end is still short of the exit arc.
     sc.at_runway("25", along_nm=2.0).set_alt(airfield.elevation_ft + 800)
+    assert brain.check_departure_handoff("Colt 1", sc._track()) is None
+    # Crossing the assigned exit arc completes the automatic handoff.
+    sc.at_gate("West").set_alt(airfield.elevation_ft + 1500)
     call = brain.check_departure_handoff("Colt 1", sc._track())
     assert call and "contact Control" in call
     assert brain.pilots["Colt 1"].phase == Phase.AIRBORNE
@@ -182,7 +195,9 @@ def test_full_departure_two_ship(airfield, brain):
     assert sc.phase() == Phase.TAKEOFF
 
     r = sc.say("Tower, Colt 1, airborne", Controller.TOWER)
-    assert "contact Control" in r
+    assert "continue outbound" in r
+    r = _pass_departure_exit(sc, brain, airfield)
+    assert r and "contact Control" in r
     assert sc.phase() == Phase.AIRBORNE
 
     # Control: check in, climb, then the radar handoff to Stingray at Angels 15.
@@ -989,7 +1004,9 @@ def test_full_lifecycle_all_pages(airfield, brain):
     assert sc.phase() == Phase.TAKEOFF
 
     r = sc.say("Tower, Colt 1, airborne", Controller.TOWER)
-    assert "contact Control" in r
+    assert "continue outbound" in r
+    r = _pass_departure_exit(sc, brain, airfield)
+    assert r and "contact Control" in r
     assert sc.phase() == Phase.AIRBORNE
 
     # Control: departure check-in -> climb (clear of the CTR).
@@ -1249,7 +1266,9 @@ def test_runway_incursion_silent_after_airborne_call(airfield, brain):
     sc = _scenario(airfield, brain).at_threshold("25")
     sc.say("Tower, Colt 1, ready for departure", Controller.TOWER)
     sc.say("Line up and wait 25, Colt 1", Controller.TOWER)  # -> Departure
-    sc.say("Tower, Colt 1, airborne", Controller.TOWER)      # -> Airborne
+    sc.say("Tower, Colt 1, airborne", Controller.TOWER)      # report only
+    assert brain.pilots["Colt 1"].phase == Phase.TAKEOFF
+    assert _pass_departure_exit(sc, brain, airfield)
     assert brain.pilots["Colt 1"].phase == Phase.AIRBORNE
     assert brain.check_incursion("Colt 1", on_runway=True) is None
 

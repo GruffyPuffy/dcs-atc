@@ -70,6 +70,9 @@ def bearing_distance(lat1: float, lon1: float, lat2: float,
     return _bearing(lat1, lon1, lat2, lon2), _haversine_nm(lat1, lon1, lat2, lon2)
 
 
+GATE_ARC_HALF_ANGLE_DEG = 18.0
+
+
 @dataclass
 class ControlZone:
     """A control zone: a horizontal polygon with a vertical ceiling (AGL)."""
@@ -366,13 +369,7 @@ class Airfield:
 
     def exit_zone_geometry(self, runway: str | None = None,
                            radius_nm: float = 1.5) -> list[dict]:
-        """The 'good exit' circles for a departure, as map circles.
-
-        Mirrors `_exit_deviation_note`: a departure is considered to have used
-        its assigned exit when it is within `radius_nm` of that gate. Returns
-        [{center, radius_nm, label, gate}, ...] for the departure gates of the
-        active runway (the arrival entry is excluded).
-        """
+        """Legacy point-radius display geometry retained for older clients."""
         zones: list[dict] = []
         for gate in self.departure_gates(runway):
             pos = self.gates.get(gate)
@@ -381,6 +378,96 @@ class Airfield:
             zones.append({"center": [pos[0], pos[1]], "radius_nm": radius_nm,
                           "label": f"Exit {gate}", "gate": gate})
         return zones
+
+    def gate_arc_geometry(self, half_angle_deg: float = GATE_ARC_HALF_ANGLE_DEG
+                          ) -> list[dict]:
+        """Gate arcs around the CTR reference, used by arrivals and departures.
+
+        Each arc uses the configured gate's bearing and distance from the CTR
+        reference. A pilot passes the arc through its angular window, then
+        crosses its radius in the appropriate direction.
+        """
+        result = []
+        for gate, (lat, lon) in self.gates.items():
+            bearing, radius = bearing_distance(
+                self.ctr.center_lat, self.ctr.center_lon, lat, lon)
+            result.append({
+                "gate": gate,
+                "center": [self.ctr.center_lat, self.ctr.center_lon],
+                "radius_nm": radius,
+                "bearing_deg": bearing,
+                "point": [lat, lon],
+                "half_angle_deg": half_angle_deg,
+                "start_deg": (bearing - half_angle_deg) % 360,
+                "end_deg": (bearing + half_angle_deg) % 360,
+            })
+        return result
+
+    def gate_arc_position(self, lat: float, lon: float, gate: str
+                          ) -> tuple[float, float, float] | None:
+        """Return (bearing, range, gate radius) relative to the CTR reference."""
+        target = self.gates.get(gate.split()[-1])
+        if target is None:
+            return None
+        bearing, distance = bearing_distance(
+            self.ctr.center_lat, self.ctr.center_lon, lat, lon)
+        _, gate_radius = bearing_distance(
+            self.ctr.center_lat, self.ctr.center_lon, target[0], target[1])
+        return bearing, distance, gate_radius
+
+    def in_gate_arc_sector(self, lat: float, lon: float, gate: str,
+                           half_angle_deg: float = GATE_ARC_HALF_ANGLE_DEG
+                           ) -> bool:
+        """Whether a position lies in the angular corridor for a named gate."""
+        position = self.gate_arc_position(lat, lon, gate)
+        if position is None:
+            return False
+        bearing, _, _ = position
+        target = self.gates[gate.split()[-1]]
+        gate_bearing, _ = bearing_distance(
+            self.ctr.center_lat, self.ctr.center_lon, target[0], target[1])
+        difference = abs((bearing - gate_bearing + 180) % 360 - 180)
+        return difference <= half_angle_deg
+
+    def gate_arc_crossed_outbound(self, previous_range_nm: float,
+                                  previous_bearing_deg: float,
+                                  lat: float, lon: float, gate: str,
+                                  half_angle_deg: float = GATE_ARC_HALF_ANGLE_DEG
+                                  ) -> bool:
+        """True when the sampled path crosses a gate arc outward.
+
+        Interpolate the bearing where the aircraft crosses the gate radius;
+        checking only the newest bearing can accept a turn made after the arc.
+        """
+        position = self.gate_arc_position(lat, lon, gate)
+        if position is None:
+            return False
+        current_bearing, current_range, gate_radius = position
+        radial_delta = current_range - previous_range_nm
+        if not (previous_range_nm < gate_radius <= current_range
+                and radial_delta > 0):
+            return False
+        fraction = (gate_radius - previous_range_nm) / radial_delta
+        bearing_delta = ((current_bearing - previous_bearing_deg + 180)
+                         % 360) - 180
+        crossing_bearing = (previous_bearing_deg
+                            + fraction * bearing_delta) % 360
+        target = self.gates.get(gate.split()[-1])
+        if target is None:
+            return False
+        gate_bearing, _ = bearing_distance(
+            self.ctr.center_lat, self.ctr.center_lon, target[0], target[1])
+        difference = abs((crossing_bearing - gate_bearing + 180) % 360 - 180)
+        return difference <= half_angle_deg
+
+    def gate_arc_passed_outbound(self, lat: float, lon: float, gate: str,
+                                 half_angle_deg: float = GATE_ARC_HALF_ANGLE_DEG
+                                 ) -> bool:
+        """Whether the aircraft is beyond a gate arc in its angular corridor."""
+        position = self.gate_arc_position(lat, lon, gate)
+        return bool(position and position[1] >= position[2]
+                    and self.in_gate_arc_sector(lat, lon, gate,
+                                                half_angle_deg))
 
     def final_zone_geometry(self, runway: str | None = None,
                             max_nm: float = 12.0,

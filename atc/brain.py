@@ -29,7 +29,7 @@ import topgun
 from atis import wind_speed_kt
 from callsigns import CallsignRegistry, flight_name
 from ctr import AircraftTrack, CtrEvent
-from airspace import bearing_distance
+from airspace import GATE_ARC_HALF_ANGLE_DEG, bearing_distance
 from state_client import canonical_callsign, slot_callsign
 
 TOWER = "Kutaisi Tower"
@@ -41,19 +41,7 @@ DEFAULT_PHRASEOLOGY = Path(__file__).with_name("phraseology.json")
 # handing the flight to Tower (a pilot who is not actually at the entry point
 # should not be handed off).
 ENTRY_REPORT_RADIUS_NM = 5.0
-# How close a departure must be to its assigned exit gate when Tower hands it to
-# Control. The handoff fires as soon as the aircraft is clear of the runway, so
-# the gate (a point on the CTR boundary, 5-8 NM out) is *always* far away then:
-# comparing against a small radius made the trainer note fire on every single
-# departure (debrief 2026-10-22: "note: you are not near Exit East" 47 s after
-# takeoff, 1.1 NM from the runway). The note now compares the distance to the
-# assigned gate against the nearest gate: only a departure whose exit gate is
-# not the nearest one *at all* is genuinely off track.
-EXIT_REPORT_RADIUS_NM = 1.5
-# A departure is "near" its assigned exit when it is no further off than the
-# nearest gate plus this margin (NM). Kept small: it distinguishes "heading for
-# the wrong side of the field" (~10 NM away) from normal early-departure jitter.
-EXIT_NEAREST_MARGIN_NM = 2.0
+EXIT_REPORT_RADIUS_NM = 1.5  # retained for legacy map clients
 
 # Arrival descent is stepped by distance to the entry gate, like a real
 # controller (not a single canned "descend to 1500" at 35 miles). Within
@@ -484,6 +472,8 @@ class PilotState:
     incursion_streak: int = 0  # consecutive on-runway polls (debounce)
     exit_gate: str = ""  # assigned departure exit point
     entry_gate: str = ""  # assigned arrival entry point
+    departure_previous_range_nm: float | None = None
+    departure_previous_bearing_deg: float | None = None
     # Held because the runway was occupied; the bot calls the pilot back when it
     # clears. `*_ready_announced` fires the unprompted "runway is clear" once.
     awaiting_takeoff: bool = False
@@ -501,7 +491,7 @@ class PilotState:
     # landing; re-arms on the next approach (go-around / touch-and-go).
     landing_handoff_announced: bool = False
     # Tower has pushed a departure to Control (MA SOP: "expect instructions to
-    # switch to control" once airborne). Fires once per departure.
+    # switch to control" once airborne). Re-armed by each takeoff clearance.
     departure_handoff_announced: bool = False
     # The flight has told Stingray it is returning to base ("Miller Time",
     # "Bingo", "requesting RTB"). Arms the handoff back to Control.
@@ -1407,6 +1397,8 @@ class AtcBrain:
         # STT normalisation, applied once, at the point where every intent is
         # matched against the text: see `_fold_spoken_figures`. Done *after*
         # formation/check-in handling above, which need the word forms.
+        # Frequent STT rendering of "marking bulls" from the sortie log.
+        low = re.sub(r"\bmocking\s+(bulls?|bullseye)\b", r"marking \1", low)
         low = _fold_spoken_figures(low)
         low = _fold_bullseye_figures(low)
         reply = self._dispatch(callsign, pilot, low, track, controller, traffic,
@@ -1454,6 +1446,11 @@ class AtcBrain:
         """
         return ("say again" in reply.lower()
                 or "readback incomplete" in reply.lower())
+
+    def remember_transmission(self, callsign: str, text: str) -> None:
+        """Remember the latest ATC message addressed to a pilot for replay."""
+        if callsign and text and not self._is_meta_reply(text):
+            self._pilot(callsign).last_reply = text
     def _dispatch(self, callsign: str, pilot: PilotState, low: str,
                   track: AircraftTrack | None,
                   controller: Controller,
@@ -1474,7 +1471,7 @@ class AtcBrain:
         # retrying a thing that can never work. Answer in ATC style and give
         # them a way forward. Handled before the controller dispatch so it
         # works on every frequency.
-        if re.search(r"\b(authenticat\w*|ramrod)\b", low):
+        if re.search(r"\b(auth|authenticat\w*|ramrod)\b", low):
             return self._say("authentication_not_implemented", callsign,
                              agency=self._agency(controller))
 
@@ -1556,6 +1553,8 @@ class AtcBrain:
         if re.search(r"\b(reset|restart|start over|new flight|reset state|"
                      r"back to start|scratch the flight)\b", low):
             return self._reset(callsign, pilot, controller)
+        if re.search(r"\bnever\s*mind\b", low):
+            return ""
         if re.search(r"\b(cancel|cancelling|canceling|disregard|abort|aborting|"
                      r"scratch that|scratch|belay|cancel clearance)\b", low):
             return self._cancel(callsign, pilot, controller)
@@ -1571,7 +1570,8 @@ class AtcBrain:
         # kanal" describes (debrief 2026-10-22: 4 minutes of Control round
         # trips after the Stingray handoff was already given).
         if _CHANNEL_REQUEST_RE.search(low):
-            return self._channel_request(callsign, pilot, controller, low)
+            return self._channel_request(callsign, pilot, controller, low,
+                                         track)
 
         # Frequency-change acknowledgement ("Colt 1, channel 8, push"): the pilot
         # is switching, so we stay *silent* — a "roger" would only step on the
@@ -1662,7 +1662,8 @@ class AtcBrain:
         return self._say("say_again", callsign, agency=agency)
 
     def _channel_request(self, callsign: str, pilot: PilotState,
-                         controller: Controller, low: str = "") -> str:
+                         controller: Controller, low: str = "",
+                         track: AircraftTrack | None = None) -> str:
         """Answer a pilot who asks to change frequency.
 
         This is a **trainer**: the pilot may ask to move to any agency from any
@@ -1683,6 +1684,17 @@ class AtcBrain:
             # Asking for the agency they are already on: just acknowledge.
             return self._say("agency_ack", callsign,
                              agency=self._agency(controller))
+        # Tower retains the departure until it passes its exit arc. An early
+        # request is acknowledged with the expected point; the normal radar
+        # handoff will happen automatically when that point is reached.
+        if (controller == Controller.TOWER and target == Controller.CONTROL
+                and pilot.phase == Phase.TAKEOFF):
+            handoff = self.check_departure_handoff(callsign, track)
+            if handoff:
+                return handoff
+            return self._say("continue_to_exit", callsign,
+                             gate=self._exit_label(
+                                 pilot.exit_gate or self._pick_exit_gate()))
         self._enter_agency(pilot, target)
         return self._say("contact_agency", callsign,
                          agency=self._agency(controller),
@@ -1718,6 +1730,8 @@ class AtcBrain:
     def _next_agency(self, pilot: PilotState,
                      controller: Controller) -> Controller:
         """The SOP "next" agency when a pilot asks to move without naming one."""
+        if controller == Controller.TOWER and pilot.phase == Phase.TAKEOFF:
+            return Controller.CONTROL
         if controller == Controller.CONTROL:
             if pilot.phase in (Phase.INBOUND, Phase.LANDING):
                 return Controller.TOWER
@@ -1742,7 +1756,11 @@ class AtcBrain:
         if target == Controller.STINGRAY:
             pilot.phase = Phase.STINGRAY
         elif target == Controller.CONTROL:
-            pilot.phase = Phase.INBOUND
+            # A departure moving from Tower to Control stays in the departure
+            # flow. Other Control requests (notably Stingray RTB) begin arrival.
+            pilot.phase = (Phase.AIRBORNE
+                           if pilot.phase in (Phase.TAKEOFF, Phase.AIRBORNE)
+                           else Phase.INBOUND)
             pilot.cleared_inbound = False
         elif target == Controller.TOWER:
             if pilot.phase in (Phase.IDLE, Phase.CLEARANCE, Phase.TAXI):
@@ -2145,6 +2163,61 @@ class AtcBrain:
                 return self._say("hold_short_traffic", callsign)
             pilot.phase = Phase.LINEUP
             return self._say("line_up", callsign)
+        # A go-around is a real state transition, not an optional pattern
+        # status call. Acknowledge it and re-arm the next landing clearance.
+        if re.search(r"\b(go(?:ing)? around|missed approach)\b", low):
+            repeated = pilot.go_around_issued
+            pilot.phase = Phase.INBOUND
+            pilot.cleared_landing = False
+            pilot.pattern_flown = False
+            pilot.go_around_issued = True
+            pilot.landing_handoff_announced = False
+            if repeated:
+                return ""
+            return self._say("go_around_ack", callsign)
+        # A readback of the approval is not a second touch-and-go request.
+        if re.search(r"\btouch(?:\s+|-)and(?:\s+|-)go\b", low) \
+                and re.search(r"\b(approved|cleared)\b", low) \
+                and not re.search(r"\b(request|requesting|clearance)\b", low):
+            return ""
+        # Touch-and-go is an explicit landing clearance request. Sequence it
+        # against runway traffic, then re-arm the next circuit's landing flow.
+        if re.search(r"\btouch(?:\s+|-)and(?:\s+|-)go\b", low) \
+                and re.search(r"\b(request|requesting|clearance)\b",
+                              low):
+            if pilot.phase not in (Phase.INBOUND, Phase.LANDING):
+                return None
+            if self._runway_busy(traffic, exclude=speaker):
+                pilot.phase = Phase.INBOUND
+                pilot.cleared_landing = False
+                pilot.pattern_flown = False
+                pilot.go_around_issued = True
+                return self._say("go_around_traffic", callsign)
+            pilot.phase = Phase.INBOUND
+            pilot.cleared_landing = False
+            pilot.pattern_flown = False
+            pilot.landing_handoff_announced = False
+            return self._say("touch_and_go_approved", callsign)
+        # Accept a spoken exit report while still on Tower. A valid report
+        # beyond the matching outbound arc can complete the automatic handoff;
+        # an early report gets a useful instruction instead of "say again".
+        spoken_exit = self._spoken_gate(low)
+        if (pilot.phase == Phase.TAKEOFF and spoken_exit
+                and re.search(r"\b(exit|passing|passed|crossing)\b", low)):
+            gate = spoken_exit.split()[-1]
+            if (track is not None and self.airfield is not None
+                    and gate in self.airfield.departure_gates(self.runway)
+                    and self.airfield.gate_arc_passed_outbound(
+                        track.lat, track.lon, gate)):
+                pilot.phase = Phase.AIRBORNE
+                pilot.departure_handoff_announced = True
+                pilot.departure_previous_range_nm = None
+                pilot.departure_previous_bearing_deg = None
+                note = self._exit_deviation_note(pilot, gate)
+                return note + self._say("contact_control", callsign)
+            return self._say("continue_to_exit", callsign,
+                             gate=self._exit_label(pilot.exit_gate
+                                                   or self._pick_exit_gate()))
         # Departure handoff: once airborne, Tower hands the flight to Control.
         # "rolling" alone is NOT a departure call — a landing pilot says
         # "rolling off runway 25" (handled below), so require a departure word.
@@ -2154,6 +2227,13 @@ class AtcBrain:
                      r"taking off|wheels up|off the ground)\b", low) \
                 and not re.search(r"\b(vacated|rolling off|rolling out|"
                                   r"touch and go|on the go|go around)\b", low):
+            if pilot.phase == Phase.TAKEOFF:
+                handoff = self.check_departure_handoff(callsign, track)
+                if handoff:
+                    return handoff
+                return self._say("continue_to_exit", callsign,
+                                 gate=self._exit_label(
+                                     pilot.exit_gate or self._pick_exit_gate()))
             pilot.phase = Phase.AIRBORNE
             return self._say("contact_control", callsign)
         # Readback of "report runway in sight" ("Report runway in sight, Adder11")
@@ -2570,8 +2650,11 @@ class AtcBrain:
                      r"rtb|returning to (?:base|the field|the boat)|"
                      r"request(?:ing)?\s+(?:to\s+)?(?:rtb|return)|"
                      r"recover(?:ing|y))\b", low):
+            repeated = pilot.rtb_requested
             pilot.phase = Phase.STINGRAY
             pilot.rtb_requested = True
+            if repeated:
+                return ""
             return self._say("stingray_rtb_copy", callsign)
 
         # A bullseye picture call ("Bullseye 065 for 40, Angels 15, as fragged").
@@ -2579,7 +2662,7 @@ class AtcBrain:
         # that is off gets a coaching challenge (never a block — the pilot keeps
         # flying, exactly like the position cross-check). Repeatable: a pilot
         # practising bullseye calls can make as many as they like.
-        if re.search(r"\b(bullseye|bull'?s?eye|marking)\b", low):
+        if re.search(r"\b(bullseye|bull'?s?eye|bulls?|marking)\b", low):
             # An air-start (or any pilot who never checked in elsewhere) is on
             # the tactical leg by definition once they talk to Stingray, so the
             # map shows the right phase without a full departure first.
@@ -2607,6 +2690,14 @@ class AtcBrain:
         # reports to the package, not to the controller.
         if re.search(r"\b(pushing|push(?:ing)? time|one away|two away|"
                      r"rifle|fox\s*(?:one|two|three)|magnum)\b", low):
+            return ""
+
+        # Tactical readbacks do not need another controller transmission.
+        # "ASFRAG" is a common clipped STT form of "as fragged".
+        if re.search(r"\b(as\s*frag(?:ged)?|fragged)\b", low):
+            return ""
+        if re.search(r"\b(copies|copy(?: that)?|roger(?: that)?|wilco)\b",
+                     low):
             return ""
 
         # Bare check-in ("Stingray, Adder11") -> "Adder11, Stingray". An
@@ -2858,6 +2949,11 @@ class AtcBrain:
         Only a right turnout is spoken — a left turnout is the default and gets
         no clause; a straight-out departure is told "fly runway heading".
         """
+        # A pilot can land, taxi, and depart again in the same DCS spawn. The
+        # Tower->Control handoff is one-shot per departure, not per spawn.
+        pilot.departure_handoff_announced = False
+        pilot.departure_previous_range_nm = None
+        pilot.departure_previous_bearing_deg = None
         turnout = self._takeoff_turnout(pilot)
         if turnout == "right":
             return self._say("lineup_readback", callsign, turnout=turnout)
@@ -2925,7 +3021,7 @@ class AtcBrain:
         return None
 
     def _at_entry(self, track: AircraftTrack | None, gate: str) -> bool:
-        """True if the aircraft is within `ENTRY_REPORT_RADIUS_NM` of `gate`.
+        """True if near the named gate and aligned with its radial entry arc.
 
         Used to cross-check an "at the entry" report before handing the flight
         to Tower. Without a live track we cannot tell, so we trust the pilot
@@ -2939,7 +3035,13 @@ class AtcBrain:
             return True
         _, distance = bearing_distance(track.lat, track.lon,
                                        target[0], target[1])
-        return distance <= ENTRY_REPORT_RADIUS_NM
+        position = self.airfield.gate_arc_position(
+            track.lat, track.lon, gate)
+        return (distance <= ENTRY_REPORT_RADIUS_NM
+                and position is not None and position[1] <= position[2]
+                and self.airfield.in_gate_arc_sector(
+                    track.lat, track.lon, gate,
+                    GATE_ARC_HALF_ANGLE_DEG))
 
     def _distance_to_gate(self, track: AircraftTrack | None,
                           gate: str) -> float | None:
@@ -3012,53 +3114,70 @@ class AtcBrain:
 
     def check_departure_handoff(self, callsign: str,
                                 track: AircraftTrack | None) -> str | None:
-        """Push a departure to Control once it is clear of the runway zone.
+        """Push a departure to Control after it crosses an outbound gate arc.
 
         Master Arms SOP: after takeoff, "expect instructions to switch to
         control" — Tower initiates the handoff, the pilot does not have to
-        report "airborne". The handoff waits until the aircraft is past the
-        runway (a little time to settle after liftoff), then fires once.
+        report "airborne". The handoff waits until it passes the assigned exit
+        arc. If the pilot leaves through a different configured departure gate,
+        we still hand off there and coach the deviation.
         """
         pilot = self._pilot(callsign)
         if (pilot.phase != Phase.TAKEOFF or pilot.departure_handoff_announced
                 or track is None or self.airfield is None):
             return None
+        current_bearing, current_range = bearing_distance(
+            self.airfield.ctr.center_lat, self.airfield.ctr.center_lon,
+            track.lat, track.lon)
+        previous_range = pilot.departure_previous_range_nm
+        previous_bearing = pilot.departure_previous_bearing_deg
+        pilot.departure_previous_range_nm = current_range
+        pilot.departure_previous_bearing_deg = current_bearing
         if self.airfield.is_over_runway(track.lat, track.lon):
+            return None
+        gates = self.airfield.departure_gates(self.runway)
+        passed_gate = next((gate for gate in gates
+                            if (self.airfield.gate_arc_crossed_outbound(
+                                    previous_range, previous_bearing,
+                                    track.lat, track.lon, gate)
+                                if (previous_range is not None
+                                    and previous_bearing is not None) else
+                                self.airfield.gate_arc_passed_outbound(
+                                    track.lat, track.lon, gate))), None)
+        # Do not strand a departure in the Tower phase when it leaves the CTR
+        # without crossing any configured exit arc. The angular gate still
+        # decides whether the assigned exit was used; leaving the zone is the
+        # safety fallback that completes the handoff and reports a miss.
+        if (passed_gate is None
+                and not self.airfield.ctr.contains_horizontal(
+                    track.lat, track.lon)):
+            passed_gate = ""
+        if passed_gate is None:
             return None
         pilot.departure_handoff_announced = True
         pilot.phase = Phase.AIRBORNE
-        # Hand off regardless, but coach if the pilot did not leave via the
-        # assigned exit (a trainer note, not a block).
-        note = self._exit_deviation_note(pilot, track)
+        note = self._exit_deviation_note(pilot, passed_gate)
+        pilot.departure_previous_range_nm = None
+        pilot.departure_previous_bearing_deg = None
         return note + self._say("contact_control", callsign)
 
     def _exit_deviation_note(self, pilot: PilotState,
-                             track: AircraftTrack | None) -> str:
-        """A trainer note if the departure is clearly heading for a wrong exit.
-
-        Empty when the pilot is tracking their assigned gate (or we cannot
-        tell). The handoff fires seconds after liftoff, so the assigned gate is
-        *always* miles away at that moment — measuring against a small radius
-        made this note fire on every departure (debrief 2026-10-22). What is
-        actually wrong is heading for a *different* gate, so the assigned gate
-        is compared against the nearest one: only a departure whose exit gate is
-        not the closest gate at all gets the note.
-        """
-        if track is None or self.airfield is None or not pilot.exit_gate:
+                             passed_gate: str | AircraftTrack | None) -> str:
+        """Coach only when the aircraft actually leaves through another gate."""
+        if isinstance(passed_gate, AircraftTrack):
+            track = passed_gate
+            passed_gate = None
+            if self.airfield is not None:
+                passed_gate = next((gate for gate in
+                                    self.airfield.departure_gates(self.runway)
+                                    if self.airfield.gate_arc_passed_outbound(
+                                        track.lat, track.lon, gate)), None)
+        if passed_gate is None:
             return ""
-        distance = self._distance_to_gate(track, pilot.exit_gate)
-        if distance is None:
-            return ""
-        nearest = self.airfield.nearest_gate(track.lat, track.lon)
-        nearest_distance = self._distance_to_gate(track, nearest) \
-            if nearest else None
-        if nearest_distance is not None:
-            if distance <= nearest_distance + EXIT_NEAREST_MARGIN_NM:
-                return ""
-        elif distance <= EXIT_REPORT_RADIUS_NM:
+        if not pilot.exit_gate or passed_gate == pilot.exit_gate:
             return ""
         return self._say("exit_deviation", pilot.callsign,
-                         gate=self._exit_label(pilot.exit_gate)) + " "
+                         assigned_gate=self._exit_label(pilot.exit_gate)) + " "
 
     def check_departure_climb(self, callsign: str,
                               track: AircraftTrack | None) -> str | None:
@@ -3404,6 +3523,10 @@ class AtcBrain:
             return None
         if runway_occupied and not pilot.go_around_issued:
             pilot.go_around_issued = True
+            pilot.phase = Phase.INBOUND
+            pilot.cleared_landing = False
+            pilot.pattern_flown = False
+            pilot.landing_handoff_announced = False
             key = ("go_around_traffic" if self._traffic_on_runway(traffic)
                    else "go_around")
             return self._say(key, callsign)

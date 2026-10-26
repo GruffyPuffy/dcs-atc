@@ -524,12 +524,15 @@ def make_handler(service: "ViewerService"):
                 path = newest_debrief(service.debrief_dir)
                 if path is None:
                     self._send(200, json.dumps(
-                        {"error": "no saved debriefs yet"},
+                        {"error": "no saved debriefs yet",
+                         "version": os.environ.get("ATC_VERSION", "")},
                         separators=(",", ":")).encode(),
                         "application/json; charset=utf-8")
                     return
+                snapshot = debrief_snapshot(path, service.airfield, service.basemap)
+                snapshot["version"] = os.environ.get("ATC_VERSION", "")
                 self._send(200, json.dumps(
-                    debrief_snapshot(path, service.airfield, service.basemap),
+                    snapshot,
                     separators=(",", ":")).encode(),
                     "application/json; charset=utf-8")
                 return
@@ -545,9 +548,11 @@ def make_handler(service: "ViewerService"):
                     self._send(404, b'{"error": "not found"}',
                                "application/json; charset=utf-8")
                     return
+                snapshot = debrief_snapshot(file_path, service.airfield,
+                                            service.basemap)
+                snapshot["version"] = os.environ.get("ATC_VERSION", "")
                 self._send(200, json.dumps(
-                    debrief_snapshot(file_path, service.airfield,
-                                     service.basemap),
+                    snapshot,
                     separators=(",", ":")).encode(),
                     "application/json; charset=utf-8")
                 return

@@ -39,6 +39,10 @@ def test_snapshot_has_airspace_geometry(brain, airfield):
     assert af["name"] == "Kutaisi"
     assert len(af["ctr"]["polygon"]) >= 3          # CTR outline for the map
     assert set(af["gates"]) == {"East", "West", "South", "North"}
+    arcs = af["checks"]["gate_arcs"]
+    assert {arc["gate"] for arc in arcs} == set(af["gates"])
+    assert all(arc["point"] == af["gates"][arc["gate"]]
+               for arc in arcs)
     assert "25" in af["runways"]
     assert snap["aircraft"] == []
 
@@ -554,7 +558,8 @@ def test_debrief_round_trips_chatter(brain, airfield, tmp_path):
     assert any("cleared taxi" in e["text"] for e in restored.chatter())
 
 
-def test_replay_ignores_live_chatter(brain, airfield, tmp_path):
+def test_replay_view_keeps_saved_chatter_while_live_chatter_records(
+        brain, airfield, tmp_path):
     tracks_file = tmp_path / "tracks.json"
     (tracks_file).write_text(json.dumps(
         {"tracks": {"Colt 1": [[42.18, 42.50, 100.0], [42.19, 42.51, 200.0]]},
@@ -563,9 +568,45 @@ def test_replay_ignores_live_chatter(brain, airfield, tmp_path):
                                    "freq": 263.0, "t": "10:00:00"}]}))
     service = MapService(airfield, brain, None, tracks_file=tracks_file)
     assert service.replay is True
-    before = len(service.chatter())
+    saved_chatter = service.snapshot()["chatter"]
     service.log_chatter("rx", 263.0, "Caveman", "live call")
-    assert len(service.chatter()) == before  # replay keeps only the saved log
+    assert service.chatter()[-1]["text"] == "live call"
+    assert service.snapshot()["chatter"] == saved_chatter
+
+
+def test_selecting_debrief_does_not_interrupt_live_spawn_recording(
+        brain, airfield, tmp_path, monkeypatch):
+    monkeypatch.setattr(map_server, "DEBRIEF_DIR", tmp_path)
+    replay_file = tmp_path / "tracks_saved.json"
+    replay_file.write_text(json.dumps({
+        "tracks": {"Old sortie": [[42.18, 42.50, 100.0]]},
+        "comms": {},
+        "chatter": [{"kind": "tx", "text": "saved call", "who": "",
+                     "callsign": "", "controller": "tower",
+                     "freq": 270.0, "t": "10:00:00"}],
+    }))
+    brain.remember_speaker("Caveman", "Colt 1")
+    service = MapService(airfield, brain, FakeState([]), debrief_dir=tmp_path)
+    service.begin_spawn("Caveman", "Colt 1")
+    service.record([_ac(lat=42.18, lon=42.50)])
+    assert service.load_debrief(replay_file.name)["ok"]
+    saved_view_chatter = service.snapshot()["chatter"]
+
+    # Live recording and save continue behind the selected replay view.
+    service.record([_ac(lat=42.20, lon=42.52)])
+    service.log_chatter("rx", 270.0, "Caveman", "live call", "tower")
+    service.save_tracks()
+    live_file = next(tmp_path.glob("tracks_kutaisi_caveman_colt-1_*.json"))
+    live_debrief = json.loads(live_file.read_text())
+    assert len(live_debrief["tracks"]["Colt 1"]) >= 2
+    assert any(event["text"] == "live call"
+               for event in live_debrief["chatter"])
+    assert service.snapshot()["chatter"] == saved_view_chatter
+
+    service.unload_debrief()
+    live_snapshot = service.snapshot()
+    assert live_snapshot["replay"] is False
+    assert any(ac["callsign"] == "Colt 1" for ac in live_snapshot["aircraft"])
 
 
 def test_debrief_endpoints_http(brain, airfield, tmp_path, monkeypatch):

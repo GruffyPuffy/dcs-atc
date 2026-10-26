@@ -402,6 +402,11 @@ def main() -> None:
         interval), so the log only shows the first broadcast and each change of
         the information letter.
         """
+        # Keep the last addressed ATC message available for a pilot's
+        # "say again", including radar driven calls that bypass brain.handle().
+        if callsign:
+            with lock:
+                brain.remember_transmission(callsign, text)
         # TopGun easter egg: if the reply is the canonical denial, play the
         # drop-in clip instead of synthesising the line (its presence is the
         # switch; see topgun.enabled()).
@@ -475,7 +480,7 @@ def main() -> None:
     def speak_to_pilot(callsign: str, text: str) -> None:
         """Unsolicited TX on the pilot's working frequency."""
         ctrl = working_controller(callsign)
-        speak(text, freq=freq_for(ctrl), controller=ctrl)
+        speak(text, freq=freq_for(ctrl), controller=ctrl, callsign=callsign)
 
     def play_wav(path, freq: int = freq_hz,
                  controller: Controller | None = None,
@@ -962,7 +967,8 @@ def main() -> None:
                         clear_call = brain.check_runway_clear(callsign, busy)
                     if clear_call:
                         log(f"RUNWAY CLEAR: {callsign} ({ac.player})")
-                        speak(clear_call, controller=Controller.TOWER)
+                        speak(clear_call, controller=Controller.TOWER,
+                              callsign=callsign)
                     # After landing, Tower pushes the flight to Ground at
                     # touchdown (Master Arms SOP) — the pilot does not have to
                     # report "vacated" to Tower.
@@ -978,7 +984,8 @@ def main() -> None:
                         handoff = brain.check_landing_handoff(callsign, landed)
                     if handoff:
                         log(f"LANDED: {callsign} ({ac.player}) -> Ground")
-                        speak(handoff, controller=Controller.TOWER)
+                        speak(handoff, controller=Controller.TOWER,
+                              callsign=callsign)
                     # Departure handoff: Tower pushes a departure to Control once it is
                     # past the runway (MA SOP: "expect instructions to switch
                     # to control"). The pilot does not have to report "airborne".
@@ -986,7 +993,8 @@ def main() -> None:
                         dep_handoff = brain.check_departure_handoff(callsign, tr)
                     if dep_handoff:
                         log(f"AIRBORNE: {callsign} ({ac.player}) -> Control")
-                        speak(dep_handoff, controller=Controller.TOWER)
+                        speak(dep_handoff, controller=Controller.TOWER,
+                              callsign=callsign)
                     # Departure climb: a departure that checked in with Control
                     # while still inside the CTR is climbed once it leaves the
                     # zone (Control watches on radar; no report needed).
@@ -995,7 +1003,7 @@ def main() -> None:
                     if climb:
                         log(f"CLIMB: {callsign} ({ac.player})")
                         speak(climb, freq=freq_for(Controller.CONTROL),
-                              controller=Controller.CONTROL)
+                              controller=Controller.CONTROL, callsign=callsign)
                     # Stingray handoff: once the departure is at Angels 15,
                     # Control pushes them to AWACS on channel 3 (SOP). We do
                     # not simulate Stingray, but the call still goes out.
@@ -1004,7 +1012,7 @@ def main() -> None:
                     if stingray:
                         log(f"STINGRAY: {callsign} ({ac.player})")
                         speak(stingray, freq=freq_for(Controller.CONTROL),
-                              controller=Controller.CONTROL)
+                              controller=Controller.CONTROL, callsign=callsign)
                     # Arrival descent: after the far-out step-down, Control
                     # issues the final "descend to 1500 feet" once the aircraft
                     # reaches the entry area.
@@ -1013,7 +1021,7 @@ def main() -> None:
                     if descend:
                         log(f"DESCEND: {callsign} ({ac.player})")
                         speak(descend, freq=freq_for(Controller.CONTROL),
-                              controller=Controller.CONTROL)
+                              controller=Controller.CONTROL, callsign=callsign)
                     # Arrival handoff: after the "descend to 1500" readback,
                     # wait until they are actually at 1500 before pushing to
                     # Tower (they may still be at Angels 8).
@@ -1022,7 +1030,7 @@ def main() -> None:
                     if desc_hand:
                         log(f"LEVEL 1500: {callsign} ({ac.player}) -> Tower")
                         speak(desc_hand, freq=freq_for(Controller.CONTROL),
-                              controller=Controller.CONTROL)
+                              controller=Controller.CONTROL, callsign=callsign)
                     # Takeoff clearance: after the pilot reads back "line up and
                     # wait", wait until they are actually lined up on the runway
                     # before clearing takeoff (they may still be taxiing on).
@@ -1030,7 +1038,8 @@ def main() -> None:
                         lineup = brain.check_lineup(callsign, tr)
                     if lineup:
                         log(f"LINED UP: {callsign} ({ac.player})")
-                        speak(lineup, controller=Controller.TOWER)
+                        speak(lineup, controller=Controller.TOWER,
+                              callsign=callsign)
             except (OSError, RuntimeError):
                 pass  # bridge down or mission not running; retry next tick
 
