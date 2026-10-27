@@ -56,6 +56,10 @@ else
 fi
 
 # Publish the checked-out version to both web pages and the container log.
+# The selected ref may be a commit SHA, and the shallow ref fetch above does
+# not necessarily fetch tags that point at that commit. Fetch tag refs so an
+# exact release tag can be shown even when ATC_REF was a SHA.
+git -C "$ATC_DIR" fetch --quiet --depth 1 origin '+refs/tags/*:refs/tags/*'
 ATC_VERSION="$(git -C "$ATC_DIR" describe --tags --exact-match HEAD 2>/dev/null \
     || git -C "$ATC_DIR" rev-parse --short=12 HEAD)"
 export ATC_REF ATC_VERSION

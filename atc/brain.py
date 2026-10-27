@@ -2348,15 +2348,14 @@ class AtcBrain:
                 return ""
             pilot.phase = Phase.AIRBORNE
             return self._say("contact_control", callsign)
-        # Readback of "report runway in sight" ("Report runway in sight, Adder11")
-        # is NOT the runway-in-sight report itself — only the actual report (said
-        # when the runway is genuinely in sight) triggers the break clearance.
-        # Must come before the runway-in-sight branch. STT also drops the "in"
-        # ("report runway sight", debrief 2026-10-18 13:06:55), so accept the
-        # mangled form too — "runway sight" is never a position report.
+        # Readback of "report runway in sight" is not the actual runway-in-sight
+        # report. Stay silent as in the MA kneeboard; only the subsequent
+        # position report triggers the break clearance. STT also drops the "in"
+        # ("report runway sight", debrief 2026-10-18 13:06:55), so accept that
+        # mangled readback too.
         if re.search(r"\b(report|reporting|wilco|roger|copy)\b.*"
                      r"\brunway (?:in )?sight\b", low):
-            return self._say("roger", callsign, agency=self.tower_short)
+            return ""
         if re.search(r"\b(runway in sight|runway insight|visual)\b", low):
             pilot.phase = Phase.LANDING
             pilot.break_cleared = True

@@ -2097,18 +2097,22 @@ def test_real_incursion_still_warns(brain):
     assert "vacate" in warned.lower()
 
 
-def test_mangled_runway_in_sight_readback_acknowledged(brain):
+def test_runway_in_sight_instruction_readback_is_silent(brain):
     # STT drops the "in": "report runway sight" is the readback of "report
-    # runway in sight", not a position report — acknowledge, not "say again"
-    # (13:06:55 in the debrief).
+    # runway in sight", not a position report. The MA kneeboard has no Tower
+    # reply after the readback, so stay silent (13:06:55 in the debrief).
     brain.handle("Tower, Colt 1, at entry west", controller=Controller.TOWER)
     reply = brain.handle("report runway sight, Colt 1",
                          controller=Controller.TOWER)
-    assert reply and "roger" in reply.lower()
-    # The exact form still reads back the same way.
+    assert reply == ""
+    # The exact form is silent too, but the actual position report still
+    # triggers the next SOP clearance.
     reply = brain.handle("report runway in sight, Colt 1",
                          controller=Controller.TOWER)
-    assert reply and "roger" in reply.lower()
+    assert reply == ""
+    reply = brain.handle("Tower, Colt 1, runway in sight",
+                         controller=Controller.TOWER)
+    assert reply and "overhead break" in reply.lower()
 
 
 def test_repeat_after_wrong_exit_replays_the_clearance(brain):
