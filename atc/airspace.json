@@ -50,6 +50,7 @@
       "default_runway": "07",
       "ctr": {
         "ceiling_ft_agl": 1500,
+        "speed_limit_kt": 300,
         "polygon": [
           [
             42.141514,

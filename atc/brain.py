@@ -493,6 +493,8 @@ class PilotState:
     incursion_streak: int = 0  # consecutive on-runway polls (debounce)
     exit_gate: str = ""  # assigned departure exit point
     entry_gate: str = ""  # assigned arrival entry point
+    vector_heading: str = ""  # latest assigned vector, used to consume readback
+    vector_runway: str = ""
     departure_previous_range_nm: float | None = None
     departure_previous_bearing_deg: float | None = None
     arrival_previous_range_nm: float | None = None
@@ -1566,6 +1568,42 @@ class AtcBrain:
         if re.search(r"\b(help|assist|what do i do|what now|remind me)\b", low):
             return self._help(callsign, pilot, controller, track)
 
+        if re.search(r"\b(speed restriction|speed limit|restricted speed|"
+                     r"maximum speed|any speed|how fast)\b", low):
+            agency = self._agency(controller)
+            if track is None or self.airfield is None:
+                return self._say("speed_position_unknown", callsign,
+                                 agency=agency)
+            inside_ctr = self._inside_ctr(track)
+            if inside_ctr:
+                speed = self.airfield.ctr_speed_limit_kt
+                if speed is not None:
+                    return self._say("speed_restriction_ctr", callsign,
+                                     agency=agency, speed=f"{speed:g}")
+                return self._say("speed_restriction_none", callsign,
+                                 agency=agency)
+            return self._say("speed_restriction_outside", callsign,
+                             agency=agency)
+
+        # Consume a readback of the assigned vector before handling requests.
+        # Without this, "281, vectors, runway 07" was mistaken for a new
+        # request and got a different heading as the aircraft moved.
+        if re.search(r"\bvectors?\b", low):
+            request_vector = bool(re.search(
+                r"\b(request(?:ing)?|need|want|like|would like|asking for|"
+                r"give me)\b", low))
+            if not request_vector:
+                spoken = self._numbers(low)
+                runway_readback = (
+                    not pilot.vector_runway
+                    or self._number_read_back(pilot.vector_runway, spoken))
+                if (pilot.vector_heading
+                        and self._number_read_back(pilot.vector_heading, spoken)
+                        and runway_readback):
+                    return ""
+                return self._say("say_again", callsign,
+                                 agency=self._agency(controller))
+
         # Trainer aid: "<callsign> request vectors [for runway 25]" gives an
         # approach vector ("fly heading X, vectors for runway Y"). Real ATC
         # phraseology — distinct from a bearing/distance request. A *request*
@@ -1574,11 +1612,16 @@ class AtcBrain:
         # A bullseye/marking call is excluded: "request vector to bullseye" is
         # a picture request, not an approach vector, and must not be answered
         # with a runway heading.
-        if (re.search(r"\bvectors?\b", low) or (
-                re.search(r"\bheading\b", low)
-                and re.search(r"\b(request(?:ing)?|like|prefer|would like|"
-                              r"asking for|need|give me|what)\b", low))) \
-                and not re.search(r"\b(bullseye|bull'?s?eye|marking)\b", low):
+        vector_request = (
+            (bool(re.search(r"\bvectors?\b", low)) and bool(re.search(
+                r"\b(request(?:ing)?|need|want|like|would like|asking for|"
+                r"give me)\b", low)))
+            or (bool(re.search(r"\bheading\b", low)) and bool(re.search(
+                r"\b(request(?:ing)?|like|prefer|would like|asking for|"
+                r"need|give me|what)\b", low)))
+        )
+        if (vector_request
+                and not re.search(r"\b(bullseye|bull'?s?eye|marking)\b", low)):
             return self._vectors(callsign, low, track, controller)
 
         # Trainer aid: "<callsign> request bearing and distance [to <gate>]"
@@ -1916,6 +1959,8 @@ class AtcBrain:
         pilot.stingray_handoff_announced = False
         pilot.exit_gate = ""
         pilot.entry_gate = ""
+        pilot.vector_heading = ""
+        pilot.vector_runway = ""
         pilot.arrival_previous_range_nm = None
         pilot.arrival_previous_bearing_deg = None
         pilot.readback_fails = 0
@@ -3577,8 +3622,11 @@ class AtcBrain:
         heading = self.airfield.vector_heading(track.lat, track.lon, runway)
         if heading is None:
             return self._say("directions_unknown", callsign, agency=agency)
+        pilot = self._pilot(callsign)
+        pilot.vector_heading = f"{self._cockpit_bearing(heading):03.0f}"
+        pilot.vector_runway = runway
         return self._say("vectors", callsign, agency=agency,
-                          heading=f"{self._cockpit_bearing(heading):03.0f}",
+                          heading=pilot.vector_heading,
                           vector_runway=runway)
 
     def working_controller(self, callsign: str) -> Controller:

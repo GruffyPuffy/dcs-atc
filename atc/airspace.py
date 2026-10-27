@@ -136,6 +136,7 @@ class Airfield:
     elevation_ft: float
     active_runway: str
     ctr: ControlZone
+    ctr_speed_limit_kt: float | None = None
     # Runway used when the wind is calm (can't pick by headwind). Usually the
     # same as `active_runway`; set explicitly to match what DCS/the mission uses
     # so AI and player traffic agree (DCS picks a terrain/mission default, not
@@ -1054,6 +1055,9 @@ def _build_airfield(name: str, spec: dict, defaults: dict,
         active_runway=str(spec.get("active_runway", "")),
         default_runway=str(spec.get("default_runway", spec.get("active_runway", ""))),
         ctr=ctr,
+        ctr_speed_limit_kt=(float(ctr_spec["speed_limit_kt"])
+                            if ctr_spec.get("speed_limit_kt") is not None
+                            else None),
         atis_frequency_mhz=float(spec.get("atis_frequency_mhz", 0.0)),
         ground=spec.get("ground", f"{name} Ground"),
         ground_frequency_mhz=float(spec.get("ground_frequency_mhz", 0.0)),

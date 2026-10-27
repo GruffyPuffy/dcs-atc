@@ -44,7 +44,9 @@ REQUIRED_TEMPLATES = {
     "help_inbound", "help_landing",
     "help_escape",
     "position_challenge", "directions_gate", "directions_field",
-    "directions_unknown", "vectors",
+    "directions_unknown", "vectors", "speed_restriction_ctr",
+    "speed_restriction_none", "speed_restriction_outside",
+    "speed_position_unknown",
 }
 
 
@@ -90,6 +92,7 @@ def test_every_template_renders_with_common_fields():
                   holding="Holding C", stingray="Stingray", range="40",
                   target="Control", target_channel="8", bullseye="bullseye 065 for 40",
                   point="bullseye", actual_angels="15", capability="PICTURE")
+    common["speed"] = "300"
     for key in REQUIRED_TEMPLATES:
         text = ph.render(key, **common)
         assert "{" not in text, f"{key} left a placeholder unfilled"

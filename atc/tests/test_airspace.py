@@ -14,6 +14,7 @@ def test_loads_kutaisi(airfield):
     assert airfield.ground_frequency_mhz == 250.0
     assert airfield.control_frequency_mhz == 257.0
     assert airfield.active_runway == "25"
+    assert airfield.ctr_speed_limit_kt == 300
 
 
 def test_ctr_contains_airfield(airfield):

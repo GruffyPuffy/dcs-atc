@@ -993,6 +993,43 @@ def test_vectors_without_radar_contact(airfield, brain):
     assert "unable" in r.lower()
 
 
+def test_vector_readback_does_not_request_a_new_heading(airfield, brain):
+    sc = _scenario(airfield, brain).at_gate("North")
+    reply = sc.say("Control, Colt 1, request vectors for runway 25",
+                   Controller.CONTROL)
+    heading = reply.split("fly heading ", 1)[1][:3]
+    assert brain.pilots["Colt 1"].vector_heading == heading
+
+    # Moving before the readback would produce a different vector if the
+    # readback were accidentally dispatched as another request.
+    sc.lat += 0.1
+    readback = sc.say(f"{heading}, vectors for runway 25, Colt 1",
+                      Controller.CONTROL)
+    assert readback == ""
+    assert brain.pilots["Colt 1"].vector_heading == heading
+
+
+def test_speed_restriction_answer_uses_ctr_position(airfield, brain):
+    inside = _scenario(airfield, brain).set_alt(1000)
+    reply = inside.say("Control, Colt 1, any speed restriction?",
+                       Controller.CONTROL)
+    assert "300 knots or less" in reply
+    assert "inside the control zone" in reply
+
+    outside = _scenario(airfield, brain).set_alt(1000)
+    outside.lat = airfield.ctr.center_lat + 0.5
+    reply = outside.say("Control, Colt 1, is there a speed limit?",
+                        Controller.CONTROL)
+    assert "no additional speed restriction" in reply.lower()
+    assert "outside the control zone" in reply.lower()
+
+
+def test_speed_restriction_without_radar_requests_position(brain):
+    reply = brain.handle("Control, Colt 1, any speed restriction?",
+                         track=None, controller=Controller.CONTROL)
+    assert "unable to confirm your position" in reply.lower()
+
+
 # ---------- Full lifecycle: kneeboard page 1 -> 3 -> 2 in one flight ----------
 
 def test_full_lifecycle_all_pages(airfield, brain):
