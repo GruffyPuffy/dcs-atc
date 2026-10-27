@@ -1020,14 +1020,14 @@ def main() -> None:
                         log(f"RTB HANDOFF: {callsign} ({ac.player}) -> Control")
                         speak(rtb_handoff, freq=freq_for(Controller.STINGRAY),
                               controller=Controller.STINGRAY, callsign=callsign)
-                    # Control transfers an inbound flight when it reaches the
-                    # CTR footprint, giving Tower time to work the arrival even
-                    # when the pilot is descending slowly.
+                    # Control transfers at the assigned entry arc. Descent
+                    # clearance/readback state cannot block this spatial
+                    # handoff; entering the CTR is the missed-arc fallback.
                     with lock:
                         tower_handoff = brain.check_arrival_tower_handoff(
                             callsign, tr)
                     if tower_handoff:
-                        log(f"CTR ARRIVAL: {callsign} ({ac.player}) -> Tower")
+                        log(f"ARRIVAL HANDOFF: {callsign} ({ac.player}) -> Tower")
                         speak(tower_handoff, freq=freq_for(Controller.CONTROL),
                               controller=Controller.CONTROL, callsign=callsign)
                     # Arrival descent: after the far-out step-down, Control

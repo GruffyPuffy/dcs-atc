@@ -180,7 +180,7 @@ def _fly_to_final(sc, runway="33"):
            Controller.CONTROL)
     sc.say(f"150 to join via the entry, {sc.callsign}", Controller.CONTROL)
     sc.say(f"Descend to 1500 feet, {sc.callsign}", Controller.CONTROL)
-    sc.on_final(runway, nm=5)
+    sc.on_final(runway, nm=3)
 
 
 def test_mp_lead_landing_clearance_covers_wingman(adder_flight):

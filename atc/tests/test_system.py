@@ -141,13 +141,14 @@ def test_stingray_handoff_once_at_angels_15(airfield, brain):
 
 
 def test_light_path_return_and_landing(airfield, brain):
-    sc = _scenario(airfield, brain).at_gate("North")
-    r = sc.say("Kutaisi Control, Colt 1, inbound 35 miles north at Angels 12",
+    sc = _scenario(airfield, brain).at_gate("East").set_alt(4000)
+    r = sc.say("Kutaisi Control, Colt 1, inbound 10 miles east at 4000 feet",
                Controller.CONTROL)
     assert "join via Entry East" in r           # best entry for runway 25
     r = sc.say("150 to join via Entry East, Colt 1", Controller.CONTROL)
     assert "descend to 1500 feet" in r.lower()
     # Straight to Tower (no formal Control→Tower handoff required).
+    sc.at_gate("East")
     r = sc.say("Tower, Colt 1, Entry East", Controller.TOWER)
     assert "report runway in sight" in r.lower()
     r = sc.say("Colt 1, runway in sight", Controller.TOWER)
@@ -250,20 +251,20 @@ def test_full_arrival_two_ship(airfield, brain):
     # Control: inbound, join, readback (descend), then hand to Tower.
     # Reset the altitude: the Stingray leg left the fake track at Angels 15, and
     # the descent step is altitude-aware (high -> step down to 5000 first).
-    sc.at_gate("North").set_alt(1000)
-    r = sc.say("Kutaisi Control, Colt 1, inbound 35 miles north at Angels 12",
+    sc.at_gate("East").set_alt(4000)
+    r = sc.say("Kutaisi Control, Colt 1, inbound 10 miles east at 4000 feet",
                Controller.CONTROL)
     assert "join via Entry East" in r
     r = sc.say("150 to join via Entry East, Colt 1", Controller.CONTROL)
     assert "descend to 1500 feet" in r.lower()
-    # Readback of the descent -> Control hands off to Tower (MA flow, kn. page 2)
+    # Readback of the descent does not itself trigger a Tower handoff.
     r = sc.say("Descend to 1500 feet, Colt 1", Controller.CONTROL)
     assert r == ""
     assert sc.phase() == Phase.INBOUND
-    # The monitor hands off only after the final descent readback and CTR entry.
+    # The entry arc is the normal spatial trigger, independent of readback.
     r = brain.check_arrival_tower_handoff("Colt 1", sc._track())
     if r is None:
-        # Move into the CTR after the final descent is read back.
+        # Move into the CTR to exercise the missed-arc fallback.
         sc.lat, sc.lon = airfield.ctr.center_lat, airfield.ctr.center_lon
         r = brain.check_arrival_tower_handoff("Colt 1", sc._track())
     assert r and "contact Tower" in r
@@ -443,8 +444,8 @@ def test_ready_for_departure_challenged_on_ramp(airfield, brain):
     sc = _scenario(airfield, brain).park("Ramp South")
     r = sc.say("Tower, Colt 1, ready for departure", Controller.TOWER)
     assert "negative" in r.lower()
-    # the challenge offers a way out
-    assert "reset" in r.lower() and "cancel" in r.lower()
+    assert "confirm your position" in r.lower()
+    assert "reset" not in r.lower() and "cancel" not in r.lower()
     assert sc.phase() != Phase.LINEUP
 
 
@@ -502,7 +503,7 @@ def test_far_inbound_gets_intermediate_descent(airfield, brain):
     # 35 miles out: Control steps the flight down (5000 ft), not straight to
     # 1500 ft (a real controller does not drop an arrival to the final altitude
     # 35 miles out).
-    sc = _scenario(airfield, brain)
+    sc = _scenario(airfield, brain).set_alt(12000)
     sc.lat = airfield.ctr.center_lat + 0.58  # ~35 NM north of the field
     sc.lon = airfield.ctr.center_lon
     sc.say("Kutaisi Control, Colt 1, inbound 35 miles north at Angels 12",
@@ -515,7 +516,7 @@ def test_far_inbound_gets_intermediate_descent(airfield, brain):
 
 def test_close_inbound_gets_final_descent(airfield, brain):
     # At the entry point: Control clears the final descent to 1500 ft.
-    sc = _scenario(airfield, brain).at_gate("East")
+    sc = _scenario(airfield, brain).at_gate("East").set_alt(4000)
     sc.say("Kutaisi Control, Colt 1, inbound 10 miles east at Angels 12",
            Controller.CONTROL)
     r = sc.say("150 to join via Entry East, Colt 1", Controller.CONTROL)
@@ -523,10 +524,40 @@ def test_close_inbound_gets_final_descent(airfield, brain):
     assert brain.pilots["Colt 1"].descend_issued is True
 
 
+def test_far_inbound_already_below_5000_skips_intermediate_clearance(
+        airfield, brain):
+    sc = _scenario(airfield, brain).set_alt(4000)
+    sc.lat = airfield.ctr.center_lat + 0.58
+    sc.lon = airfield.ctr.center_lon
+    sc.say("Kutaisi Control, Colt 1, inbound 35 miles north at 4000 feet",
+           Controller.CONTROL)
+    reply = sc.say("150 to join via Entry East, Colt 1", Controller.CONTROL)
+    assert "5000" not in reply
+    assert brain.pilots["Colt 1"].descend_intermediate is True
+    assert brain.pilots["Colt 1"].descend_readback is True
+    assert brain.pilots["Colt 1"].descend_issued is False
+
+    # Once close, issue the still-needed final descent to 1500.
+    sc.at_gate("East").set_alt(4000)
+    reply = brain.check_arrival_descent("Colt 1", sc._track())
+    assert reply and "1500" in reply
+
+
+def test_inbound_already_below_1500_gets_no_descent_clearance(
+        airfield, brain):
+    sc = _scenario(airfield, brain).at_gate("East").set_alt(1200)
+    sc.say("Kutaisi Control, Colt 1, inbound 10 miles east at 1200 feet",
+           Controller.CONTROL)
+    reply = sc.say("150 to join via Entry East, Colt 1", Controller.CONTROL)
+    assert "descend" not in reply.lower()
+    assert brain.pilots["Colt 1"].descend_issued is True
+    assert brain.pilots["Colt 1"].descend_readback is True
+
+
 def test_final_descent_issued_when_close_after_step(airfield, brain):
     # After the far-out step-down, the monitor issues the final descent once the
     # aircraft reaches the entry area.
-    sc = _scenario(airfield, brain)
+    sc = _scenario(airfield, brain).set_alt(12000)
     sc.lat = airfield.ctr.center_lat + 0.58  # ~35 NM north of the field
     sc.lon = airfield.ctr.center_lon
     sc.say("Kutaisi Control, Colt 1, inbound 35 miles north at Angels 12",
@@ -536,7 +567,7 @@ def test_final_descent_issued_when_close_after_step(airfield, brain):
     # Still far: no final descent yet.
     assert brain.check_arrival_descent("Colt 1", sc._track()) is None
     # Now at the entry: the final descent is issued, once.
-    sc.at_gate("East")
+    sc.at_gate("East").set_alt(4000)
     call = brain.check_arrival_descent("Colt 1", sc._track())
     assert call and "descend to 1500 feet" in call.lower()
     assert brain.check_arrival_descent("Colt 1", sc._track()) is None
@@ -610,8 +641,8 @@ def test_takeoff_readback_is_silent(airfield, brain):
     assert r == ""
 
 
-def test_ctr_handoff_waits_for_final_descent_readback(airfield, brain):
-    """CTR entry alone cannot skip the final descent/readback in the SOP."""
+def test_ctr_fallback_does_not_require_a_descent_clearance(airfield, brain):
+    """A missed entry arc cannot strand an inbound flight on Control."""
     sc = _scenario(airfield, brain).set_alt(5000.0)
     pilot = brain._pilot("Colt 1")
     pilot.phase = Phase.INBOUND
@@ -620,18 +651,8 @@ def test_ctr_handoff_waits_for_final_descent_readback(airfield, brain):
     pilot.descend_intermediate = True
     pilot.descend_readback = True  # readback of the 5000 ft step only
 
-    # The aircraft is in the CTR. A prior intermediate readback isn't enough.
-    assert brain.check_arrival_tower_handoff("Colt 1", sc._track()) is None
-
-    # Control issues the final 1500 ft clearance; still wait for its readback.
-    descend = brain.check_arrival_descent("Colt 1", sc._track())
-    assert descend and "1500" in descend
-    assert not pilot.descend_readback
-    assert brain.check_arrival_tower_handoff("Colt 1", sc._track()) is None
-
-    # The pilot reads it back. Tower can now be offered because the aircraft
-    # is already inside the chosen "near the field" boundary.
-    assert sc.say("Descend to 1500 feet, Colt 1", Controller.CONTROL) == ""
+    # Even without the final descent clearance or its readback, the fallback
+    # transfers the flight once it has entered the CTR.
     call = brain.check_arrival_tower_handoff("Colt 1", sc._track())
     assert call and "contact Tower" in call
     assert pilot.phase == Phase.INBOUND
@@ -704,7 +725,7 @@ def test_single_ship_has_no_formation_prefix(airfield, brain):
 
 
 def test_four_ship_prefix_on_landing(airfield, brain):
-    sc = _scenario(airfield, brain)
+    sc = _scenario(airfield, brain).set_alt(12000)
     sc.say("Control, Colt 1, 4-ship Hornets inbound", Controller.CONTROL)
     sc.on_final("25")
     r = sc.say("Tower, Colt 1, on final", Controller.TOWER)
@@ -1045,6 +1066,7 @@ def test_full_lifecycle_all_pages(airfield, brain):
     assert "descend to 1500 feet" in r.lower()
 
     # Tower: entry, runway in sight (break), on final (land).
+    sc.at_gate("East")
     r = sc.say("Tower, Colt 1, Entry East", Controller.TOWER)
     assert "report runway in sight" in r.lower()
     r = sc.say("Tower, Colt 1, runway in sight", Controller.TOWER)
@@ -1294,7 +1316,7 @@ def test_runway_incursion_silent_after_airborne_call(airfield, brain):
 def test_debrief_descending_and_maintaining_5000_is_accepted(airfield, brain):
     # "Colt 1, descending and maintaining 5,000 feet" (STT: inflected verb,
     # comma in the figure) was rejected -> two "say again" loops.
-    sc = _scenario(airfield, brain)
+    sc = _scenario(airfield, brain).set_alt(12000)
     sc.lat = airfield.ctr.center_lat + 0.58
     sc.lon = airfield.ctr.center_lon
     sc.say("Kutaisi Control, Colt 1, inbound 35 miles north at Angels 12",

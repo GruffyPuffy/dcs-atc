@@ -460,6 +460,33 @@ class Airfield:
         difference = abs((crossing_bearing - gate_bearing + 180) % 360 - 180)
         return difference <= half_angle_deg
 
+    def gate_arc_crossed_inbound(self, previous_range_nm: float,
+                                 previous_bearing_deg: float,
+                                 lat: float, lon: float, gate: str,
+                                 half_angle_deg: float = GATE_ARC_HALF_ANGLE_DEG
+                                 ) -> bool:
+        """True when a sampled inbound path crosses a gate arc inward."""
+        position = self.gate_arc_position(lat, lon, gate)
+        if position is None:
+            return False
+        current_bearing, current_range, gate_radius = position
+        radial_delta = previous_range_nm - current_range
+        if not (previous_range_nm > gate_radius >= current_range
+                and radial_delta > 0):
+            return False
+        fraction = (previous_range_nm - gate_radius) / radial_delta
+        bearing_delta = ((current_bearing - previous_bearing_deg + 180)
+                         % 360) - 180
+        crossing_bearing = (previous_bearing_deg
+                            + fraction * bearing_delta) % 360
+        target = self.gates.get(gate.split()[-1])
+        if target is None:
+            return False
+        gate_bearing, _ = bearing_distance(
+            self.ctr.center_lat, self.ctr.center_lon, target[0], target[1])
+        difference = abs((crossing_bearing - gate_bearing + 180) % 360 - 180)
+        return difference <= half_angle_deg
+
     def gate_arc_passed_outbound(self, lat: float, lon: float, gate: str,
                                  half_angle_deg: float = GATE_ARC_HALF_ANGLE_DEG
                                  ) -> bool:
@@ -470,7 +497,7 @@ class Airfield:
                                                 half_angle_deg))
 
     def final_zone_geometry(self, runway: str | None = None,
-                            max_nm: float = 12.0,
+                            max_nm: float = 5.0,
                             max_offset_deg: float = 30.0) -> dict | None:
         """The final-approach area, as a wedge (sector) for the map.
 
@@ -847,12 +874,16 @@ class Airfield:
         return hdg_offset <= max_offset_deg
 
     def is_on_final(self, lat: float, lon: float, heading: float,
-                    runway: str | None = None, max_nm: float = 12.0,
-                    max_offset_deg: float = 40.0) -> bool:
+                    runway: str | None = None, max_nm: float = 5.0,
+                    max_offset_deg: float = 30.0,
+                    max_heading_offset_deg: float = 50.0) -> bool:
         """True if the aircraft looks like it is on final approach.
 
-        Heuristic: within `max_nm` of the threshold, heading roughly aligned
-        with the runway (within `max_offset_deg`), and on the approach side.
+        Heuristic: within `max_nm` of the threshold, in the runway's approach
+        corridor (within `max_offset_deg`), and roughly aligned with the runway
+        (within `max_heading_offset_deg`). The heading allowance is wider than
+        the positional corridor because DCS heading samples can lag or the
+        aircraft may still be correcting onto final when the pilot reports it.
         """
         thr = self.runway_threshold(runway)
         rwy_hdg = self.runway_heading(runway)
@@ -868,7 +899,7 @@ class Airfield:
             return False
         # aircraft heading should also be roughly aligned with the runway
         hdg_offset = abs((heading - rwy_hdg + 180) % 360 - 180)
-        return hdg_offset <= max_offset_deg
+        return hdg_offset <= max_heading_offset_deg
 
     def runway_occupied(self, units, runway: str | None = None,
                         exclude: str | None = None, length_nm: float = 1.6,

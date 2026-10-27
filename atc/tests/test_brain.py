@@ -1362,14 +1362,15 @@ def test_aircraft_on_runway_still_blocks_lineup(brain, airfield):
     assert "hold short" in reply.lower()
 
 
-def test_challenge_offers_a_way_out(brain, airfield):
-    # a challenged report must not leave the pilot stuck: the reply reminds
-    # them of the escape hatches.
+def test_challenge_asks_for_position_confirmation(brain, airfield):
+    # A challenged report stays in the flight flow and asks the pilot to
+    # confirm their position, without introducing reset/cancel instructions.
     ramp = _track(airfield, *airfield.parking_areas["Ramp West"])
     reply = brain.handle("Tower, Colt 1, ready for departure",
                          track=ramp, controller=Controller.TOWER)
     assert "negative" in reply.lower()
-    assert "reset" in reply.lower() and "cancel" in reply.lower()
+    assert "confirm your position" in reply.lower()
+    assert "reset" not in reply.lower() and "cancel" not in reply.lower()
 
 
 def test_control_inbound_with_angels_is_not_departure(brain):
@@ -2196,15 +2197,15 @@ def test_pattern_turn_slices_reach_the_final_cone(airfield):
 
 
 def test_established_final_is_tighter_than_is_on_final(airfield):
-    # A base turner at 45° off is inside the loose is_on_final cone (±40°)?
-    # No — 45 > 40, so use 35°: loose cone accepts, tight cone (±30°) and the
-    # slices (30..90) both reject... 35 is inside the slice range, so
-    # established-final must be False while is_on_final is True.
+    # The displayed final wedge and positional check both use ±30°. The voice
+    # report allows a wider heading tolerance (±50°) than the radar's
+    # established-final check (±30°).
     inbound = _inbound_bearing(airfield)
     hdg = airfield.runway_heading(airfield.active_runway)
-    t = _track_on(airfield, (inbound + 35) % 360, 4.0)
-    assert airfield.is_on_final(t.lat, t.lon, hdg)
-    assert not airfield.is_established_final(t.lat, t.lon, hdg)
+    t = _track_on(airfield, inbound, 4.0)
+    t.heading = (hdg + 45) % 360
+    assert airfield.is_on_final(t.lat, t.lon, t.heading)
+    assert not airfield.is_established_final(t.lat, t.lon, t.heading)
     # Dead ahead: established.
     t = _track_on(airfield, inbound, 4.0)
     assert airfield.is_established_final(t.lat, t.lon, hdg)
@@ -2289,7 +2290,7 @@ def test_straight_in_on_final_still_cleared_by_voice(brain, airfield):
     # their "on final" call (established position) still gets the clearance.
     inbound = _inbound_bearing(airfield)
     brain.handle("Tower, Colt 1, at entry west", controller=Controller.TOWER)
-    t = _track_on(airfield, inbound, 8.0)
+    t = _track_on(airfield, inbound, 4.0)
     reply = brain.handle("Colt 1, on final", t, controller=Controller.TOWER)
     assert "cleared to land" in reply.lower()
     assert brain.pilots["Colt 1"].cleared_landing
@@ -2742,10 +2743,10 @@ def test_arrival_completes_after_control_handoff(brain, airfield):
     assert pilot.phase == Phase.INBOUND
     assert pilot.pending_handoff_to == Controller.TOWER.value
 
-    # Tower acknowledges the check-in (previously "say again", which stranded
-    # the pilot with no way to reach Tower).
+    # Tower acknowledges the check-in and prompts for the position.
     assert brain.handle("Tower, Colt 1", sc._track(),
-                        controller=Controller.TOWER) == "Colt 1, Tower."
+                        controller=Controller.TOWER) == (
+                            "Colt 1, Tower, report your position.")
     assert pilot.phase == Phase.LANDING
 
     # "on final" completes the arrival.
@@ -3071,6 +3072,29 @@ def test_repeated_stingray_rtb_does_not_repeat_ack(brain):
     second = brain.handle("Colt 1, requesting RTB", controller=Controller.STINGRAY)
     assert "RTB" in first
     assert second == ""
+
+
+def test_stingray_waits_before_rtb_push_when_already_in_range(brain,
+                                                              monkeypatch):
+    import brain as brain_module
+
+    clock = [100.0]
+    monkeypatch.setattr(brain_module.time, "monotonic", lambda: clock[0])
+    pilot = _stingray(brain)
+    near = AircraftTrack(callsign="Colt 1", inside=False, lat=42.0, lon=42.0,
+                         alt_ft=15000, distance_nm=49, relative="49 miles")
+
+    reply = brain.handle("Colt 1, requesting RTB", near,
+                         controller=Controller.STINGRAY)
+    assert "RTB" in reply
+    assert brain.check_stingray_rtb_handoff("Colt 1", near) is None
+
+    clock[0] += 4.9
+    assert brain.check_stingray_rtb_handoff("Colt 1", near) is None
+    clock[0] += 0.1
+    handoff = brain.check_stingray_rtb_handoff("Colt 1", near)
+    assert handoff and "contact Control" in handoff
+    assert pilot.rtb_control_handoff_announced
 
 
 def test_stingray_rtb_push_is_one_shot_and_a_missed_push_is_recoverable(brain):

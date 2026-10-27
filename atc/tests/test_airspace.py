@@ -278,7 +278,7 @@ def test_exit_zone_geometry_covers_departure_gates(airfield):
 def test_final_zone_geometry_is_a_wedge(airfield):
     wedge = airfield.final_zone_geometry()
     assert wedge is not None
-    assert wedge["radius_nm"] == 12.0
+    assert wedge["radius_nm"] == 5.0
     assert wedge["runway"] == airfield.active_runway
     # the wedge should straddle the approach direction (reciprocal of runway)
     inbound = (airfield.runway_heading("25") + 180) % 360
