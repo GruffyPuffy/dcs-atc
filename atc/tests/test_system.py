@@ -513,6 +513,27 @@ def test_entry_report_at_gate_hands_to_tower(airfield, brain):
     assert sc.phase() == Phase.LANDING
 
 
+def test_tower_accepts_assigned_entry_report_in_handoff_zone(airfield, brain):
+    sc = _scenario(airfield, brain)
+    pilot = brain._pilot("Colt 1")
+    pilot.phase = Phase.INBOUND
+    pilot.checked_in_at = Controller.CONTROL.value
+    pilot.entry_gate = "Entry West"
+    pilot.arrival_join_issued = True
+
+    gate = airfield.gates["West"]
+    outward_bearing, _ = bearing_distance(
+        airfield.ctr.center_lat, airfield.ctr.center_lon, *gate)
+    sc.lat, sc.lon = _point_from(*gate, outward_bearing, 4.0)
+    assert airfield.in_arrival_handoff_zone(sc.lat, sc.lon, "Entry West")
+    assert not airfield.ctr.contains_horizontal(sc.lat, sc.lon)
+    assert not brain._at_entry(sc._track(), "Entry West")
+
+    reply = sc.say("Tower, Colt 1, entry west", Controller.TOWER)
+    assert "report runway in sight" in reply.lower()
+    assert pilot.phase == Phase.LANDING
+
+
 # ---------- Stepped arrival descent (distance-based) ----------
 
 def test_far_inbound_gets_intermediate_descent(airfield, brain):

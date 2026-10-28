@@ -2376,7 +2376,8 @@ class AtcBrain:
         # Tower asks for a position after check-in. Accept an assigned entry
         # report, a named marking/BRA report, or a plain location report; use
         # radar to decide whether the aircraft has reached its entry point.
-        gate = (self._spoken_gate(low) or pilot.entry_gate
+        spoken_gate = self._spoken_gate(low)
+        gate = (spoken_gate or pilot.entry_gate
                 or (self._pick_entry_gate(track, None, pilot)
                     if pilot.phase in (Phase.INBOUND, Phase.LANDING) else ""))
         is_entry_report = (re.search(r"\bentry\b", low) is not None
@@ -2401,8 +2402,15 @@ class AtcBrain:
                 if off:
                     return self._say("tower_position_bra_challenge", callsign,
                                      agency=self.tower_short, **off)
+            at_entry = bool(gate and self._at_entry(track, gate))
+            in_assigned_handoff_zone = bool(
+                pilot.entry_gate and gate == pilot.entry_gate
+                and (spoken_gate is None or spoken_gate == pilot.entry_gate)
+                and track is not None and self.airfield is not None
+                and self.airfield.in_arrival_handoff_zone(
+                    track.lat, track.lon, pilot.entry_gate))
             if (is_entry_report and gate and not already_in_ctr
-                    and not self._at_entry(track, gate)):
+                    and not at_entry and not in_assigned_handoff_zone):
                 if track is not None:
                     return self._challenge(callsign, self.tower_short, track)
                 return self._say("tower_continue_entry", callsign, gate=gate)
