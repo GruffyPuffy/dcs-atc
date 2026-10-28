@@ -477,6 +477,7 @@ def _airspace_payload(airfield: Airfield, basemap: str | None = None) -> dict:
             "runway": airfield.runway_corridor_geometry(),
             "lineup": airfield.lineup_zone_geometry(),
             "gate_arcs": airfield.gate_arc_geometry(),
+            "arrival_handoff_zones": airfield.arrival_handoff_zone_geometry(),
             "pattern": airfield.pattern_zones_geometry(),
         },
         "overlay": _overlay_payload(airfield),
@@ -951,7 +952,22 @@ class MapService:
 
     @staticmethod
     def _retained_entry(callsign: str, path: list, comms: list) -> dict:
-        """A trail shown with no live aircraft (completed, or a replay)."""
+        """A trail shown with no live aircraft (completed, or a replay).
+
+        Older debriefs do not store pilot state alongside every point, so
+        recover the assigned entry from Control's recorded join clearance for
+        the viewer's handoff-zone overlay.
+        """
+        entry_gate = ""
+        gate_names = r"north(?:east|west)?|south(?:east|west)?|east|west"
+        for event in comms:
+            if (str(event.get("kind", "")).lower() != "tx"
+                    or str(event.get("controller", "")).lower() != "control"):
+                continue
+            match = re.search(rf"\bjoin via (?:entry\s+)?({gate_names})\b",
+                              str(event.get("text", "")), re.I)
+            if match:
+                entry_gate = f"Entry {match.group(1).title()}"
         return {
             "callsign": callsign,
             "player": "",
@@ -963,7 +979,9 @@ class MapService:
             "coalition": 0,
             "phase": "",
             "controller": "",
-            "entry_gate": "",
+            "entry_gate": entry_gate,
+            "arrival_join_issued": bool(entry_gate),
+            "review_handoff_zone": bool(entry_gate),
             "exit_gate": "",
             "active": False,
             "path": path,
@@ -1041,6 +1059,8 @@ class MapService:
                             "requested_handoff_to": (pilot.requested_handoff_to
                                                      if pilot else ""),
                             "entry_gate": pilot.entry_gate if pilot else "",
+                            "arrival_join_issued": bool(
+                                pilot and pilot.arrival_join_issued),
                             "exit_gate": pilot.exit_gate if pilot else "",
                             "active": True,
                             "path": self.tracks.path(callsign),

@@ -8,7 +8,8 @@ const PHASE_COLOR = {
   stingray: '#bc8cff', // Stingray agency
 };
 
-let map, ctrLayer, staticLayer, aircraftLayer, aiLayer, chartLayer, pathLayer, commLayer;
+let map, ctrLayer, staticLayer, arrivalHandoffLayer, aircraftLayer, aiLayer;
+let chartLayer, pathLayer, commLayer;
 let bullseyeLayer;  // STT readings, candidate repairs, and actual-position rings
 let bullseyeCompassLayer;  // shown only while inspecting an actual-position popup
 let baseLayer;  // the base-map tile layer (OSM or DCS); swapped on config change
@@ -78,6 +79,7 @@ function initMap(center) {
   chartLayer = L.layerGroup().addTo(map);
   ctrLayer = L.layerGroup().addTo(map);
   staticLayer = L.layerGroup().addTo(map);
+  arrivalHandoffLayer = L.layerGroup().addTo(map);
   pathLayer = L.layerGroup().addTo(map);
   commLayer = L.layerGroup().addTo(map);
   bullseyeLayer = L.layerGroup().addTo(map);
@@ -204,6 +206,18 @@ function refreshVectors() {
   incoming.addTo(map);
 }
 
+function arrivalHandoffZonePoints(zone) {
+  const half = zone.angle_deg / 2;
+  const start = zone.outward_bearing_deg - half;
+  const arc = [];
+  for (let i = 0; i <= 32; i++) {
+    const bearing = start + zone.angle_deg * (i / 32);
+    arc.push(destMeters(zone.center[0], zone.center[1], bearing,
+      zone.radius_nm * 1852));
+  }
+  return [zone.center, ...arc];
+}
+
 function drawAirspace(af) {
   ctrLayer.clearLayers();
   staticLayer.clearLayers();
@@ -277,6 +291,16 @@ function drawAirspace(af) {
     L.polyline([c, arc[0]], { ...style, weight: 1, opacity: 0.45 })
       .addTo(staticLayer);
     L.polyline([c, arc[arc.length - 1]], { ...style, weight: 1, opacity: 0.45 })
+      .addTo(staticLayer);
+  }
+  // Show the configured lead-in sectors as a faint reference while idle. The
+  // currently assigned inbound sector is highlighted in the live layer below.
+  for (const zone of checks.arrival_handoff_zones || []) {
+    L.polygon(arrivalHandoffZonePoints(zone), {
+      color: '#3fb950', weight: 2, opacity: 0.9, dashArray: '6 4',
+      fillColor: '#3fb950', fillOpacity: 0.14,
+    }).bindTooltip(`Potential Tower handoff zone · Entry ${zone.gate} · `
+      + `${zone.angle_deg}° / ${zone.radius_nm} NM`)
       .addTo(staticLayer);
   }
   if (checks.final) {
@@ -844,6 +868,29 @@ function aircraftIcon(ac) {
   });
 }
 
+function drawArrivalHandoffZones(list, af, replay = false) {
+  arrivalHandoffLayer.clearLayers();
+  const zones = new Map((af.checks?.arrival_handoff_zones || [])
+    .map(zone => [zone.gate.toLowerCase(), zone]));
+  const drawn = new Set();
+  for (const ac of list || []) {
+    const reviewZone = replay && ac.review_handoff_zone;
+    if (!reviewZone && (ac.active === false || !ac.arrival_join_issued
+        || ac.pending_handoff_to
+        || String(ac.phase).toLowerCase() !== 'inbound')) continue;
+    const gateName = String(ac.entry_gate || '').split(/\s+/).pop().toLowerCase();
+    const zone = zones.get(gateName);
+    if (!zone || drawn.has(gateName)) continue;
+    drawn.add(gateName);
+
+    L.polygon(arrivalHandoffZonePoints(zone), {
+      color: '#3fb950', weight: 4, opacity: 1, dashArray: '8 4',
+      fillColor: '#3fb950', fillOpacity: 0.26,
+    }).bindTooltip(`Tower handoff lead-in · Entry ${zone.gate} · `
+      + `${zone.angle_deg}° / ${zone.radius_nm} NM`).addTo(arrivalHandoffLayer);
+  }
+}
+
 function drawAircraft(list) {
   const seen = new Set();
   for (const ac of list) {
@@ -1195,6 +1242,7 @@ async function tick() {
     drawOverlay(data.airfield);
     drawAirspace(data.airfield);
     drawAiAir(data.ai_air || []);
+    drawArrivalHandoffZones(data.aircraft, data.airfield, Boolean(data.replay));
     drawAircraft(data.aircraft);
     const replayName = data.replay ? (data.replay_name || '') : '';
     if (replayName && replayName !== displayedReplayName) {
@@ -1336,6 +1384,7 @@ async function refreshDebriefs() {
 function resetClientState() {
   for (const m of markers.values()) aircraftLayer.removeLayer(m);
   markers.clear();
+  if (arrivalHandoffLayer) arrivalHandoffLayer.clearLayers();
   for (const p of paths.values()) pathLayer.removeLayer(p);
   paths.clear();
   for (const g of commMarkers.values()) commLayer.removeLayer(g);

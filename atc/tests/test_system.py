@@ -8,9 +8,12 @@ controllers, position cross-checks, sequencing against traffic).
 Scenario harness: `tests/scenario.py`.
 """
 
+import math
+
 import pytest
 
 from brain import Controller, INCURSION_POLLS, Phase
+from airspace import bearing_distance
 from scenario import Scenario
 
 
@@ -24,6 +27,17 @@ def _pass_departure_exit(sc, brain, airfield):
     gate = brain.pilots["Colt 1"].exit_gate or "West"
     sc.at_gate(gate).set_alt(airfield.elevation_ft + 1500)
     return brain.check_departure_handoff("Colt 1", sc._track())
+
+
+def _point_from(lat: float, lon: float, bearing_deg: float,
+                distance_nm: float) -> tuple[float, float]:
+    bearing = math.radians(bearing_deg)
+    distance_m = distance_nm * 1852.0
+    return (
+        lat + math.degrees(distance_m * math.cos(bearing) / 6_371_000.0),
+        lon + math.degrees(distance_m * math.sin(bearing)
+                            / (6_371_000.0 * math.cos(math.radians(lat)))),
+    )
 
 
 # ---------- Light path (ATC.md §12a / kneeboard page 4) ----------
@@ -248,7 +262,8 @@ def test_full_arrival_two_ship(airfield, brain):
     assert sc.phase() == Phase.STINGRAY
     assert brain.pilots["Colt 1"].pending_handoff_to == Controller.CONTROL.value
 
-    # Control: inbound, join, readback (descend), then hand to Tower.
+    # Control: inbound, join, readback (descend), then hand to Tower in the
+    # assigned entry's lead-in zone (the entry/CTR are late fallbacks).
     # Reset the altitude: the Stingray leg left the fake track at Angels 15, and
     # the descent step is altitude-aware (high -> step down to 5000 first).
     sc.at_gate("East").set_alt(4000)
@@ -261,7 +276,8 @@ def test_full_arrival_two_ship(airfield, brain):
     r = sc.say("Descend to 1500 feet, Colt 1", Controller.CONTROL)
     assert r == ""
     assert sc.phase() == Phase.INBOUND
-    # The entry arc is the normal spatial trigger, independent of readback.
+    # Moving the scenario to the assigned entry or CTR exercises the spatial
+    # trigger/fallback, independent of descent readback.
     r = brain.check_arrival_tower_handoff("Colt 1", sc._track())
     if r is None:
         # Move into the CTR to exercise the missed-arc fallback.
@@ -662,6 +678,41 @@ def test_ctr_fallback_does_not_require_a_descent_clearance(airfield, brain):
     sc.say("Tower, Colt 1", Controller.TOWER)
     assert pilot.phase == Phase.LANDING
     assert not pilot.pending_handoff_to
+
+
+def test_arrival_handoff_zone_arms_on_join_and_catches_late_turn(airfield, brain):
+    sc = _scenario(airfield, brain)
+    pilot = brain._pilot("Colt 1")
+    pilot.phase = Phase.INBOUND
+    pilot.checked_in_at = Controller.CONTROL.value
+    pilot.entry_gate = "East"
+
+    gate = airfield.gates["East"]
+    outward_bearing, _ = bearing_distance(
+        airfield.ctr.center_lat, airfield.ctr.center_lon, *gate)
+    sc.lat, sc.lon = _point_from(*gate, outward_bearing, 6.0)
+    sc.heading = (outward_bearing + 180) % 360
+    sc.speed = 250
+
+    # Merely having an entry stored does not activate the lead-in zone.
+    assert not pilot.arrival_join_issued
+    assert brain.check_arrival_tower_handoff("Colt 1", sc._track()) is None
+
+    # Control's actual inbound join clearance arms the assigned gate zone.
+    reply = brain.handle("Control, Colt 1, inbound", sc._track(),
+                         controller=Controller.CONTROL)
+    assert "join via East" in reply
+    assert pilot.arrival_join_issued
+
+    # The aircraft turns toward the gate after it has passed the outer edge of
+    # the lead-in area; entering the region while heading toward the gate still
+    # triggers before crossing the entry arc or reaching the CTR.
+    sc.lat, sc.lon = _point_from(*gate, outward_bearing, 4.0)
+    sc.heading = (outward_bearing + 180) % 360
+    assert not airfield.ctr.contains_horizontal(sc.lat, sc.lon)
+    handoff = brain.check_arrival_tower_handoff("Colt 1", sc._track())
+    assert handoff and "contact Tower" in handoff
+    assert pilot.pending_handoff_to == Controller.TOWER.value
 
 
 def test_holding_point_beside_runway_is_not_lined_up(airfield):

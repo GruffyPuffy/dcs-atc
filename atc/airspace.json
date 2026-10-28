@@ -3,7 +3,9 @@
   "_attribution": "Kutaisi CTR geometry derived from Master Arms (https://wiki.masterarms.se/index.php/Airport_Procedures), a Swedish DCS community. Their model: CTR surface..1500 ft AGL, TMA 1500 ft MSL..10000 ft, CTA 10000 ft MSL..UNL.",
   "defaults": {
     "ctr_ceiling_ft_agl": 1500,
-    "ctr_radius_nm": 5.0
+    "ctr_radius_nm": 5.0,
+    "arrival_tower_handoff_zone_angle_deg": 200,
+    "arrival_tower_handoff_zone_radius_nm": 5.0
   },
   "map": {
     "base": "dcs",

@@ -493,12 +493,14 @@ class PilotState:
     incursion_streak: int = 0  # consecutive on-runway polls (debounce)
     exit_gate: str = ""  # assigned departure exit point
     entry_gate: str = ""  # assigned arrival entry point
+    arrival_join_issued: bool = False  # Control has assigned the inbound entry
     vector_heading: str = ""  # latest assigned vector, used to consume readback
     vector_runway: str = ""
     departure_previous_range_nm: float | None = None
     departure_previous_bearing_deg: float | None = None
     arrival_previous_range_nm: float | None = None
     arrival_previous_bearing_deg: float | None = None
+    arrival_previous_gate_range_nm: float | None = None
     # Held because the runway was occupied; the bot calls the pilot back when it
     # clears. `*_ready_announced` fires the unprompted "runway is clear" once.
     awaiting_takeoff: bool = False
@@ -509,7 +511,8 @@ class PilotState:
     # runway. The takeoff clearance waits until they are (see check_lineup).
     lineup_readback: bool = False
     # The pilot has read back the current descent clearance. This tracks the
-    # descent sequence only; Tower handoff is driven by entry-arc/CTR position.
+    # descent sequence only; Tower handoff uses the assigned lead-in zone and
+    # late entry-arc/CTR fallbacks.
     descend_readback: bool = False
     # Tower has pushed a landed flight to Ground (Master Arms SOP: "after
     # landing, tower will push you to the Ground channel"). Fires once per
@@ -1959,10 +1962,12 @@ class AtcBrain:
         pilot.stingray_handoff_announced = False
         pilot.exit_gate = ""
         pilot.entry_gate = ""
+        pilot.arrival_join_issued = False
         pilot.vector_heading = ""
         pilot.vector_runway = ""
         pilot.arrival_previous_range_nm = None
         pilot.arrival_previous_bearing_deg = None
+        pilot.arrival_previous_gate_range_nm = None
         pilot.readback_fails = 0
         pilot.parking_cleared = False
         pilot.awaiting_takeoff = False
@@ -2569,8 +2574,10 @@ class AtcBrain:
             # Approve the pilot's requested gate and remember it in the pilot
             # state (so the inbound/join and the map trail use it too).
             pilot.entry_gate = requested
+            pilot.arrival_join_issued = False
             pilot.arrival_previous_range_nm = None
             pilot.arrival_previous_bearing_deg = None
+            pilot.arrival_previous_gate_range_nm = None
             pilot.phase = Phase.INBOUND
             pilot.cleared_inbound = True
             heading = None
@@ -2578,18 +2585,20 @@ class AtcBrain:
                 heading = self.airfield.join_heading(track.lat, track.lon,
                                                      requested)
             if heading is None:
+                pilot.arrival_join_issued = True
                 return self._say("control_join_requested_nohdg", callsign,
                                  gate=requested)
             turn = self._join_turn(track, heading)
             key = ("control_join_requested" if turn
                    else "control_join_requested_straight")
+            pilot.arrival_join_issued = True
             return self._say(key, callsign, gate=requested,
                              heading=f"{self._cockpit_bearing(heading):03.0f}",
                              turn=turn)
         # Readback of the join clearance ("150 to join via Entry East") ->
-        # Control issues the descent to 1500 ft (once). The Tower handoff is
-        # position-driven at the assigned entry arc, with CTR entry as the
-        # missed-arc fallback; descent issuance and readback do not gate it.
+        # Control issues the descent to 1500 ft (once). Tower handoff is
+        # position-driven at the assigned entry's outward-facing lead-in zone,
+        # with entry-arc and CTR fallbacks; descent readback does not gate it.
         # NOTE: a *request* for a heading/vector/azimuth is a trainer aid and is
         # matched in `_dispatch` BEFORE controller dispatch, so it never reaches
         # this readback branch. Only a genuine readback ("150 to join via Entry
@@ -2605,10 +2614,11 @@ class AtcBrain:
                 # A pilot still above the step-down altitude gets silence here
                 # (the descent plan is acknowledged; see _descend_reply) — but
                 # their readback is remembered for the clearance state; the
-                # handoff monitor independently watches the entry arc.
+                    # handoff monitor independently watches the assigned
+                    # entry lead-in zone and its fallbacks.
                 if pilot.descend_readback:
                     # Already read back the descent plan. The monitor handles
-                    # the assigned entry arc; CTR entry is its fallback.
+                    # the assigned entry lead-in zone and late fallbacks.
                     return ""
                 return self._descend_reply(callsign, pilot, track)
             pilot.descend_readback = True
@@ -2654,6 +2664,8 @@ class AtcBrain:
             pilot.tower_handoff_announced = False
             pilot.arrival_previous_range_nm = None
             pilot.arrival_previous_bearing_deg = None
+            pilot.arrival_previous_gate_range_nm = None
+            pilot.arrival_join_issued = False
             pilot.cleared_inbound = True
             gate = self._pick_entry_gate(track, low, pilot)
             pilot.entry_gate = gate
@@ -2663,9 +2675,11 @@ class AtcBrain:
             if track is not None and self.airfield is not None:
                 heading = self.airfield.join_heading(track.lat, track.lon, gate)
             if heading is None:
+                pilot.arrival_join_issued = True
                 return self._say("control_join_nohdg", callsign, gate=gate)
             turn = self._join_turn(track, heading)
             key = "control_join" if turn else "control_join_straight"
+            pilot.arrival_join_issued = True
             return self._say(key, callsign, gate=gate,
                              heading=f"{self._cockpit_bearing(heading):03.0f}",
                              turn=turn)
@@ -3407,12 +3421,12 @@ class AtcBrain:
 
     def check_arrival_tower_handoff(self, callsign: str,
                                     track: AircraftTrack | None) -> str | None:
-        """Push arrivals at their entry arc; use the CTR as a one-shot fallback.
+        """Push arrivals in the assigned gate lead-in zone; keep late fallbacks.
 
         This is a spatial handoff: neither the final descent transmission nor
-        its readback can block the assigned entry-arc trigger. If the aircraft
-        misses the arc, entering the CTR is the one-shot fallback so a missed
-        descent dialog cannot leave the flight stuck on Control.
+        its readback can block the handoff. The lead-in zone is armed only after
+        Control assigns an entry. Crossing the entry arc and entering the CTR
+        remain fallbacks so missed routing/dialogs cannot strand the flight.
         """
         pilot = self._pilot(callsign)
         if (pilot.phase != Phase.INBOUND
@@ -3428,6 +3442,33 @@ class AtcBrain:
         pilot.arrival_previous_range_nm = position[1] if position else None
         pilot.arrival_previous_bearing_deg = position[0] if position else None
 
+        gate_name = gate.split()[-1]
+        gate_pos = self.airfield.gates.get(gate_name)
+        lead_zone = False
+        if gate_pos is not None:
+            to_gate_bearing, gate_range = bearing_distance(
+                track.lat, track.lon, gate_pos[0], gate_pos[1])
+            previous_gate_range = pilot.arrival_previous_gate_range_nm
+            pilot.arrival_previous_gate_range_nm = gate_range
+            closing_on_gate = bool(
+                previous_gate_range is not None
+                and gate_range < previous_gate_range - 0.02)
+            heading_to_gate = abs(
+                (track.heading - to_gate_bearing + 180) % 360 - 180) <= 90
+            moving_toward_gate = closing_on_gate or (
+                track.speed_kt > 20 and heading_to_gate)
+            lead_zone = bool(
+                pilot.arrival_join_issued
+                and moving_toward_gate
+                and self.airfield.in_arrival_handoff_zone(
+                    track.lat, track.lon, gate,
+                    angle_deg=(self.airfield
+                               .arrival_tower_handoff_zone_angle_deg),
+                    radius_nm=(self.airfield
+                               .arrival_tower_handoff_zone_radius_nm)))
+        else:
+            pilot.arrival_previous_gate_range_nm = None
+
         crossed_arc = bool(
             position
             and self.airfield.in_gate_arc_sector(
@@ -3440,12 +3481,13 @@ class AtcBrain:
                          track.lat, track.lon, gate))))
         ctr_fallback = self.airfield.ctr.contains_horizontal(
             track.lat, track.lon)
-        if not crossed_arc and not ctr_fallback:
+        if not lead_zone and not crossed_arc and not ctr_fallback:
             return None
         pilot.tower_handoff_announced = True
         pilot.pending_handoff_to = Controller.TOWER.value
         pilot.arrival_previous_range_nm = None
         pilot.arrival_previous_bearing_deg = None
+        pilot.arrival_previous_gate_range_nm = None
         return self._say("contact_tower_from_control", callsign)
 
     def check_arrival_descent(self, callsign: str,

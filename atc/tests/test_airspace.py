@@ -15,6 +15,8 @@ def test_loads_kutaisi(airfield):
     assert airfield.control_frequency_mhz == 257.0
     assert airfield.active_runway == "25"
     assert airfield.ctr_speed_limit_kt == 300
+    assert airfield.arrival_tower_handoff_zone_angle_deg == 200
+    assert airfield.arrival_tower_handoff_zone_radius_nm == 5.0
 
 
 def test_ctr_contains_airfield(airfield):
@@ -102,6 +104,29 @@ def test_gate_arc_geometry_passes_through_each_configured_exit(airfield):
             *arc["center"], *airfield.gates[arc["gate"]])
         assert arc["bearing_deg"] == pytest.approx(bearing)
         assert arc["radius_nm"] == pytest.approx(radius)
+
+
+def test_arrival_handoff_zone_is_outward_facing_semicircle(airfield):
+    gate = "West"
+    entry = airfield.gates[gate]
+    outward_bearing, _ = bearing_distance(
+        airfield.ctr.center_lat, airfield.ctr.center_lon, *entry)
+    in_front = _point_from_reference(*entry, outward_bearing, 4.0)
+    behind = _point_from_reference(*entry, (outward_bearing + 180) % 360, 4.0)
+    outside_radius = _point_from_reference(*entry, outward_bearing, 5.5)
+    lateral_edge = _point_from_reference(
+        *entry, (outward_bearing + 80) % 360, 4.0)
+    widened_edge = _point_from_reference(
+        *entry, (outward_bearing + 94) % 360, 4.0)
+    outside_angle = _point_from_reference(
+        *entry, (outward_bearing + 106) % 360, 4.0)
+
+    assert airfield.in_arrival_handoff_zone(*in_front, gate)
+    assert not airfield.in_arrival_handoff_zone(*behind, gate)
+    assert not airfield.in_arrival_handoff_zone(*outside_radius, gate)
+    assert airfield.in_arrival_handoff_zone(*lateral_edge, gate)
+    assert airfield.in_arrival_handoff_zone(*widened_edge, gate)
+    assert not airfield.in_arrival_handoff_zone(*outside_angle, gate)
 
 
 def test_gate_arc_requires_outbound_crossing_inside_angular_window(airfield):

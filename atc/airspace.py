@@ -137,6 +137,11 @@ class Airfield:
     active_runway: str
     ctr: ControlZone
     ctr_speed_limit_kt: float | None = None
+    # Arrival handoff lead-in sector, centered on each assigned entry. The
+    # configured angle is the full sector width (200° extends 10° beyond a
+    # semicircle on either side).
+    arrival_tower_handoff_zone_angle_deg: float = 200.0
+    arrival_tower_handoff_zone_radius_nm: float = 5.0
     # Runway used when the wind is calm (can't pick by headwind). Usually the
     # same as `active_runway`; set explicitly to match what DCS/the mission uses
     # so AI and player traffic agree (DCS picks a terrain/mission default, not
@@ -415,6 +420,52 @@ class Airfield:
         _, gate_radius = bearing_distance(
             self.ctr.center_lat, self.ctr.center_lon, target[0], target[1])
         return bearing, distance, gate_radius
+
+    def in_arrival_handoff_zone(self, lat: float, lon: float, gate: str,
+                                angle_deg: float | None = None,
+                                radius_nm: float | None = None) -> bool:
+        """Whether a position is in the outward-facing lead-in sector of a gate.
+
+        The sector is centered on the entry and oriented away from the airfield.
+        `angle_deg` is its full width, so 200° describes a widened outward
+        sector with a 10° margin around each side of a semicircle.
+        """
+        angle_deg = (self.arrival_tower_handoff_zone_angle_deg
+                     if angle_deg is None else angle_deg)
+        radius_nm = (self.arrival_tower_handoff_zone_radius_nm
+                     if radius_nm is None else radius_nm)
+        target = self.gates.get(gate.split()[-1])
+        if target is None or radius_nm <= 0 or not 0 < angle_deg <= 360:
+            return False
+        aircraft_bearing, distance = bearing_distance(
+            target[0], target[1], lat, lon)
+        if distance > radius_nm:
+            return False
+        outward_bearing, _ = bearing_distance(
+            self.ctr.center_lat, self.ctr.center_lon, target[0], target[1])
+        difference = abs((aircraft_bearing - outward_bearing + 180) % 360 - 180)
+        return difference <= angle_deg / 2
+
+    def arrival_handoff_zone_geometry(self) -> list[dict]:
+        """Map geometry for potential entry lead-in sectors.
+
+        The viewer draws all gates faintly as reference geometry and emphasizes
+        only the sector assigned to each active inbound aircraft.
+        """
+        angle = self.arrival_tower_handoff_zone_angle_deg
+        radius = self.arrival_tower_handoff_zone_radius_nm
+        result = []
+        for gate, (lat, lon) in self.gates.items():
+            outward_bearing, _ = bearing_distance(
+                self.ctr.center_lat, self.ctr.center_lon, lat, lon)
+            result.append({
+                "gate": gate,
+                "center": [lat, lon],
+                "outward_bearing_deg": outward_bearing,
+                "angle_deg": angle,
+                "radius_nm": radius,
+            })
+        return result
 
     def in_gate_arc_sector(self, lat: float, lon: float, gate: str,
                            half_angle_deg: float = GATE_ARC_HALF_ANGLE_DEG
@@ -1058,6 +1109,12 @@ def _build_airfield(name: str, spec: dict, defaults: dict,
         ctr_speed_limit_kt=(float(ctr_spec["speed_limit_kt"])
                             if ctr_spec.get("speed_limit_kt") is not None
                             else None),
+        arrival_tower_handoff_zone_angle_deg=float(spec.get(
+            "arrival_tower_handoff_zone_angle_deg",
+            defaults.get("arrival_tower_handoff_zone_angle_deg", 200))),
+        arrival_tower_handoff_zone_radius_nm=float(spec.get(
+            "arrival_tower_handoff_zone_radius_nm",
+            defaults.get("arrival_tower_handoff_zone_radius_nm", 5.0))),
         atis_frequency_mhz=float(spec.get("atis_frequency_mhz", 0.0)),
         ground=spec.get("ground", f"{name} Ground"),
         ground_frequency_mhz=float(spec.get("ground_frequency_mhz", 0.0)),

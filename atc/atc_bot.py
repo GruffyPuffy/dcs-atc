@@ -1020,9 +1020,9 @@ def main() -> None:
                         log(f"RTB HANDOFF: {callsign} ({ac.player}) -> Control")
                         speak(rtb_handoff, freq=freq_for(Controller.STINGRAY),
                               controller=Controller.STINGRAY, callsign=callsign)
-                    # Control transfers at the assigned entry arc. Descent
-                    # clearance/readback state cannot block this spatial
-                    # handoff; entering the CTR is the missed-arc fallback.
+                    # Control transfers in the active entry's lead-in zone.
+                    # Entry arc and CTR remain late fallbacks; descent
+                    # clearance/readback cannot block this spatial handoff.
                     with lock:
                         tower_handoff = brain.check_arrival_tower_handoff(
                             callsign, tr)

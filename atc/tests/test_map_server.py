@@ -7,7 +7,7 @@ import urllib.error
 import urllib.request
 
 import map_server
-from brain import Controller
+from brain import Controller, Phase
 from map_server import MapService, TrackHistory, make_handler, start_map_server
 from state_client import Aircraft
 from http.server import ThreadingHTTPServer
@@ -43,8 +43,34 @@ def test_snapshot_has_airspace_geometry(brain, airfield):
     assert {arc["gate"] for arc in arcs} == set(af["gates"])
     assert all(arc["point"] == af["gates"][arc["gate"]]
                for arc in arcs)
+    lead_zones = af["checks"]["arrival_handoff_zones"]
+    assert {zone["gate"] for zone in lead_zones} == set(af["gates"])
+    assert all(zone["angle_deg"] == 200 and zone["radius_nm"] == 5.0
+               for zone in lead_zones)
     assert "25" in af["runways"]
     assert snap["aircraft"] == []
+
+
+def test_snapshot_marks_join_instruction_for_live_zone_rendering(brain, airfield):
+    brain.remember_speaker("Caveman", "Colt 1")
+    pilot = brain._pilot("Colt 1")
+    pilot.phase = Phase.INBOUND
+    pilot.entry_gate = "Entry East"
+    pilot.arrival_join_issued = True
+    service = MapService(airfield, brain, FakeState([_ac()]))
+    aircraft = service.snapshot()["aircraft"]
+    assert len(aircraft) == 1
+    assert aircraft[0]["entry_gate"] == "Entry East"
+    assert aircraft[0]["arrival_join_issued"] is True
+
+
+def test_retained_debrief_recovers_entry_for_handoff_zone(brain):
+    aircraft = MapService._retained_entry("Colt 1", [], [{
+        "kind": "tx", "controller": "control",
+        "text": "Colt 1, Control, turn right heading 150 to join via Entry East",
+    }])
+    assert aircraft["entry_gate"] == "Entry East"
+    assert aircraft["review_handoff_zone"] is True
 
 
 def test_snapshot_includes_wind_arrow_at_tower(brain, airfield):
