@@ -80,9 +80,9 @@ RTB_CONTROL_HANDOFF_DELAY_SEC = 5.0
 # call is coached, never blocked (the flight continues either way).
 BULLSEYE_TOLERANCE_DEG = 10.0
 BULLSEYE_TOLERANCE_NM = 3.0
-# Angels tolerance for a picture call, in feet (the call states thousands of
-# feet, so 1000 ft = 1 angel). Generous: the pilot reads it off the HUD.
-ANGELS_TOLERANCE_FT = 1000.0
+# Angels tolerance for a picture call, in whole Angels either side of the
+# rounded actual altitude (e.g. actual Angels 16 accepts a report of 15–17).
+ANGELS_TOLERANCE = 1
 
 # How many consecutive polls with the aircraft on the runway before the
 # "vacate immediately" incursion warning fires (~2 s poll cadence -> 10 s).
@@ -117,6 +117,20 @@ _FIGURE_CONTEXT_RE = re.compile(
     r"\b(runway|channel|heading|angels|altitude|flight level)\s+"
     rf"((?:(?:{_FIGURE_WORD})\s*){{1,4}}(?:thousand)?)",
     re.IGNORECASE)
+
+
+def _normalize_picture_transcription(text: str) -> str:
+    """Repair two recurring Whisper variants inside BRA/marking calls."""
+    if not re.search(r"\b(bull'?s?eye|marking)\b", text, re.IGNORECASE):
+        return text
+    # Whisper sometimes hears "marking bulls" as "marking balls". In a
+    # marking/BRA report, that is the bullseye reference, not a named point.
+    text = re.sub(r"\b(marking\s+)balls?\b", r"\1bulls", text,
+                  flags=re.IGNORECASE)
+    # "angels fifteen" is occasionally transcribed as "in just fifteen".
+    # Keep this repair scoped to picture calls so ordinary speech is untouched.
+    return re.sub(r"\bin just(?=\s+(?:\d|" + _FIGURE_WORD + r")\b)",
+                  "angels", text, flags=re.IGNORECASE)
 
 
 def _spoken_figure(phrase: str) -> str:
@@ -1445,6 +1459,7 @@ class AtcBrain:
         # formation/check-in handling above, which need the word forms.
         # Frequent STT rendering of "marking bulls" from the sortie log.
         low = re.sub(r"\bmocking\s+(bulls?|bullseye)\b", r"marking \1", low)
+        low = _normalize_picture_transcription(low)
         low = _fold_spoken_figures(low)
         low = _fold_bullseye_figures(low)
         reply = self._dispatch(callsign, pilot, low, track, controller, traffic,
@@ -2277,7 +2292,19 @@ class AtcBrain:
             return self._say("line_up", callsign)
         # A go-around is a real state transition, not an optional pattern
         # status call. Acknowledge it and re-arm the next landing clearance.
-        if re.search(r"\b(go(?:ing)? around|missed approach)\b", low):
+        # In the arrival flow, a bare "airborne" / "wheels up" report means
+        # the aircraft has gone around (or is continuing after a touch-and-go),
+        # not that it is starting a normal departure. Keep it with Tower and
+        # invalidate the previous landing clearance. Outside the arrival flow,
+        # the same words continue through the normal departure handling below.
+        explicit_go_around = re.search(
+            r"\b(go(?:ing)? around|missed approach)\b", low)
+        arrival_liftoff = (
+            pilot.phase in (Phase.INBOUND, Phase.LANDING)
+            and re.search(r"\b(airborne|departing|leaving|departed|"
+                          r"on the way out|taking off|wheels up|"
+                          r"off the ground|on the go)\b", low))
+        if explicit_go_around or arrival_liftoff:
             repeated = pilot.go_around_issued
             pilot.phase = Phase.INBOUND
             pilot.cleared_landing = False
@@ -2364,6 +2391,18 @@ class AtcBrain:
                     wing_state.break_cleared = True
             return self._say("cleared_overhead", callsign,
                              flight=self._formation_prefix(pilot))
+        # Consume the OHB clearance readback before the general position
+        # report matcher below. Whisper may render "overhead break" as
+        # "over a break", where the word "over" would otherwise be mistaken
+        # for a position report. Match the clearance and break concepts without
+        # depending on word order or whether Whisper hears "clear" or "cleared".
+        if pilot.phase == Phase.LANDING and re.search(
+                r"\bclear(?:ed)?\b", low) \
+                and re.search(r"\b(overhead|break|brake)\b", low) \
+                and not re.search(r"\b(to land|on final|in the br(eak|ake))\b",
+                                  low):
+            pilot.break_cleared = True
+            return ""
         # Tower asks for a position after check-in. Accept an assigned entry
         # report, a named marking/BRA report, or a plain location report; use
         # radar to decide whether the aircraft has reached its entry point.
@@ -2435,13 +2474,6 @@ class AtcBrain:
                     wing_state.break_cleared = True
             return self._say("cleared_overhead", callsign,
                              flight=self._formation_prefix(pilot))
-        # Readback of the break clearance ("cleared for right overhead break")
-        # must not look like "in the break". Correct readback is silent.
-        if pilot.phase == Phase.LANDING and re.search(r"\bcleared\b", low) \
-                and re.search(r"\b(overhead|break|brake|runway)\b", low) \
-                and not re.search(r"\b(to land|on final|in the br(eak|ake))\b", low):
-            pilot.break_cleared = True
-            return ""
         if re.search(r"\b(?:in the br(eak|ake)|on the br(eak|ake)|"
                      r"in br(eak|ake)|br(?:eak|ak)ing)\b", low):
             # Position report only (MA: if traffic nearby). Not a landing
@@ -2592,6 +2624,37 @@ class AtcBrain:
                    else "control_join_requested_straight")
             pilot.arrival_join_issued = True
             return self._say(key, callsign, gate=requested,
+                             heading=f"{self._cockpit_bearing(heading):03.0f}",
+                             turn=turn)
+        # Stingray has already established that this flight is returning when
+        # it requests RTB. If its first Control call is only a position report
+        # (rather than explicitly saying "inbound"), infer the inbound join
+        # here. The arrival handoff lead-in zone is armed by an assigned join;
+        # without this recovery the flight could pass that zone and only reach
+        # Tower at the entry-arc or CTR fallback. This is one-shot and scoped
+        # to an RTB initiated on Stingray; ordinary Control check-ins are not
+        # promoted to inbound.
+        if (pilot.phase == Phase.INBOUND and pilot.rtb_requested
+                and not pilot.arrival_join_issued):
+            pilot.phase = Phase.INBOUND
+            pilot.cleared_inbound = True
+            pilot.rtb_requested = False
+            pilot.arrival_previous_range_nm = None
+            pilot.arrival_previous_bearing_deg = None
+            pilot.arrival_previous_gate_range_nm = None
+            gate = self._pick_entry_gate(track, low, pilot)
+            pilot.entry_gate = gate
+            heading = None
+            if track is not None and self.airfield is not None:
+                heading = self.airfield.join_heading(track.lat, track.lon,
+                                                     gate)
+            if heading is None:
+                pilot.arrival_join_issued = True
+                return self._say("control_join_nohdg", callsign, gate=gate)
+            turn = self._join_turn(track, heading)
+            key = "control_join" if turn else "control_join_straight"
+            pilot.arrival_join_issued = True
+            return self._say(key, callsign, gate=gate,
                              heading=f"{self._cockpit_bearing(heading):03.0f}",
                              turn=turn)
         # Readback of the join clearance ("150 to join via Entry East") ->
@@ -2963,14 +3026,15 @@ class AtcBrain:
         # call), and only when we have a live altitude.
         reported_angels = parse_angels(low)
         actual_angels = track.alt_ft / 1000.0
-        off_angels = (abs(reported_angels - actual_angels)
-                      if reported_angels is not None else 0.0)
+        rounded_actual_angels = int(actual_angels + 0.5)
+        off_angels = (abs(reported_angels - rounded_actual_angels)
+                      if reported_angels is not None else 0)
         if (matched is not None
-                and off_angels <= ANGELS_TOLERANCE_FT / 1000.0):
+                and off_angels <= ANGELS_TOLERANCE):
             return None
         return {"point": label, "bearing": f"{bearing:03.0f}",
                 "range": f"{distance:.0f}",
-                "actual_angels": f"{actual_angels:.0f}"}
+                "actual_angels": str(rounded_actual_angels)}
 
     def _resolve_point(self, name: str) -> tuple[str, tuple[float, float]] | None:
         """Resolve a picture-call point name to (label, (lat, lon)), or None.

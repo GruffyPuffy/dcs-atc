@@ -439,6 +439,17 @@ function spokenFigure(phrase) {
   return words.map((w) => NUMBER_WORDS[w]).join('');
 }
 
+function normalizePictureSpeech(text) {
+  // Repair common Whisper variants only when this is a BRA/marking call.
+  if (!/\b(bull'?s?eye|marking)\b/i.test(text || '')) return text || '';
+  let normalized = (text || '').replace(/\b(marking\s+)balls?\b/i,
+    '$1bulls');
+  const inJust = new RegExp(`\\bin just(?=\\s+(?:\\d|${FIGURE_WORD})\\b)`,
+    'i');
+  normalized = normalized.replace(inJust, 'angels');
+  return normalized;
+}
+
 function foldPictureFigures(text) {
   // Fold the bearing/range of a bullseye or marking call, mirroring the brain's
   // `_fold_bullseye_figures`. Only runs on a bullseye/marking call — the range
@@ -483,7 +494,7 @@ function parsePictureCall(text, af) {
   // the drawn arrow can never disagree with what was checked. Returns null when
   // the call names a point we cannot resolve (the brain acknowledges those
   // without a check, so there is nothing to draw).
-  const t = foldAngels(foldPictureFigures(text));
+  const t = foldAngels(foldPictureFigures(normalizePictureSpeech(text)));
   const m = /\bmarking\s+([a-z']+)\s*,?\s*(\d{2,3})\s*(?:for|at|,)\s*(\d{1,3})\b/i
     .exec(t)
     || /\bbull'?s?eye\b\s*,?\s*(\d{2,3})\s*(?:for|at|,)\s*(\d{1,3})/i.exec(t);

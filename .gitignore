@@ -52,3 +52,6 @@ topgun.txt
 .vscode/
 *~
 .DS_Store
+
+# Local working notes (never committed)
+.notes/
