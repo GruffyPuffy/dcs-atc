@@ -101,16 +101,23 @@ spawned slot is named after the airbase, type and index
 are learned from what they say, as above.
 
 The individual callsign is **set once per DCS spawn**. Caveman in `Adder11` is
-seeded internally as `Adder 1-1` (flight 1, element 1). When the pilot reports
-any multi-ship size (two-, three-, four-ship, etc.), ATC addresses the lead by
-their individual callsign. The final digit is the element number, so every
-flight lead's individual callsign ends in `1` (`Adder 1-1`, `Adder 2-1`,
-`Adder 3-1`, `Adder 4-1`). Wingmen use element numbers `2`, `3`, and `4` within
-their flight (for example, `Adder 1-2`, `Adder 1-3`). The flight callsign (`Adder 1`,
-`Adder 2`, etc.) remains available for flight-level calls. When the pilot
-reports a one-ship flight, ATC uses the flight callsign for that pilot as well.
-A DCS slot named `Adder1` is already represented as `Adder 1`. Callsign element
-digits are spoken separately, so `Adder 1-1` is synthesized as “Adder one one.”
+seeded internally as `Adder 1-1` (flight 1, element 1). The final digit is the
+element number, so every flight lead's individual callsign ends in `1`
+(`Adder 1-1`, `Adder 2-1`, `Adder 3-1`, `Adder 4-1`). Wingmen use element
+numbers `2`, `3`, and `4` within their flight (for example, `Adder 1-2`,
+`Adder 1-3`). The flight callsign (`Adder 1`, `Adder 2`, etc.) remains
+available for flight-level pilot calls.
+
+ATC's spoken reply address is configurable per airfield with
+`address_lead_by_individual_callsign` in `airspace.json`. It is enabled for
+Kutaisi and Gudauta, so ATC addresses the lead as `Adder 1-1` (“Adder one one”)
+even when the flight reports one-ship. Set it to `false` to restore the prior
+formation-sensitive behavior, where a reported one-ship lead is addressed by
+the flight callsign (`Adder 1`). Wingmen continue to be addressed by their own
+individual callsigns. A DCS slot named `Adder1` is represented internally as
+`Adder 1`; with individual addressing enabled, ATC replies to it as
+`Adder 1-1`.
+Callsign element digits are spoken separately, so `Adder 1-1` is synthesized as “Adder one one.”
 STT cannot jump Caveman to another element because a garbled phrase sounded like
 another flight. To fly a different callsign they must **respawn in another
 slot** and check in again. Leaving the server, or a DCS unit-name change, clears

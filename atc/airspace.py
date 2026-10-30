@@ -197,6 +197,10 @@ class Airfield:
     # per-airfield (a preset is a property of the airfield's radio plan), so
     # they live here rather than in the global phraseology variables.
     channels: dict[str, str] = field(default_factory=dict)
+    # When true, ATC addresses a flight lead by their individual element
+    # callsign (e.g. Adder 1-1), even when the flight reports as one-ship.
+    # False keeps the legacy formation-sensitive rule (solo uses Adder 1).
+    address_lead_by_individual_callsign: bool = False
     # Base-map config for the live map: {base: "dcs"|"osm", layers: {...}}.
     # Global (not per-airfield) but carried on the airfield for convenience.
     map_config: dict = field(default_factory=dict)
@@ -1136,5 +1140,7 @@ def _build_airfield(name: str, spec: dict, defaults: dict,
         default_break_direction=str(
             spec.get("default_break_direction", "left")).lower(),
         channels={k: str(v) for k, v in spec.get("channels", {}).items()},
+        address_lead_by_individual_callsign=bool(
+            spec.get("address_lead_by_individual_callsign", False)),
         map_config=map_config or {},
     )

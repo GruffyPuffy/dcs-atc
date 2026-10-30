@@ -44,17 +44,11 @@ DEFAULT_PHRASEOLOGY = Path(__file__).with_name("phraseology.json")
 ENTRY_REPORT_RADIUS_NM = 5.0
 EXIT_REPORT_RADIUS_NM = 1.5  # retained for legacy map clients
 
-# Arrival descent is stepped by distance to the entry gate, like a real
-# controller (not a single canned "descend to 1500" at 35 miles). Within
-# `DESCENT_FINAL_NM` of the entry -> cleared down to the final altitude (1500
-# ft); further out -> an intermediate step-down (5000 ft) first.
+# Arrival descent is stepped by distance to the entry gate: beyond
+# `DESCENT_FINAL_NM` -> intermediate step-down (5000 ft); within it -> final
+# altitude (1500 ft), including as a backstop if the earlier step was missed.
 DESCENT_FINAL_NM = 15.0
 DESCENT_INTERMEDIATE_FT = 5000
-# Above this altitude the final descent (1500 ft) is never issued directly,
-# even inside the distance gate: the pilot gets the 5000 step-down first.
-# An arrival abeam the entry gate can be "close" in a straight line while
-# still high (debrief 2026-10-18 21:17:59: 6.5 NM north at Angels 14).
-DESCENT_STEPDOWN_MAX_FT = 10000
 # Pattern altitude Control descends an arrival to, and the slop for "you are
 # there" (altimeter / radar, not a hard deck).
 PATTERN_ALT_FT = 1500
@@ -1069,17 +1063,25 @@ class AtcBrain:
 
     def _say(self, key: str, callsign: str, agency: str | None = None,
              **fields: object) -> str:
-        # MA uses the flight callsign for a solo aircraft (e.g. Adder 1), but
-        # the lead's element callsign for any multi-ship flight (e.g. Adder 1-1
-        # in a two-, three-, or four-ship). A DCS slot can still be named
-        # Adder11 when the pilot is flying alone, so use the reported formation
-        # size when it is known. Keep the pilot's canonical element identity
-        # internally; only change the radio address.
+        # The radio address is configurable per airfield. MA currently wants
+        # the lead's individual element callsign (Adder 1-1) for both solo and
+        # multi-ship flights. Legacy airfields can retain the formation-based
+        # behavior: solo lead calls use the flight callsign (Adder 1).
         pilot = self.pilots.get(callsign)
-        if pilot and pilot.formation == 1:
-            solo_lead = re.fullmatch(r"(.+?)\s+(\d+)-1", callsign)
-            if solo_lead:
-                callsign = f"{solo_lead.group(1)} {solo_lead.group(2)}"
+        if pilot:
+            individual_lead = bool(getattr(
+                self.airfield, "address_lead_by_individual_callsign", False))
+            if individual_lead:
+                # A flight-level identity can be learned from a pilot call or
+                # a one-digit DCS slot. In this mode reply to its lead element.
+                flight_call = re.fullmatch(r"(.+?)\s+(\d+)", callsign)
+                if flight_call:
+                    callsign = (f"{flight_call.group(1)} "
+                                f"{flight_call.group(2)}-1")
+            elif pilot.formation == 1:
+                solo_lead = re.fullmatch(r"(.+?)\s+(\d+)-1", callsign)
+                if solo_lead:
+                    callsign = f"{solo_lead.group(1)} {solo_lead.group(2)}"
 
         # Radio preset channels are per-airfield (airspace.json); fall back to
         # the global phraseology variables when the airfield does not define
@@ -3216,42 +3218,24 @@ class AtcBrain:
 
     def _descend_reply(self, callsign: str, pilot: PilotState,
                        track: AircraftTrack | None) -> str:
-        """The arrival descent, stepped by distance AND altitude.
+        """Issue the arrival descent based on distance to the assigned gate.
 
-        A real controller steps an arrival down rather than dropping it to the
-        final altitude 35 miles out. Far from the entry -> an intermediate
-        step-down (5000 ft); within `DESCENT_FINAL_NM` -> the final altitude
-        (1500 ft). Without a live position we issue the final descent (the
-        documented Master Arms example).
-
-        Two gates keep the step-down honest (debriefs 2026-10-18):
-
-        - **Distance**: outside `DESCENT_FINAL_NM` of the gate -> the 5000
-          step-down first.
-        - **Altitude**: inside the distance gate but still HIGH — above
-          `DESCENT_STEPDOWN_MAX_FT` — the straight-line gate distance lies
-          (the pilot may be *abeam* the gate, not inbound to it: debrief
-          21:17:59, checked in 6.5 NM north at Angels 14, 11 NM from gate
-          West, and got the final descent with no step-down at all). Too
-          high for the final -> the 5000 step-down first.
-
-        In both cases the pilot's readback is remembered
-        (`descend_readback`), so the monitors issue the final descent once
-        they are actually low and close. The Tower handoff is a separate
-        horizontal CTR-boundary event.
+        Beyond `DESCENT_FINAL_NM`, Control steps the arrival down to 5000 ft.
+        Within that distance, issue 1500 ft, even if the aircraft has not
+        reached 5000 ft. The distance trigger is the backstop that closes the
+        gap before the Tower handoff. Without a live position we issue the
+        final descent, matching the documented Master Arms example.
         """
         gate = pilot.entry_gate or self._pick_entry_gate(track, None, pilot)
         distance = self._distance_to_gate(track, gate)
         too_far = (distance is not None and distance > DESCENT_FINAL_NM)
-        too_high = (track is not None
-                    and track.alt_ft > DESCENT_STEPDOWN_MAX_FT)
         # Never clear an aircraft to descend to an altitude it has already
         # reached. Treat the 5000 ft step as satisfied when the live track is
         # already at or below it, while leaving the final descent armed for
         # the entry area.
         if (track is not None
                 and track.alt_ft <= DESCENT_INTERMEDIATE_FT
-                and (too_far or too_high)):
+                and too_far):
             pilot.descend_intermediate = True
             pilot.descend_readback = True
             if track.alt_ft <= PATTERN_ALT_FT:
@@ -3259,7 +3243,7 @@ class AtcBrain:
                 # wait for a descent readback that cannot be required.
                 pilot.descend_issued = True
             return ""
-        if too_far or too_high:
+        if too_far:
             if pilot.descend_intermediate:
                 # Already stepped down; this is the readback. Stay silent — the
                 # next instruction (the final descent) follows once closer and
@@ -3270,16 +3254,6 @@ class AtcBrain:
             pilot.descend_intermediate = True
             return self._say("control_descend_step", callsign,
                              altitude=f"{DESCENT_INTERMEDIATE_FT} feet")
-        if (track is not None
-                and track.alt_ft > DESCENT_INTERMEDIATE_FT):
-            # Inside the distance gate, below the step-down ceiling, but
-            # still above the step-down altitude itself: the descent to
-            # 5000 is in progress. Stay silent — the monitor issues the
-            # final descent once 5000 is reached. The pilot HAS
-            # acknowledged the descent plan, so remember the readback; the
-            # entry-arc monitor can hand off without another call.
-            pilot.descend_readback = True
-            return ""
         if track is not None and track.alt_ft <= PATTERN_ALT_FT:
             pilot.descend_issued = True
             pilot.descend_readback = True
@@ -3489,28 +3463,23 @@ class AtcBrain:
 
     def check_arrival_descent(self, callsign: str,
                               track: AircraftTrack | None) -> str | None:
-        """Issue the final arrival descent once close enough AND low enough.
+        """Issue the final arrival descent at the distance backstop.
 
-        After the intermediate step-down (issued far out or high), Control
-        calls the final "descend to 1500 feet" when the aircraft reaches the
-        entry area — so the pilot is not left at the intermediate altitude.
-        Fires once. Both gates matter (debriefs 2026-10-18): an aircraft
-        inside the distance gate but still above 5000 ft has not finished
-        the step-down (20:46:38), and one abeam the gate at 14 000 ft was
-        never stepped down at all (21:17:59).
+        Control normally steps arrivals down through 5000 ft via the voice
+        exchange. The 15 NM gate distance is an independent safety net: it
+        still issues the 1500 ft instruction if the pilot missed the earlier
+        step-down, its readback, or never descended to 5000 ft. The Tower
+        handoff zone is closer to the entry, so this gives Control a chance to
+        make the call before transferring the aircraft. Fires once.
         """
         pilot = self._pilot(callsign)
         if (pilot.phase != Phase.INBOUND
                 or pilot.pending_handoff_to == Controller.TOWER.value
-                or pilot.descend_issued
-                or not (pilot.descend_intermediate
-                        or pilot.descend_readback)):
+                or pilot.descend_issued):
             return None
         gate = pilot.entry_gate or self._pick_entry_gate(track, None, pilot)
         distance = self._distance_to_gate(track, gate)
         if distance is not None and distance <= DESCENT_FINAL_NM:
-            if track is not None and track.alt_ft > DESCENT_INTERMEDIATE_FT:
-                return None
             if track is not None and track.alt_ft <= PATTERN_ALT_FT:
                 # Already at/below the final target: mark it satisfied without
                 # transmitting a descent clearance that would imply a climb.

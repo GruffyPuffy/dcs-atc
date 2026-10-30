@@ -49,6 +49,26 @@ def test_channels_fall_back_to_phraseology(airfield, callsigns):
     assert "channel 7" in reply
 
 
+def test_lead_reply_address_policy_supports_both_modes(airfield, callsigns):
+    # MA mode keeps or derives the lead's individual element callsign even for
+    # a one-ship report. An airfield can restore the previous formation-based
+    # behavior by disabling the setting.
+    assert airfield.address_lead_by_individual_callsign is True
+    cases = [
+        (True, "Colt 1-1", 1, "Colt 1-1, Tower."),
+        (True, "Colt 1", 1, "Colt 1-1, Tower."),
+        (True, "Colt 1-1", 2, "Colt 1-1, Tower."),
+        (False, "Colt 1-1", 1, "Colt 1, Tower."),
+        (False, "Colt 1-1", 2, "Colt 1-1, Tower."),
+    ]
+    for individual, callsign, formation, expected in cases:
+        af = dataclasses.replace(
+            airfield, address_lead_by_individual_callsign=individual)
+        b = _brain_for(af, callsigns)
+        b._pilot(callsign).formation = formation
+        assert b._say("tower_ack", callsign) == expected
+
+
 # ---------- Ground ----------
 
 def test_ground_clearance_assigns_exit_gate(brain):
@@ -228,7 +248,7 @@ def test_tower_report_on_final_readback_is_silent(brain):
 def test_ground_checkin_acknowledged(brain):
     # "Ground, Adder11" -> "Adder11, Ground"
     reply = brain.handle("Ground, Colt 1", controller=Controller.GROUND)
-    assert reply == "Colt 1, Ground."
+    assert reply == "Colt 1-1, Ground."
 
 
 def test_ground_gives_runway_and_qnh_without_atis(brain):
@@ -2415,10 +2435,9 @@ def test_radar_clearance_not_fired_at_rwis_distance(brain, airfield):
     assert reply and "cleared to land" in reply.lower()
 
 
-def test_final_descent_waits_for_the_step_down_altitude(brain, airfield):
-    # Debrief 2026-10-18 20:46:38: the pilot got "descend to 1500" while still
-    # at 8000 ft — the distance gate had shrunk but the step-down to 5000 was
-    # never completed. The final descent waits for the altitude.
+def test_final_descent_distance_backstop_does_not_wait_for_5000(brain, airfield):
+    # At the 15 NM gate, the final descent is the backstop even if the pilot
+    # has not yet reached 5000 ft. This closes the gap before Tower handoff.
     gate = airfield.gates["West"]
     far = _Track(callsign="Colt 1", inside=False,
                  lat=gate[0] + _math.degrees(20 * 1852 / 6_371_000),
@@ -2431,20 +2450,17 @@ def test_final_descent_waits_for_the_step_down_altitude(brain, airfield):
     # so the descent distances are measured against the gate we fly to.
     brain.pilots["Colt 1"].entry_gate = "West"
     assert brain.pilots["Colt 1"].descend_intermediate
-    # Readback while still high (8000 ft): silent, no final descent — but the
-    # readback is remembered so the handoff monitor can fire at pattern alt.
+    # Simulate missing the earlier step-down and its readback entirely. The
+    # range monitor still issues the final clearance while the aircraft is
+    # at 8000 ft.
     near_high = _Track(callsign="Colt 1", inside=False,
                        lat=gate[0] + _math.degrees(10 * 1852 / 6_371_000),
                        lon=gate[1], alt_ft=8000, distance_nm=10, relative="x")
-    assert brain.handle("descend and maintain 5000 feet, Colt 1", near_high,
-                        controller=Controller.CONTROL) == ""
-    assert not brain.pilots["Colt 1"].descend_issued
-    assert brain.pilots["Colt 1"].descend_readback
-    # At 5000 ft the monitor issues the final descent.
-    near_ok = _Track(callsign="Colt 1", inside=False,
-                     lat=gate[0] + _math.degrees(10 * 1852 / 6_371_000),
-                     lon=gate[1], alt_ft=5000, distance_nm=10, relative="x")
-    reply = brain.check_arrival_descent("Colt 1", near_ok)
+    # The safety-net call must not depend on the earlier step-down or its
+    # readback having been registered.
+    brain.pilots["Colt 1"].descend_intermediate = False
+    brain.pilots["Colt 1"].descend_readback = False
+    reply = brain.check_arrival_descent("Colt 1", near_high)
     assert reply and "1500" in reply
     assert brain.pilots["Colt 1"].descend_issued
 
@@ -2485,12 +2501,11 @@ def test_radar_backstop_covers_a_silent_pilot(brain, airfield):
     assert reply and "cleared to land" in reply.lower()
 
 
-def test_step_down_issued_when_high_even_inside_the_gate(brain, airfield):
+def test_distance_backstop_issues_final_when_high_inside_the_gate(brain, airfield):
     # Debrief 2026-10-18 21:17:59: the pilot checked in 6.5 NM north at
     # Angels 14 — abeam the entry gate, so the straight-line gate distance
-    # (11 NM) was inside the final-descent gate and Control skipped the
-    # 5000 step-down entirely. The step-down is gated on distance AND
-    # altitude: too high -> 5000 first, regardless of the distance.
+    # (11 NM) is inside the 15 NM final-descent gate. Distance now controls
+    # the final clearance even if the pilot has not reached 5000 ft.
     thr = airfield.runway_threshold(airfield.active_runway)
     lat_n = thr[0] + _math.degrees(6.5 * 1852 / 6_371_000)
     t = _Track(callsign="Colt 1", inside=True, lat=lat_n, lon=thr[1],
@@ -2503,15 +2518,14 @@ def test_step_down_issued_when_high_even_inside_the_gate(brain, airfield):
     brain.pilots["Colt 1"].entry_gate = "West"
     reply = brain.handle("turn left heading 215 to join via entry west,"
                          " Colt 1", t, controller=Controller.CONTROL)
-    assert "5000" in reply
-    assert brain.pilots["Colt 1"].descend_intermediate
-    assert not brain.pilots["Colt 1"].descend_issued
-    # At the gate and down to 5000: the monitor issues the final descent.
+    assert "1500" in reply
+    assert brain.pilots["Colt 1"].descend_issued
+    # The monitor cannot issue it a second time.
     gate = airfield.gates["West"]
     t2 = _Track(callsign="Colt 1", inside=False, lat=gate[0], lon=gate[1],
                 alt_ft=5000, distance_nm=14, relative="at entry west")
     reply = brain.check_arrival_descent("Colt 1", t2)
-    assert reply and "1500" in reply
+    assert reply is None
     assert brain.pilots["Colt 1"].descend_issued
     # The final descent readback alone does not hand off to Tower.
     t3 = _Track(callsign="Colt 1", inside=True, lat=gate[0], lon=gate[1],
@@ -2758,7 +2772,7 @@ def test_arrival_completes_after_control_handoff(brain, airfield):
     # Tower acknowledges the check-in and prompts for the position.
     assert brain.handle("Tower, Colt 1", sc._track(),
                         controller=Controller.TOWER) == (
-                            "Colt 1, Tower, report your position.")
+        "Colt 1-1, Tower, report your position.")
     assert pilot.phase == Phase.LANDING
 
     # "on final" completes the arrival.
@@ -3674,7 +3688,7 @@ def test_stingray_does_not_false_ack_an_unknown_call(brain):
 def test_stingray_bare_checkin_still_acked(brain):
     _stingray(brain)
     reply = brain.handle("Stingray, Colt 1", controller=Controller.STINGRAY)
-    assert reply == "Colt 1, Stingray."
+    assert reply == "Colt 1-1, Stingray."
 
 
 def test_request_vector_to_bullseye_is_not_an_approach_vector(brain, airfield):

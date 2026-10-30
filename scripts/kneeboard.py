@@ -11,8 +11,8 @@ pilot can glance at the correct phraseology in the cockpit:
 The first three dialogs follow the Master Arms wiki's "Adder11" two-ship
 example. For that multi-ship flight, the lead uses "Adder11" on agency calls
 and "Adder1" for flight check-ins and coordinated pushes. The single-ship card
-uses "Adder1" for both flight and pilot callsign. Edit `PAGES` below to change
-the wording.
+uses "Adder1" for the pilot's flight calls, while ATC still addresses the lead
+as "Adder11". Edit `PAGES` below to change the wording.
 
 Usage:
     uv run --with pillow kneeboard.py                 # -> kneeboard/*.jpg
@@ -225,33 +225,33 @@ PAGES = [
         "sections": [
             ("Takeoff — Tower (Ch 7)", [
                 ("P", "Tower, Adder1, ready for departure"),
-                ("TWR", "Adder1, line up and wait runway 25"),
+                ("TWR", "Adder11, line up and wait runway 25"),
                 ("P", "Line up and wait 25, Adder1"),
-                ("TWR", "Adder1, right turnout, cleared for takeoff runway 25"),
+                ("TWR", "Adder11, right turnout, cleared for takeoff runway 25"),
                 ("P", "Right turn out, cleared for takeoff, 25, Adder1"),
-                ("TWR", "Adder1, contact Control on channel 8"),
+                ("TWR", "Adder11, contact Control on channel 8"),
                 ("P", "Control on 8, Adder1"),
             ]),
             ("Climb-out — Control (Ch 8)", [
                 ("P", "Control, Adder1, at 1500 ft"),
-                ("CTL", "Adder1, radar contact, climb to Angels 15"),
+                ("CTL", "Adder11, radar contact, climb to Angels 15"),
             ]),
             ("Return — Control (Ch 8)", [
                 ("P", "Kutaisi Control, Adder1, inbound 35 miles north at Angels 12"),
-                ("CTL", "Adder1, radar contact, turn right heading 150 to join via Entry East"),
+                ("CTL", "Adder11, radar contact, turn right heading 150 to join via Entry East"),
                 ("P", "150 to join via Entry East, Adder1"),
-                ("CTL", "Adder1, descend to 1500 feet"),
+                ("CTL", "Adder11, descend to 1500 feet"),
             ]),
             ("Approach & landing — Tower (Ch 7)", [
                 ("P", "Tower, Adder1, Entry East"),
-                ("TWR", "Adder1, report runway in sight"),
+                ("TWR", "Adder11, report runway in sight"),
                 ("P", "Adder1, runway in sight"),
-                ("TWR", "Adder1, wind calm, cleared for left overhead break runway 25"),
+                ("TWR", "Adder11, wind calm, cleared for left overhead break runway 25"),
                 ("P", "Cleared for left overhead break runway 25, Adder1"),
                 ("P", "Adder1, on final"),
-                ("TWR", "Adder1, runway 25, wind calm, cleared to land"),
+                ("TWR", "Adder11, runway 25, wind calm, cleared to land"),
                 ("P", "Runway 25, cleared to land, Adder1"),
-                ("TWR", "Adder1, contact Ground on channel 6"),
+                ("TWR", "Adder11, contact Ground on channel 6"),
                 ("P", "Ground on 6, Adder1"),
             ]),
         ],

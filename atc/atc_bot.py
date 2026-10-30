@@ -1020,25 +1020,29 @@ def main() -> None:
                         log(f"RTB HANDOFF: {callsign} ({ac.player}) -> Control")
                         speak(rtb_handoff, freq=freq_for(Controller.STINGRAY),
                               controller=Controller.STINGRAY, callsign=callsign)
-                    # Control transfers in the active entry's lead-in zone.
-                    # Entry arc and CTR remain late fallbacks; descent
-                    # clearance/readback cannot block this spatial handoff.
-                    with lock:
-                        tower_handoff = brain.check_arrival_tower_handoff(
-                            callsign, tr)
-                    if tower_handoff:
-                        log(f"ARRIVAL HANDOFF: {callsign} ({ac.player}) -> Tower")
-                        speak(tower_handoff, freq=freq_for(Controller.CONTROL),
-                              controller=Controller.CONTROL, callsign=callsign)
-                    # Arrival descent: after the far-out step-down, Control
-                    # issues the final "descend to 1500 feet" once the aircraft
-                    # reaches the entry area.
+                    # Give Control's 15 NM descent backstop priority over a
+                    # same-tick spatial handoff. If it issues the clearance,
+                    # let that call go out first; the handoff monitor can
+                    # transfer the flight on the next track update.
                     with lock:
                         descend = brain.check_arrival_descent(callsign, tr)
                     if descend:
                         log(f"DESCEND: {callsign} ({ac.player})")
                         speak(descend, freq=freq_for(Controller.CONTROL),
                               controller=Controller.CONTROL, callsign=callsign)
+                    else:
+                        # Control transfers in the active entry's lead-in
+                        # zone. Entry arc and CTR remain late fallbacks; a
+                        # missed descent readback never blocks this handoff.
+                        with lock:
+                            tower_handoff = brain.check_arrival_tower_handoff(
+                                callsign, tr)
+                        if tower_handoff:
+                            log(f"ARRIVAL HANDOFF: {callsign} ({ac.player}) -> Tower")
+                            speak(tower_handoff,
+                                  freq=freq_for(Controller.CONTROL),
+                                  controller=Controller.CONTROL,
+                                  callsign=callsign)
                     # Takeoff clearance: after the pilot reads back "line up and
                     # wait", wait until they are actually lined up on the runway
                     # before clearing takeoff (they may still be taxiing on).

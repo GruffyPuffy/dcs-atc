@@ -48,6 +48,10 @@ by who is talking (PILOT / GND / TWR / CTL / AWACS).
   Flight-level calls such as *"Adder1, channel 7, push"*, *"Adder1 pushing"*,
   and *"Adder1 Miller Time"* remain flight calls.
 
+Those are the pilot's transmission forms. The bot's reply address is set per
+airfield in `airspace.json`: Kutaisi and Gudauta currently address the lead by
+their individual callsign (for example, *Adder11*) even on a one-ship flight.
+
 ## Deliberate deviations from the wiki
 
 The cards are the wiki dialogs with a few **intentional** corrections, so the
@@ -59,7 +63,7 @@ trainee learns the correct form rather than the wiki's slips:
 | *"4-ship Adder11"* on the break/landing | *"2-ship Adder11"* | the example is a two-ship throughout |
 | *"Adder1, two-ship Hornets on Ramp South"* | *"Adder11, two-ship Hornets on Ramp South"* | the lead uses their individual callsign when contacting Ground on behalf of the flight |
 | *"rolling off runway 25"* | *"runway 25 vacated"* | standard phraseology |
-| *"Tower on 7, Adder11"* (single-aircraft form in the wiki's two-ship example) | Two-ship cards: *"Adder1, channel 7, push"*; single-ship card: *"Tower on 7, Adder1"* | the solo card uses the flight callsign as the pilot callsign |
+| *"Tower on 7, Adder11"* (single-aircraft form in the wiki's two-ship example) | Two-ship cards: *"Adder1, channel 7, push"*; single-ship card: *"Tower on 7, Adder1"* | pilot transmission forms are separate from the bot's configured reply address |
 | (no pattern calls on the Mission Procedures dialog) | *"Adder11, in the break"* then *"turning final"* | MA Landing Procedures: call in the break if traffic; turning final is good practice. Optional — "on final" still gets the landing clearance |
 | *"Control, Adder11, two-ship Hornets, inbound…"* | *"Adder11, two-ship Hornets, inbound…"* | Control was already contacted; no re-address |
 
