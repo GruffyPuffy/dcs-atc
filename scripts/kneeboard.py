@@ -8,8 +8,11 @@ pilot can glance at the correct phraseology in the cockpit:
     2. RTB / Landing     — Control + Tower + Ground (inbound, break, landing, parking)
     3. Airborne          — AWACS/Stingray (check-in, bullseye, RTB) — flown by the trainer
 
-The dialogs are transcribed verbatim from the wiki (the "Adder11" two-ship
-example). Edit `PAGES` below to change the wording; the layout is automatic.
+The first three dialogs follow the Master Arms wiki's "Adder11" two-ship
+example. For that multi-ship flight, the lead uses "Adder11" on agency calls
+and "Adder1" for flight check-ins and coordinated pushes. The single-ship card
+uses "Adder1" for both flight and pilot callsign. Edit `PAGES` below to change
+the wording.
 
 Usage:
     uv run --with pillow kneeboard.py                 # -> kneeboard/*.jpg
@@ -73,7 +76,7 @@ def _font(name: str, size: int) -> ImageFont.FreeTypeFont:
     return ImageFont.load_default(size)
 
 
-# ---------- Content (verbatim from the MA wiki) ----------
+# ---------- Content (based on the MA wiki dialogs) ----------
 
 PAGES = [
     {
@@ -86,7 +89,7 @@ PAGES = [
                 ("W", "2"),
                 ("P", "Ground, Adder11"),
                 ("GND", "Adder11, Ground"),
-                ("P", "Adder1, two-ship Hornets on Ramp South (with information Charlie)"),
+                ("P", "Adder11, two-ship Hornets on Ramp South (with information Charlie)"),
                 ("GND", "Adder11, runway 25 in use, QNH 2992."),
                 ("P", "25 in use, QNH 2992, Adder11."),
                 ("GND", "Adder11, readback correct, advise when ready for clearance"),
@@ -100,7 +103,7 @@ PAGES = [
                 ("P", "Adder11, requesting taxi."),
                 ("GND", "Adder11 cleared taxi Sierra Echo and hold short Runway 25."),
                 ("P", "Cleared taxi Sierra Echo and hold short Runway 25, Adder11."),
-                ("P", "Adder1 holding short, Runway 25"),
+                ("P", "Adder11 holding short, Runway 25"),
                 ("GND", "Adder11, contact Tower on channel 7"),
                 ("P", "Adder1, channel 7, push"),
             ]),
@@ -227,7 +230,7 @@ PAGES = [
                 ("TWR", "Adder1, right turnout, cleared for takeoff runway 25"),
                 ("P", "Right turn out, cleared for takeoff, 25, Adder1"),
                 ("TWR", "Adder1, contact Control on channel 8"),
-                ("P", "Adder1, channel 8, push"),
+                ("P", "Control on 8, Adder1"),
             ]),
             ("Climb-out — Control (Ch 8)", [
                 ("P", "Control, Adder1, at 1500 ft"),
@@ -249,7 +252,7 @@ PAGES = [
                 ("TWR", "Adder1, runway 25, wind calm, cleared to land"),
                 ("P", "Runway 25, cleared to land, Adder1"),
                 ("TWR", "Adder1, contact Ground on channel 6"),
-                ("P", "Adder1, channel 6, push"),
+                ("P", "Ground on 6, Adder1"),
             ]),
         ],
     },

@@ -31,19 +31,19 @@ def test_no_callsign_returns_none(callsigns):
 
 def test_recovers_multiword_fracture(callsigns):
     # Real STT error observed live: "spring fail" for "Springfield".
-    # The element-1 lead collapses to the flight callsign (see canonical).
-    assert callsigns.extract("Spring fail 1-1, on final") == "Springfield 1"
+    assert callsigns.extract("Spring fail 1-1, on final") == "Springfield 1-1"
 
 
-def test_element_lead_collapses_to_flight_callsign(callsigns):
-    # The lead says "Springfield 1" or "Springfield 1-1" — same pilot, one key.
-    assert callsigns.extract("Springfield 1-1, ready") == "Springfield 1"
+def test_element_lead_keeps_individual_callsign(callsigns):
+    # The lead is tracked as Springfield 1-1; flight-level calls remain distinct.
+    assert callsigns.extract("Springfield 1-1, ready") == "Springfield 1-1"
+    assert callsigns.extract("Springfield 1, flight check-in") == "Springfield 1"
 
 
 def test_comma_between_name_and_number(callsigns):
     # STT punctuates the callsign at a pause ("Ground, Springfield, 11").
-    assert callsigns.extract("Ground, Springfield, 11") == "Springfield 1"
-    assert callsigns.extract("Ground, Springfield, 1-1") == "Springfield 1"
+    assert callsigns.extract("Ground, Springfield, 11") == "Springfield 1-1"
+    assert callsigns.extract("Ground, Springfield, 1-1") == "Springfield 1-1"
 
 
 def test_comma_does_not_swallow_formation_count(callsigns):
@@ -190,7 +190,7 @@ def test_add_learns_a_dynamic_slot_callsign():
     assert added == ["Chevy"]
     assert "Chevy" in reg.names
     # The new name is fully usable: extraction and fuzzy matching both work.
-    assert reg.extract_all("ground, Chevy one one") == ["Chevy 1"]
+    assert reg.extract_all("ground, Chevy one one") == ["Chevy 1-1"]
     assert reg.looks_like("chevy one one", "Chevy")
 
 

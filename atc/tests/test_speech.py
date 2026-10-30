@@ -36,10 +36,11 @@ def test_qnh_four_digit_and_decimal():
     assert spell_atc_numbers("QNH 29.92") == "QNH two niner niner two"
 
 
-def test_callsign_dash_is_silent():
-    assert spell_atc_numbers("Colt 1-1") == "Colt 1 1"
-    # Multiple elements / flight+element forms.
-    assert spell_atc_numbers("Colt 1-1, cleared") == "Colt 1 1, cleared"
+def test_callsign_element_digits_are_spoken_separately():
+    assert spell_atc_numbers("Colt 1-1") == "Colt one one"
+    assert spell_atc_numbers("Colt 2-1") == "Colt two one"
+    assert spell_atc_numbers("Colt 21-1") == "Colt two one one"
+    assert spell_atc_numbers("Colt 1-1, cleared") == "Colt one one, cleared"
 
 
 def test_leaves_whole_value_numbers_alone():
@@ -54,7 +55,7 @@ def test_full_atc_line():
     out = spell_atc_numbers(
         "Colt 1-1, Tower, readback correct, wind 270 at 5, runway 25, "
         "cleared for takeoff.")
-    assert out == ("Colt 1 1, Tower, readback correct, wind two seven zero at 5, "
+    assert out == ("Colt one one, Tower, readback correct, wind two seven zero at 5, "
                    "runway two five, cleared for takeoff.")
 
 

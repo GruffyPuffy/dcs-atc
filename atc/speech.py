@@ -10,8 +10,8 @@ Aviation reads headings, wind, runways and QNH digit-by-digit:
     runway 25    -> "two five"
     QNH 2992     -> "two niner niner two"
 
-and the dash in a callsign element is silent: "Colt 1-1" is "Colt one one", not
-"one dash one".
+and a callsign element is read digit-by-digit: "Colt 1-1" is "Colt one one",
+never "Colt eleven" or "Colt one dash one".
 
 `spell_atc_numbers(text)` rewrites those forms **for synthesis only**; the log
 and the chatter keep the real, readable text. `speak()` applies it just before
@@ -48,8 +48,8 @@ _WIND = re.compile(r"\bwind\s+(\d{1,3})\b", re.IGNORECASE)
 # (ATIS): both -> "two niner niner two".
 _QNH = re.compile(r"\bQNH\s+(\d{4}|\d{2}\.\d{2})\b", re.IGNORECASE)
 _RUNWAY = re.compile(r"\brunway\s+(\d{1,2})\b", re.IGNORECASE)
-# A digit-dash-digit is a callsign element ("Colt 1-1"): the dash is silent.
-_CALLSIGN_DASH = re.compile(r"(?<=\d)-(?=\d)")
+# A digit-dash-digit is a callsign element ("Colt 2-1"): speak each digit.
+_CALLSIGN_ELEMENT = re.compile(r"\b(\d+)-(\d+)\b")
 
 
 def _qnh_digits(raw: str) -> str:
@@ -88,5 +88,6 @@ def spell_atc_numbers(text: str) -> str:
     text = _QNH.sub(lambda m: f"QNH {digit_words(_qnh_digits(m.group(1)))}", text)
     text = _RUNWAY.sub(
         lambda m: f"runway {digit_words(m.group(1).zfill(2))}", text)
-    text = _CALLSIGN_DASH.sub(" ", text)
+    text = _CALLSIGN_ELEMENT.sub(
+        lambda m: f"{digit_words(m.group(1))} {digit_words(m.group(2))}", text)
     return text

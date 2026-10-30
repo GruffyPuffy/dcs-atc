@@ -63,3 +63,12 @@ Pilot: Caveman · Callsign: Adder 1 · Runway: 07
 The debrief records radio calls and aircraft positions. It does not record the
 pilot's cold-start checklist or ATIS reception itself; those parts are explained
 from the normal flow, with the first Ground call confirming information Kilo.
+
+This was a one-ship flight, so **Adder 1** is both the flight and pilot
+callsign; the transcript preserves what was logged. In any multi-ship flight
+(two-, three-, four-ship, etc.), **Adder 1** is the flight callsign and the lead
+uses their individual callsign, **Adder 11**, when calling an agency. Other
+elements use **Adder 12**, **Adder 13**, and so on. The lead's element digit is
+always **1** for any flight number (for example, Adder 21 is lead of Adder 2).
+Flight check-ins and coordinated channel pushes still use the flight callsign.
+The kneeboard cards show both cases.

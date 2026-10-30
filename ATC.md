@@ -80,12 +80,13 @@ STT mangles callsigns, so matching is tolerant:
 Examples: `cold tree` → `Colt 3`, `kolt 2` → `Colt 2`, `fort 2` → `Ford 2`,
 `hog 1` → `Hawg 1`, `vyper 1` → `Viper 1`, `springfeeld 2` → `Springfield 2`.
 
-### Identity: SRS name ↔ flight callsign
+### Identity: SRS name ↔ individual callsign
 
 A pilot has **two** names and the bot keeps both. The **SRS/DCS player name**
 (e.g. `Caveman`) is the `player` field the state bridge reports
 (`Unit:getPlayerName()`); this is what SRS puts in the voice packet and what the
-radar/position lookup keys on. The **flight callsign** (e.g. `Springfield 1-1`)
+radar/position lookup keys on. The **individual callsign** (e.g.
+`Springfield 1-1`)
 is what the pilot *says*; the brain learns the mapping the first time they
 identify (*"Ground, Springfield 1-1"* → `remember_speaker("Caveman", "Springfield 1-1")`),
 and from then on addresses their automatic calls (CTR warning, go-around) by
@@ -93,17 +94,27 @@ callsign.
 
 The mapping is also **seeded** from the live unit list when DCS happens to name
 the slot after its callsign (`Unit:getName()` → `"Springfield11"` →
-`Springfield 1`), so a known slot is recognised *before* the pilot transmits. A
+`Springfield 1-1`), so a known slot is recognised *before* the pilot transmits. A
 unit name that is not a callsign shape is deliberately never used: a dynamically
 spawned slot is named after the airbase, type and index
 (`Kutaisi_F/A-18C Lot 20_2- 1`) and carries no callsign at all, so those pilots
 are learned from what they say, as above.
 
-The callsign is **set once per DCS spawn**. Caveman in `Adder11` stays
-`Adder 1` for that seat — STT cannot jump them to Adder 2 because a garbled
-phrase sounded like another flight (`"over to"`). To fly a different callsign
-they must **respawn in another slot** and check in again. Leaving the server, or
-a DCS unit-name change, clears the binding so the new spawn can seed or announce.
+The individual callsign is **set once per DCS spawn**. Caveman in `Adder11` is
+seeded internally as `Adder 1-1` (flight 1, element 1). When the pilot reports
+any multi-ship size (two-, three-, four-ship, etc.), ATC addresses the lead by
+their individual callsign. The final digit is the element number, so every
+flight lead's individual callsign ends in `1` (`Adder 1-1`, `Adder 2-1`,
+`Adder 3-1`, `Adder 4-1`). Wingmen use element numbers `2`, `3`, and `4` within
+their flight (for example, `Adder 1-2`, `Adder 1-3`). The flight callsign (`Adder 1`,
+`Adder 2`, etc.) remains available for flight-level calls. When the pilot
+reports a one-ship flight, ATC uses the flight callsign for that pilot as well.
+A DCS slot named `Adder1` is already represented as `Adder 1`. Callsign element
+digits are spoken separately, so `Adder 1-1` is synthesized as “Adder one one.”
+STT cannot jump Caveman to another element because a garbled phrase sounded like
+another flight. To fly a different callsign they must **respawn in another
+slot** and check in again. Leaving the server, or a DCS unit-name change, clears
+the binding so the new spawn can seed or announce.
 
 The two are linked but neither implies the other: the DCS player name is **not**
 in the callsign, and the SRS name is **not** in the position data as a callsign.
@@ -118,7 +129,7 @@ Because a mission like TTI has **many** client slots sharing one callsign
 (several `Springfield11` aircraft), the radar lookup resolves the transmitting
 **speaker** to a live unit in confidence order: (1) `player` == SRS name, (2)
 `player` == the callsign the brain already learned for that speaker, (3) the SRS
-name is a slot callsign and a unit's own name implies the same flight callsign,
+name is a slot callsign and a unit's own name implies the same individual callsign,
 (4) the SRS-reported client position matches exactly one unit, (5) solo — the one
 pilot online. It returns **None on ambiguity** and never guesses by unit name, so
 radar never binds to the wrong aircraft (see `state_client.resolve_player_unit`).

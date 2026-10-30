@@ -41,9 +41,10 @@ def springfield(gudauta):
         callsigns=registry, ground=gudauta.ground, control=gudauta.control,
         gates=list(gudauta.gates), gate_locator=gudauta.nearest_gate,
         airfield=gudauta)
+    brain.sync_speakers([("Caveman", "Springfield11")])
     gudauta.set_active_runway("33")  # wind in the log favoured 33
     brain.set_runway("33")
-    return Scenario(gudauta, brain, callsign="Springfield 1",
+    return Scenario(gudauta, brain, callsign="Springfield 1-1",
                     speaker="Caveman")
 
 
@@ -155,7 +156,7 @@ def test_replay_takeoff_readback_does_not_loop(springfield):
 
 @pytest.fixture
 def adder_flight(gudauta):
-    """Lead Adder 1 + wingman Adder 2 sharing one radar picture."""
+    """Lead Adder 1-1 + wingman Adder 1-2 sharing one radar picture."""
     registry = CallsignRegistry.from_mission(
         [{"name": "Adder11"}, {"name": "Adder12"}])
     brain = AtcBrain(
@@ -163,12 +164,13 @@ def adder_flight(gudauta):
         callsigns=registry, ground=gudauta.ground, control=gudauta.control,
         gates=list(gudauta.gates), gate_locator=gudauta.nearest_gate,
         airfield=gudauta)
+    brain.sync_speakers([("Lead", "Adder11"), ("Wing", "Adder12")])
     gudauta.set_active_runway("33")
     brain.set_runway("33")
     traffic: list = []  # shared: both flights see the same picture
-    lead = Scenario(gudauta, brain, callsign="Adder 1", speaker="Lead",
+    lead = Scenario(gudauta, brain, callsign="Adder 1-1", speaker="Lead",
                     traffic=traffic)
-    wing = Scenario(gudauta, brain, callsign="Adder 2", speaker="Wing",
+    wing = Scenario(gudauta, brain, callsign="Adder 1-2", speaker="Wing",
                     traffic=traffic)
     return lead, wing
 
@@ -190,24 +192,24 @@ def test_mp_lead_landing_clearance_covers_wingman(adder_flight):
     _fly_to_final(wing)
 
     # Lead reports final -> the full landing clearance.
-    r = lead.say("Tower, Adder 1, on final", Controller.TOWER)
+    r = lead.say("Tower, Adder 1-1, on final", Controller.TOWER)
     assert "cleared to land" in r.lower()
     assert lead.phase() == Phase.LANDING
 
     # The wingman is covered: their final gets NO duplicate clearance.
-    r = wing.say("Tower, Adder 2, on final", Controller.TOWER)
+    r = wing.say("Tower, Adder 1-2, on final", Controller.TOWER)
     assert r == ""
     # ...but the SOP semantics still apply: the wingman IS cleared to land
     # (the post-landing handoff and go-around logic treat them as cleared).
     assert wing.phase() == Phase.LANDING
-    assert wing.brain.pilots["Adder 2"].cleared_landing is True
+    assert wing.brain.pilots["Adder 1-2"].cleared_landing is True
 
 
 def test_mp_wingman_alone_still_gets_own_clearance(adder_flight):
     """No lead clearance -> the wingman's final gets a normal clearance."""
     lead, wing = adder_flight
     _fly_to_final(wing)
-    r = wing.say("Tower, Adder 2, on final", Controller.TOWER)
+    r = wing.say("Tower, Adder 1-2, on final", Controller.TOWER)
     assert "cleared to land" in r.lower()
 
 
@@ -223,5 +225,5 @@ def test_mp_wingman_outside_the_flow_not_covered(adder_flight):
     lead.say("Tower, Adder 1, on final", Controller.TOWER)
     # The wingman never called inbound; they are not in the pilots book at all
     # (or idle), so no coverage.
-    assert "Adder 2" not in wing.brain.pilots \
-        or wing.brain.pilots["Adder 2"].cleared_landing is False
+    assert "Adder 1-2" not in wing.brain.pilots \
+        or wing.brain.pilots["Adder 1-2"].cleared_landing is False

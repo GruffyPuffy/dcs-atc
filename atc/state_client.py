@@ -28,12 +28,11 @@ def norm_identity(name: str) -> str:
 
 
 def slot_callsign(unit_name: str) -> str:
-    """Derive a flight callsign from a DCS unit name.
+    """Derive the individual callsign from a DCS unit name.
 
     DCS unit names can be a flight name with an element attached, e.g.
-    "Springfield11" -> "Springfield 1" (flight 1; the element-1 lead collapses
-    to the flight callsign — see `canonical_callsign`). Returns "" if the name
-    has no trailing digits to split.
+    "Springfield11" -> "Springfield 1-1" (flight 1, lead aircraft 1).
+    Returns "" if the name has no trailing digits to split.
     """
     m = re.match(r"^([A-Za-z]+)(\d+)$", unit_name or "")
     if not m:
@@ -45,20 +44,16 @@ def slot_callsign(unit_name: str) -> str:
 
 
 def canonical_callsign(name: str, number: str, element: str | None = None) -> str:
-    """Canonical key for a callsign, collapsing the formation lead.
+    """Canonical key for an individual callsign.
 
-    The first element of a formation is its lead, and the lead calls themselves
-    either way ("Springfield 1-1" or "Springfield 1") — so both must map to ONE
-    aircraft/pilot record. Any other element ("1-2", "1-3") stays distinct. This
-    is what stops a single aircraft's transmissions from landing in two
-    different state records as the pilot varies their call.
+    Keep the lead's element number: "Springfield 1" identifies the flight,
+    while "Springfield 1-1" identifies its lead pilot. Speaker-aware matching
+    handles a lead who uses the flight form for a flight-level check-in.
 
     Kept here (the identity module) so the brain (`callsigns`) and the state
     bridge (`slot_callsign`) agree on one canonical form.
     """
     name = (name or "").strip()
-    if element and element == "1":
-        return f"{name} {number}"
     if element:
         return f"{name} {number}-{element}"
     return f"{name} {number}"
@@ -75,8 +70,9 @@ def resolve_player_unit(units, srs_name: str, learned_callsign: str = "",
 
     1. `player` equals the SRS name (the common case — SRS reports the DCS
        player name, and most players use the same name in DCS and SRS).
-    2. `player` equals a callsign the brain already learned for this speaker.
-    3. `player` equals the flight callsign the *unit's own name* implies
+    2. `player` equals the individual callsign the brain already learned for
+       this speaker.
+    3. `player` equals the individual callsign the *unit's own name* implies
        (e.g. SRS "Springfield11" <-> unit "Springfield11" -> flight "Springfield 1-1").
     4. `speaker_pos` (the SRS-reported client position) matches exactly one live
        player unit — an independent signal that disambiguates duplicate names.
@@ -84,7 +80,7 @@ def resolve_player_unit(units, srs_name: str, learned_callsign: str = "",
 
     Returns None when ambiguous (more than one candidate at a winning step) so
     the caller leaves the pilot unresolved rather than binding to the wrong
-    aircraft. `learned_callsign` is the flight callsign the brain has mapped the
+    aircraft. `learned_callsign` is the individual callsign the brain has mapped the
     speaker to; the caller owns that mapping.
     """
     units = list(units or [])
@@ -112,7 +108,7 @@ def resolve_player_unit(units, srs_name: str, learned_callsign: str = "",
             return hits[0]
 
     # 3) The SRS name is a *slot* callsign, and a unit's own name implies the
-    #    same flight callsign (handles DCS name != SRS name, with a shared slot).
+    #    same individual callsign (handles DCS name != SRS name, with a shared slot).
     want = slot_callsign(srs_name)
     if want:
         hits = [u for u in units

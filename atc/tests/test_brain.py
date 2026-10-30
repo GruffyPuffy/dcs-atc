@@ -466,7 +466,7 @@ def test_readback_ignores_the_callsign_number(brain):
     # The clearance text contains the callsign ("Colt 1, Ground, ..."); its
     # flight number must not be compared as a clearance value. A readback that
     # ends "Colt 11" (STT doubling the element) must still pass.
-    brain.handle("Ground, Colt 1, ready to copy clearance",
+    brain.handle("Ground, Colt 1-1, ready to copy clearance",
                  controller=Controller.GROUND)
     reply = brain.handle(
         "After departure, turn right, exit west, 1500 feet or below, Colt 11",
@@ -475,7 +475,7 @@ def test_readback_ignores_the_callsign_number(brain):
 
 
 def test_taxi_readback_ignores_the_callsign_number(brain):
-    brain.handle("Ground, Colt 1, requesting taxi", controller=Controller.GROUND)
+    brain.handle("Ground, Colt 1-1, requesting taxi", controller=Controller.GROUND)
     reply = brain.handle("Cleared taxi whiskey, hold short runway 25, Colt 11",
                          controller=Controller.GROUND)
     assert reply == ""
@@ -854,11 +854,19 @@ def test_sync_speakers_seeds_from_a_slot_named_unit(brain):
     """A mission slot's unit name *is* its callsign, so seed from it.
 
     Seeding means a pilot is known *before* they transmit, and the slot name
-    ("Chevy11") is canonicalised to the brain's key ("Chevy 1").
+    ("Chevy11") is canonicalised to the lead's key ("Chevy 1-1").
     """
     brain.sync_speakers([("Caveman", "Chevy11")])
-    assert brain.callsign_for_speaker("Caveman") == "Chevy 1"
-    assert brain.known_callsigns(["Caveman"]) == ["Chevy 1"]
+    assert brain.callsign_for_speaker("Caveman") == "Chevy 1-1"
+    assert brain.known_callsigns(["Caveman"]) == ["Chevy 1-1"]
+
+
+def test_seeded_lead_is_addressed_individually_on_flight_checkin(brain):
+    brain.sync_speakers([("Caveman", "Chevy11")])
+    reply = brain.handle("Ground, Chevy one", controller=Controller.GROUND,
+                         speaker="Caveman")
+    assert reply == "Chevy 1-1, Ground."
+    assert "Chevy 1-1" in brain.pilots
 
 
 def test_sync_speakers_ignores_a_unit_name_that_is_not_a_callsign(brain):
@@ -882,7 +890,7 @@ def test_known_callsigns_reports_only_pilots_we_can_name(brain):
                          ("Maverick", "Kutaisi_F/A-18C Lot 20_2- 1")])
     brain.remember_speaker("Maverick", "Ford 1")           # bound by radio
     assert brain.known_callsigns(["Caveman", "Maverick", "Ghost"]) == \
-        ["Chevy 1", "Ford 1"]
+        ["Chevy 1-1", "Ford 1"]
 
 
 def test_sync_speakers_binds_an_unseeded_pilot_from_what_they_say(brain):
@@ -921,7 +929,7 @@ def test_sync_speakers_drops_the_seed_when_the_slot_goes_away(brain):
     poll, so a departed slot must not keep a stale callsign recognised.
     """
     brain.sync_speakers([("Caveman", "Chevy11")])
-    assert brain.callsign_for_speaker("Caveman") == "Chevy 1"
+    assert brain.callsign_for_speaker("Caveman") == "Chevy 1-1"
     brain.sync_speakers([("Maverick", "Chevy12")])   # Caveman's slot gone
     assert brain.callsign_for_speaker("Caveman") == "Caveman"
 
@@ -932,32 +940,32 @@ def test_radio_cannot_steal_a_live_slot_callsign(brain):
     Changing flight requires a respawn in another slot, then a check-in.
     """
     brain.sync_speakers([("Caveman", "Chevy11")])
-    assert brain.callsign_for_speaker("Caveman") == "Chevy 1"
+    assert brain.callsign_for_speaker("Caveman") == "Chevy 1-1"
     brain.remember_speaker("Caveman", "Ford 1")
     brain.sync_speakers([("Caveman", "Chevy11")])
-    assert brain.callsign_for_speaker("Caveman") == "Chevy 1"
+    assert brain.callsign_for_speaker("Caveman") == "Chevy 1-1"
     assert brain.callsigns.extract("Chevy one, request taxi") == "Chevy 1"
 
 
 def test_stt_over_to_does_not_become_adder_two(brain):
     """Regression: 'over to' fuzzy-matched Adder + number-word 'to' = 2."""
     brain.sync_speakers([("Caveman", "Adder11")])
-    assert brain.extract_callsign("over to", "Caveman") == "Adder 1"
+    assert brain.extract_callsign("over to", "Caveman") == "Adder 1-1"
     extracted = brain.extract_callsign("over to", "Caveman")
     brain.remember_speaker("Caveman", extracted)
-    assert brain.callsign_for_speaker("Caveman") == "Adder 1"
+    assert brain.callsign_for_speaker("Caveman") == "Adder 1-1"
     brain.handle("Climbing to Angels 15, over to", speaker="Caveman",
                  controller=Controller.CONTROL)
-    assert "Adder 2" not in brain.pilots
+    assert "Adder 2-1" not in brain.pilots
 
 
 def test_respawn_in_another_flight_reseeds_callsign(brain):
     """A new DCS unit name is a new spawn; the previous seat is released."""
     brain.sync_speakers([("Caveman", "Adder11")])
-    assert brain.callsign_for_speaker("Caveman") == "Adder 1"
+    assert brain.callsign_for_speaker("Caveman") == "Adder 1-1"
     brain.remember_speaker("Caveman", "Ford 1")
     brain.sync_speakers([("Caveman", "Adder21")])
-    assert brain.callsign_for_speaker("Caveman") == "Adder 2"
+    assert brain.callsign_for_speaker("Caveman") == "Adder 2-1"
 
 
 def test_radio_learned_binding_is_dropped_when_the_player_leaves(brain):
@@ -999,7 +1007,7 @@ def test_sync_speakers_keeps_duplicate_callsigns_distinct(brain):
     callsign even when the flight names collide.
     """
     brain.sync_speakers([("Caveman", "Chevy11"), ("Maverick", "Chevy12")])
-    assert brain.callsign_for_speaker("Caveman") == "Chevy 1"
+    assert brain.callsign_for_speaker("Caveman") == "Chevy 1-1"
     assert brain.callsign_for_speaker("Maverick") == "Chevy 1-2"
 
 
@@ -1029,7 +1037,7 @@ def test_comma_separated_callsign_is_attributed(brain):
     reply = brain.handle("Ground, Springfield, 11", controller=Controller.GROUND,
                          speaker="Caveman")
     assert reply is not None and "Springfield 1" in reply
-    assert "Springfield 1" in brain.pilots
+    assert "Springfield 1-1" in brain.pilots
 
 
 def test_known_speaker_callsign_used_when_stt_drops_it(brain):

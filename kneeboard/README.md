@@ -22,8 +22,8 @@ Page 5 is the **comms board** — the Master Arms UHF channel plan, verbatim fro
 the wiki's Comms page. The channels this trainer uses (Ch 6 Ground, Ch 7 Tower,
 Ch 8 Control, Ch 21 ATIS) are highlighted in orange.
 
-Each other line is a request/answer exchange from the wiki (the "Adder11" two-ship
-example), colour-coded by who is talking (PILOT / GND / TWR / CTL / AWACS).
+Each other line is based on the wiki's "Adder11" two-ship example, colour-coded
+by who is talking (PILOT / GND / TWR / CTL / AWACS).
 
 **Radio convention shown on the cards** (tidied from the SOP for training):
 
@@ -34,11 +34,19 @@ example), colour-coded by who is talking (PILOT / GND / TWR / CTL / AWACS).
   (*"Cleared taxi Sierra Echo and hold short Runway 25, Adder11"*).
 - **Controllers** address the pilot on every line (*"Adder11, …"*) and name
   their own facility only on first contact.
-- **On every radio switch**: acknowledge the handoff, then **check in as a
-  flight** on the new frequency (*"Adder1"*, then each wingman answers *"2"*,
-  *"3"*, *"4"* …), then make the first call with the agency prefix (*"Tower,
-  Adder11, Entry East"*). The flight check-in is a flight-internal call — the
-  controller does not answer it.
+- **Flight callsign vs individual callsign**: *Adder1* identifies the flight.
+  Use it for the flight's channel push and its check-in after switching
+  frequency (*"Adder1"*, then wingmen answer *"2"*, *"3"*, *"4"* …). Those
+  check-in replies are internal to the flight; ATC does not answer them. The
+  lead of any multi-ship flight (two-, three-, four-ship, etc.) uses their
+  individual callsign (*Adder11*) when calling an agency, including when
+  speaking for the whole flight (*"Tower, Adder11, Entry East"*). Other
+  elements use their own numbers (*Adder12*, *Adder13*, …). The final digit is
+  the element number: every flight lead ends in *1* (*Adder11*, *Adder21*,
+  *Adder31*, *Adder41* for flights 1–4). A single-ship flight uses its flight
+  callsign (*Adder1*, *Adder2*, etc.) for both flight and pilot calls.
+  Flight-level calls such as *"Adder1, channel 7, push"*, *"Adder1 pushing"*,
+  and *"Adder1 Miller Time"* remain flight calls.
 
 ## Deliberate deviations from the wiki
 
@@ -49,8 +57,9 @@ trainee learns the correct form rather than the wiki's slips:
 | --- | --- | --- |
 | QNH readback: *"25 in use, QNH 2992."* (no callsign) | *"25 in use, QNH 2992, Adder11."* | every line must identify the sender |
 | *"4-ship Adder11"* on the break/landing | *"2-ship Adder11"* | the example is a two-ship throughout |
+| *"Adder1, two-ship Hornets on Ramp South"* | *"Adder11, two-ship Hornets on Ramp South"* | the lead uses their individual callsign when contacting Ground on behalf of the flight |
 | *"rolling off runway 25"* | *"runway 25 vacated"* | standard phraseology |
-| *"Tower on 7, Adder11"* (single-aircraft form) | *"Adder1, channel 7, push"* | the example is a 2-ship, so use the flight form |
+| *"Tower on 7, Adder11"* (single-aircraft form in the wiki's two-ship example) | Two-ship cards: *"Adder1, channel 7, push"*; single-ship card: *"Tower on 7, Adder1"* | the solo card uses the flight callsign as the pilot callsign |
 | (no pattern calls on the Mission Procedures dialog) | *"Adder11, in the break"* then *"turning final"* | MA Landing Procedures: call in the break if traffic; turning final is good practice. Optional — "on final" still gets the landing clearance |
 | *"Control, Adder11, two-ship Hornets, inbound…"* | *"Adder11, two-ship Hornets, inbound…"* | Control was already contacted; no re-address |
 
@@ -75,4 +84,6 @@ They then appear in the in-game kneeboard (cycle with the kneeboard keys).
 ## Editing the wording
 
 The dialogs live in `PAGES` in `scripts/kneeboard.py` — edit them there and
-regenerate. Keep them verbatim from the wiki so the cards stay authoritative.
+regenerate. Keep the distinction between flight callsign and individual
+callsign consistent with the wiki; intentional wording corrections are listed
+above.

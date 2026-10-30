@@ -157,20 +157,20 @@ def test_spawn_debrief_is_one_file_per_pilot_spawn(brain, airfield, tmp_path):
     """Each DCS spawn writes its own debrief, named with the player."""
     brain.sync_speakers([("Caveman", "Adder11")])
     service = MapService(airfield, brain, FakeState([]), debrief_dir=tmp_path)
-    service.begin_spawn("Caveman", "Adder 1")
-    service.tracks.update("Adder 1", 42.18, 42.50, 1.0, 1000.0)
+    service.begin_spawn("Caveman", "Adder 1-1")
+    service.tracks.update("Adder 1-1", 42.18, 42.50, 1.0, 1000.0)
     service.save_tracks()
     first = list(tmp_path.glob("tracks_*.json"))
     assert len(first) == 1
     assert "caveman" in first[0].name
     payload = json.loads(first[0].read_text())
     assert payload["player"] == "Caveman"
-    assert "Adder 1" in payload["tracks"]
+    assert "Adder 1-1" in payload["tracks"]
 
     service.end_spawn("Caveman")
     brain.sync_speakers([("Caveman", "Adder21")])
-    service.begin_spawn("Caveman", "Adder 2")
-    service.tracks.update("Adder 2", 42.19, 42.51, 1.0, 2000.0)
+    service.begin_spawn("Caveman", "Adder 2-1")
+    service.tracks.update("Adder 2-1", 42.19, 42.51, 1.0, 2000.0)
     service.save_tracks()
     files = list(tmp_path.glob("tracks_*.json"))
     assert len(files) == 2

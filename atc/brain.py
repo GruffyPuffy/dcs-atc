@@ -31,7 +31,7 @@ from atis import wind_speed_kt
 from callsigns import CallsignRegistry, flight_name
 from ctr import AircraftTrack, CtrEvent
 from airspace import GATE_ARC_HALF_ANGLE_DEG, bearing_distance
-from state_client import canonical_callsign, slot_callsign
+from state_client import slot_callsign
 
 TOWER = "Kutaisi Tower"
 RUNWAY = "25"
@@ -641,9 +641,8 @@ class AtcBrain:
         # Rotates the departure exit gate between flights (no traffic), so a
         # pilot practises different exits instead of always the straight-out one.
         self._exit_rotation = 0
-        # SRS speaker name -> flight callsign, learned from transmissions, so
-        # automatic calls (CTR warning, go-around) can address the pilot by
-        # callsign instead of the raw DCS unit name.
+        # SRS speaker name -> individual callsign, learned from transmissions,
+        # so automatic calls can address the pilot instead of the raw DCS name.
         self.speaker_callsigns: dict[str, str] = {}
         # Speaker-map keys seeded by the last `sync_speakers` poll, with the
         # callsign seeded. A seed is dropped when the player leaves or respawns;
@@ -690,7 +689,7 @@ class AtcBrain:
     def remember_speaker(self, who: str, callsign: str) -> None:
         """Map an SRS speaker name to the callsign they used.
 
-        A speaker name can only ever map to one flight callsign, so we key on a
+        A speaker name can only ever map to one individual callsign, so we key on a
         normalised form (a stale mapping would send *another* pilot's automatic
         calls to the wrong aircraft). Any extra spelling of the same pilot that
         the registry knows about is mapped to the same callsign, so a player
@@ -728,7 +727,7 @@ class AtcBrain:
         - **Prune** learned names whose player has left, so a stale dynamic
           callsign cannot mis-match a later garbled call. Mission callsigns are
           never pruned.
-        - **Seed** the speaker map directly ("Caveman -> Chevy 1") instead of
+        - **Seed** the speaker map directly ("Caveman -> Chevy 1-1") instead of
           waiting to learn it from what the pilot says. Because the map is keyed
           by player name, two players who share a callsign stay distinct.
 
@@ -817,28 +816,8 @@ class AtcBrain:
             self.speaker_callsigns.pop(key, None)
             self._seeded_keys.pop(key, None)
 
-    @staticmethod
-    def _same_aircraft(a: str, b: str) -> bool:
-        """True if two callsign strings name the same seat (lead 1-1 ≡ 1)."""
-        if not a or not b:
-            return False
-        if a.strip().lower() == b.strip().lower():
-            return True
-
-        def parts(cs: str) -> tuple[str, str, str | None] | None:
-            match = re.match(r"^(.+?)\s+(\d+)(?:-(\d+))?$", cs.strip())
-            if not match:
-                return None
-            return match.group(1), match.group(2), match.group(3)
-
-        left, right = parts(a), parts(b)
-        if not left or not right:
-            return False
-        return (canonical_callsign(*left).lower()
-                == canonical_callsign(*right).lower())
-
     def callsign_for_speaker(self, who: str) -> str:
-        """Flight callsign for an SRS/DCS player name, or the name itself.
+        """Individual callsign for an SRS/DCS player name, or the name itself.
 
         The match is case- and separator-insensitive ("Caveman" == "caveman"),
         and a flight-name speaker ("Springfield") also matches the numbered
@@ -879,18 +858,16 @@ class AtcBrain:
         uses the first match, and a call with no callsign returns None (the
         caller may then fall back to `_resolve_speaker`).
 
-        When we already know this speaker (DCS seed or a prior call), matching
-        is restricted to that one flight — including its known STT errors —
-        so "forward one" can resolve to Ford 1 without "for the one" becoming
-        Uzi 1. A focused match that names a *different* aircraft (STT "over to"
-        becoming Adder 2) is ignored: the transmission is still from this seat.
+        When we already know this speaker from DCS, their seat identity wins:
+        STT cannot reassign them because it heard another callsign or garbled
+        the individual element.
         """
         own = self.callsign_for_speaker(speaker) if speaker else ""
         if own and own != speaker:
-            found = self.callsigns.extract(text, focus=[own])
-            if found and not self._same_aircraft(own, found):
-                return own
-            return found or own
+            # The DCS seat mapping identifies the speaker more reliably than
+            # STT. Keep the individual identity if the lead uses the flight
+            # callsign (Adder 1), drops it, or STT garbles it.
+            return own
         if len(self.active_pilots) == 1:
             return self.callsigns.extract(text, focus=self.active_pilots)
         found = self.callsigns.extract_all(text)
@@ -1092,6 +1069,18 @@ class AtcBrain:
 
     def _say(self, key: str, callsign: str, agency: str | None = None,
              **fields: object) -> str:
+        # MA uses the flight callsign for a solo aircraft (e.g. Adder 1), but
+        # the lead's element callsign for any multi-ship flight (e.g. Adder 1-1
+        # in a two-, three-, or four-ship). A DCS slot can still be named
+        # Adder11 when the pilot is flying alone, so use the reported formation
+        # size when it is known. Keep the pilot's canonical element identity
+        # internally; only change the radio address.
+        pilot = self.pilots.get(callsign)
+        if pilot and pilot.formation == 1:
+            solo_lead = re.fullmatch(r"(.+?)\s+(\d+)-1", callsign)
+            if solo_lead:
+                callsign = f"{solo_lead.group(1)} {solo_lead.group(2)}"
+
         # Radio preset channels are per-airfield (airspace.json); fall back to
         # the global phraseology variables when the airfield does not define
         # them, so a bare brain (tests, no airfield) still renders. Only pass
