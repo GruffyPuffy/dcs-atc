@@ -172,8 +172,8 @@ def main() -> None:
                         help="Control MHz, AM (default: from airspace.json; 0 disables)")
     parser.add_argument("--stingray-freq", type=float, default=None,
                         help="Stingray/AWACS MHz, AM (default: from airspace.json; 0 disables)")
-    parser.add_argument("--atis-interval", type=float, default=60.0,
-                        help="seconds between ATIS broadcasts (0 disables)")
+    parser.add_argument("--atis-interval", type=float, default=5.0,
+                        help="silence in seconds after each ATIS broadcast (0 disables repeats)")
     parser.add_argument("--name", default=None,
                         help="SRS client name (default: airfield tower name)")
     parser.add_argument("--eam", default=None, help="External AWACS Mode password")
@@ -394,13 +394,12 @@ def main() -> None:
     def speak(text: str, freq: int = freq_hz, voice=None,
               controller: Controller | None = None,
               agency: str | None = None, log_chatter: bool = True,
-              callsign: str = "") -> None:
+              callsign: str = "",
+              audio_cache: dict[str, bytes] | None = None) -> float | None:
         """TTS the reply in the given voice and transmit it on the frequency.
 
-        `log_chatter=False` transmits but does not record the line in the log /
-        map chatter — used for a repeated ATIS broadcast (identical every
-        interval), so the log only shows the first broadcast and each change of
-        the information letter.
+        `log_chatter=False` transmits without recording the line in the log or
+        map chatter — used for identical repeated ATIS broadcasts.
         """
         # Keep the last addressed ATC message available for a pilot's
         # "say again", including radar driven calls that bypass brain.handle().
@@ -419,6 +418,9 @@ def main() -> None:
         spoken = text
         for word, phonetic in PRONUNCIATION.items():
             spoken = spoken.replace(word, phonetic)
+        # Expand the common written abbreviation for speech without changing
+        # the readable text stored in logs or debrief chatter.
+        spoken = re.sub(r"\bft\b", "feet", spoken, flags=re.IGNORECASE)
         # Read ATC numbers digit-by-digit (headings, wind, runway, QNH) and drop
         # the callsign dash ("Colt 1-1" -> "Colt one one"). Synthesis-only: the
         # log/chatter below still show the real text.
@@ -428,30 +430,33 @@ def main() -> None:
         # right voice (e.g. Control's radar climb/descent, not Tower's).
         if voice is None:
             voice = voice_for.get(controller, voice_for[Controller.TOWER])
-        with tts_lock:
-            syn_config = SynthesisConfig(length_scale=args.speech_rate)
-            chunks = list(voice.synthesize(spoken, syn_config=syn_config))
-            rate = chunks[0].sample_rate
-            pcm22k = b"".join(c.audio_int16_bytes for c in chunks)
-            pcm48k = resample_to_48k(pcm22k, rate)
-            # Apply the output volume (--tx-volume, or the runtime "trainer,
-            # volume X" override) so loud Piper voices can be quietened without
-            # touching the voice files.
-            volume = brain.tx_volume if brain.tx_volume is not None else args.tx_volume
-            pcm48k = scale_pcm(pcm48k, volume)
-            # Transmit outside the synthesis lock is not needed (the lock only
-            # serialises Piper); the per-agency client queues the audio.
-            client_for(controller, freq).transmit(pcm48k, freq)
-            if save_audio:
-                stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-                with wave.open(str(audio_dir / f"tx_{stamp}.wav"), "wb") as wav:
-                    wav.setnchannels(1)
-                    wav.setsampwidth(2)
-                    wav.setframerate(SAMPLE_RATE)
-                    wav.writeframes(pcm48k)
-        tag = f"[{controller.value}] " if controller else ""
-        log(f"{tag}ATC (tx): \"{text}\"")
+        pcm48k = audio_cache.get(text) if audio_cache is not None else None
+        if pcm48k is None:
+            with tts_lock:
+                syn_config = SynthesisConfig(length_scale=args.speech_rate)
+                chunks = list(voice.synthesize(spoken, syn_config=syn_config))
+                rate = chunks[0].sample_rate
+                pcm22k = b"".join(c.audio_int16_bytes for c in chunks)
+                pcm48k = resample_to_48k(pcm22k, rate)
+                if audio_cache is not None:
+                    audio_cache[text] = pcm48k
+        # Apply current output volume on each playback, even when reusing cached
+        # synthesis, so the runtime "trainer, volume X" override still takes effect.
+        volume = brain.tx_volume if brain.tx_volume is not None else args.tx_volume
+        pcm48k = scale_pcm(pcm48k, volume)
+        # Transmit outside the synthesis lock; the per-agency client queues audio.
+        client_for(controller, freq).transmit(pcm48k, freq)
+        audio_duration = len(pcm48k) / (SAMPLE_RATE * 2)
+        if save_audio:
+            stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            with wave.open(str(audio_dir / f"tx_{stamp}.wav"), "wb") as wav:
+                wav.setnchannels(1)
+                wav.setsampwidth(2)
+                wav.setframerate(SAMPLE_RATE)
+                wav.writeframes(pcm48k)
         if log_chatter:
+            tag = f"[{controller.value}] " if controller else ""
+            log(f"{tag}ATC (tx): \"{text}\"")
             # TopGun denial has no callsign in the film line; prefix so spawn
             # debrief keeps the clip (filter matches extracted callsign).
             chatter_text = text
@@ -459,6 +464,7 @@ def main() -> None:
                 chatter_text = f"{callsign}, {text}"
             chatter("tx", freq, agency or (controller.value if controller else "atc"),
                     chatter_text, agency or controller)
+        return audio_duration
 
     def freq_for(controller: Controller) -> float:
         """Frequency (Hz) for a controller role, for the chatter log."""
@@ -1074,30 +1080,45 @@ def main() -> None:
         return report
 
     def atis_loop() -> None:
-        """Broadcast ATIS on its own frequency at a fixed interval.
+        """Broadcast ATIS, then leave a fixed silent gap before repeating.
 
         The broadcast repeats every interval, so it is only *logged* on the
         first broadcast and whenever the information letter changes — otherwise
         the log/chatter would be flooded with identical ATIS lines.
         """
-        last_letter = None
+        last_broadcast = None
+        audio_cache: dict[str, bytes] = {}
         while True:
             report = refresh_weather()
             if report is not None:
-                changed = report.information != last_letter
+                broadcast = report.broadcast()
+                changed = broadcast != last_broadcast
                 if changed:
                     log(f"ATIS {report.information}: runway {report.active_runway}, "
                         f"QNH {report.qnh_inhg:.2f}")
-                    last_letter = report.information
-                speak(report.broadcast(), atis_hz, atis_voice, agency="atis",
-                      log_chatter=changed)
-            time.sleep(args.atis_interval)
+                    last_broadcast = broadcast
+                if broadcast not in audio_cache:
+                    # Keep only the current report's audio; changing weather
+                    # replaces the cache instead of growing it indefinitely.
+                    audio_cache.clear()
+                duration = speak(broadcast, atis_hz, atis_voice,
+                                 agency="atis", log_chatter=changed,
+                                 audio_cache=audio_cache)
+                if args.atis_interval <= 0:
+                    return
+                # TX is queued asynchronously. Include the audio duration in
+                # the wait so --atis-interval is a true gap after it finishes.
+                time.sleep(args.atis_interval + (duration or 0.0))
+            else:
+                time.sleep(args.atis_interval)
 
     def weather_loop() -> None:
         """Keep the active runway in sync with the wind (no ATIS broadcast)."""
         while True:
             refresh_weather()
-            time.sleep(args.atis_interval)
+            # Keep weather polling at its existing one-minute cadence; the
+            # ATIS interval now controls only the quiet gap between broadcasts.
+            time.sleep(max(args.atis_interval, 60.0))
 
     # One SRS client per agency, each joined to every ATC frequency but
     # *transmitting* on its own. Because each client has its own TX queue and
