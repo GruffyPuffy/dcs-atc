@@ -536,6 +536,31 @@ def test_tower_accepts_assigned_entry_report_in_handoff_zone(airfield, brain):
 
 # ---------- Stepped arrival descent (distance-based) ----------
 
+@pytest.mark.parametrize(
+    ("distance_nm", "expected_altitude"),
+    [(24.0, "1500"), (26.0, "5000")],
+)
+def test_arrival_descent_split_avoids_back_to_back_calls(
+        airfield, brain, distance_nm, expected_altitude):
+    # Inside 25 NM, issue the final descent directly; outside 25 NM, use the
+    # 5000 ft intermediate step. The existing 15 NM monitor remains the
+    # independent final-descent backstop.
+    sc = _scenario(airfield, brain).set_alt(12000)
+    gate_lat, gate_lon = airfield.gates["East"]
+    sc.lat = gate_lat + math.degrees(distance_nm * 1852 / 6_371_000)
+    sc.lon = gate_lon
+    sc.say("Kutaisi Control, Colt 1, inbound at Angels 12",
+           Controller.CONTROL)
+    brain.pilots["Colt 1"].entry_gate = "East"
+
+    reply = sc.say("150 to join via Entry East, Colt 1", Controller.CONTROL)
+
+    assert expected_altitude in reply
+    assert brain.pilots["Colt 1"].descend_issued is (expected_altitude == "1500")
+    assert brain.pilots["Colt 1"].descend_intermediate is (
+        expected_altitude == "5000")
+
+
 def test_far_inbound_gets_intermediate_descent(airfield, brain):
     # 35 miles out: Control steps the flight down (5000 ft), not straight to
     # 1500 ft (a real controller does not drop an arrival to the final altitude

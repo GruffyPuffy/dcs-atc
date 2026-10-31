@@ -45,9 +45,11 @@ ENTRY_REPORT_RADIUS_NM = 5.0
 EXIT_REPORT_RADIUS_NM = 1.5  # retained for legacy map clients
 
 # Arrival descent is stepped by distance to the entry gate: beyond
-# `DESCENT_FINAL_NM` -> intermediate step-down (5000 ft); within it -> final
-# altitude (1500 ft), including as a backstop if the earlier step was missed.
+# `DESCENT_INTERMEDIATE_NM` -> intermediate step-down (5000 ft); at or within
+# it -> final altitude (1500 ft). The closer final-descent monitor is a
+# backstop if the voice exchange or readback is missed.
 DESCENT_FINAL_NM = 15.0
+DESCENT_INTERMEDIATE_NM = 25.0
 DESCENT_INTERMEDIATE_FT = 5000
 # Pattern altitude Control descends an arrival to, and the slop for "you are
 # there" (altimeter / radar, not a hard deck).
@@ -3298,22 +3300,25 @@ class AtcBrain:
                        track: AircraftTrack | None) -> str:
         """Issue the arrival descent based on distance to the assigned gate.
 
-        Beyond `DESCENT_FINAL_NM`, Control steps the arrival down to 5000 ft.
-        Within that distance, issue 1500 ft, even if the aircraft has not
-        reached 5000 ft. The distance trigger is the backstop that closes the
-        gap before the Tower handoff. Without a live position we issue the
-        final descent, matching the documented Master Arms example.
+        Beyond `DESCENT_INTERMEDIATE_NM`, Control steps the arrival down to
+        5000 ft. At or within that distance, issue 1500 ft directly, even if
+        the aircraft has not reached 5000 ft. This avoids issuing the two
+        instructions close together. A separate monitor backs up the final
+        descent at `DESCENT_FINAL_NM` if the voice exchange is missed. Without
+        a live position we issue the final descent, matching the documented
+        Master Arms example.
         """
         gate = pilot.entry_gate or self._pick_entry_gate(track, None, pilot)
         distance = self._distance_to_gate(track, gate)
-        too_far = (distance is not None and distance > DESCENT_FINAL_NM)
+        intermediate_due = (distance is not None
+                            and distance > DESCENT_INTERMEDIATE_NM)
         # Never clear an aircraft to descend to an altitude it has already
         # reached. Treat the 5000 ft step as satisfied when the live track is
         # already at or below it, while leaving the final descent armed for
         # the entry area.
         if (track is not None
                 and track.alt_ft <= DESCENT_INTERMEDIATE_FT
-                and too_far):
+                and intermediate_due):
             pilot.descend_intermediate = True
             pilot.descend_readback = True
             if track.alt_ft <= PATTERN_ALT_FT:
@@ -3321,7 +3326,7 @@ class AtcBrain:
                 # wait for a descent readback that cannot be required.
                 pilot.descend_issued = True
             return ""
-        if too_far:
+        if intermediate_due:
             if pilot.descend_intermediate:
                 # Already stepped down; this is the readback. Stay silent — the
                 # next instruction (the final descent) follows once closer and

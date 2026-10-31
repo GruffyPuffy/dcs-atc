@@ -2436,20 +2436,19 @@ def test_radar_clearance_not_fired_at_rwis_distance(brain, airfield):
 
 
 def test_final_descent_distance_backstop_does_not_wait_for_5000(brain, airfield):
-    # At the 15 NM gate, the final descent is the backstop even if the pilot
-    # has not yet reached 5000 ft. This closes the gap before Tower handoff.
+    # At the 15 NM gate, the final descent is the backstop if the pilot missed
+    # the voice descent exchange. Inside 25 NM, no 5000 ft step is issued.
     gate = airfield.gates["West"]
     far = _Track(callsign="Colt 1", inside=False,
                  lat=gate[0] + _math.degrees(20 * 1852 / 6_371_000),
                  lon=gate[1], alt_ft=15000, distance_nm=20, relative="x")
     brain.handle("Control, Colt 1, one ship Hornet, inbound, 25 miles north",
                  far, controller=Controller.CONTROL)
-    brain.handle("turn heading 213 to join via entry west, Colt 1", far,
-                 controller=Controller.CONTROL)
     # The checkin assigns the best gate for the position; pin the spoken one
     # so the descent distances are measured against the gate we fly to.
-    brain.pilots["Colt 1"].entry_gate = "West"
-    assert brain.pilots["Colt 1"].descend_intermediate
+    pilot = brain.pilots["Colt 1"]
+    pilot.entry_gate = "West"
+    assert not pilot.descend_intermediate
     # Simulate missing the earlier step-down and its readback entirely. The
     # range monitor still issues the final clearance while the aircraft is
     # at 8000 ft.
@@ -2458,8 +2457,8 @@ def test_final_descent_distance_backstop_does_not_wait_for_5000(brain, airfield)
                        lon=gate[1], alt_ft=8000, distance_nm=10, relative="x")
     # The safety-net call must not depend on the earlier step-down or its
     # readback having been registered.
-    brain.pilots["Colt 1"].descend_intermediate = False
-    brain.pilots["Colt 1"].descend_readback = False
+    pilot.descend_intermediate = False
+    pilot.descend_readback = False
     reply = brain.check_arrival_descent("Colt 1", near_high)
     assert reply and "1500" in reply
     assert brain.pilots["Colt 1"].descend_issued
