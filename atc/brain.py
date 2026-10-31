@@ -2085,25 +2085,42 @@ class AtcBrain:
             pilot.readback_fails = 0
             pilot.last_clearance = reply
             return reply
-        # Post-landing: taxi to parking (to a named ramp, or the nearest one).
+        # Post-landing: a runway-vacated report is enough to receive a parking
+        # taxi clearance. A pilot may name a preferred ramp in the same call;
+        # otherwise assign the nearest configured ramp. Also accept a separate
+        # taxi request for trainers following the longer kneeboard wording.
         # Must come before the taxi readback, which also matches "taxi".
         # Guarded by `parking_cleared`: the readback ("cleared taxi to ramp
         # north") contains "to ramp" and would otherwise re-issue the clearance
         # forever.
-        if not pilot.parking_cleared and re.search(
-                r"\b(taxi to parking|to parking|to the ramp|to ramp|"
-                r"taxi to the ramp|request(?:ing)?\s+(?:parking|"
-                r"taxi\s+to\s+(?:parking|the ramp)))\b", low):
+        vacated_report = re.search(
+            r"\b(vacated|clear of the runway|off the runway|"
+            r"runway vacated|clear of runway|rolling off|rolling out)\b", low)
+        taxi_request = re.search(
+            r"\b(taxi to parking|to parking|to the ramp|to ramp|"
+            r"taxi to the ramp|request(?:ing)?\s+(?:parking|"
+            r"taxi\s+to\s+(?:parking|the ramp)))\b", low)
+        requested_parking = self._spoken_parking(low)
+        named_ramp_request = (requested_parking is not None and re.search(
+            r"\b(request(?:ing)?|ask(?:ing)? for|prefer|want|need|"
+            r"could we|can we|may we)\b", low))
+        amended_ramp_request = (pilot.parking_cleared
+                                and named_ramp_request)
+        postlanding_vacated = bool(vacated_report and
+                                   pilot.landing_handoff_announced)
+        if ((not pilot.parking_cleared and
+             (postlanding_vacated or taxi_request or named_ramp_request))
+                or amended_ramp_request):
             pilot.phase = Phase.TAXI
             pilot.parking_cleared = True
-            parking = self._spoken_parking(low)
+            parking = requested_parking
             if parking is None and track is not None and self.airfield is not None:
                 parking = self.airfield.nearest_parking_area(track.lat, track.lon)
             route = None
             if self.airfield is not None:
                 lat = track.lat if track is not None else None
                 lon = track.lon if track is not None else None
-                route = self.airfield.parking_route(lat, lon)
+                route = self.airfield.parking_route(lat, lon, parking)
             reply = self._say("taxi_parking", callsign,
                               parking=parking or "the ramp",
                               taxi_route=route or "Whiskey")
@@ -2151,14 +2168,10 @@ class AtcBrain:
             pilot.readback_fails = 0
             pilot.last_clearance = reply
             return reply
-        # "runway vacated" / "rolling off runway 25" reported on Ground (the
-        # Tower->Ground handoff already happened at touchdown, so the pilot is
-        # on Ground by the time they are clear). Just acknowledge — there is no
-        # Ground action for it. Both MA's "rolling off" and the standard
-        # "vacated" are accepted.
-        if re.search(r"\b(vacated|clear of the runway|off the runway|"
-                     r"runway vacated|clear of runway|rolling off|"
-                     r"rolling out)\b", low):
+        # A duplicate or out-of-context runway-vacated report is acknowledged.
+        # The normal post-landing report was handled above with its taxi
+        # clearance; both MA's "rolling off" and standard "vacated" are valid.
+        if vacated_report:
             return self._say("roger", callsign, agency=self.ground_short)
         if re.search(r"\bhold(?:ing)? short\b", low) and pilot.phase == Phase.TAXI:
             # Cross-check the report against the live position: a pilot who
@@ -3180,6 +3193,7 @@ class AtcBrain:
         pilot.departure_previous_bearing_deg = None
         pilot.control_checkin_received = False
         pilot.climb_issued = False
+        pilot.parking_cleared = False
         turnout = self._takeoff_turnout(pilot)
         if turnout == "right":
             return self._say("lineup_readback", callsign, turnout=turnout)

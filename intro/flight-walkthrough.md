@@ -228,18 +228,26 @@ to Ground after the runway is vacated.
 
 ## TAXI
 
-Switch to Ground and check in. Then report runway vacated and request taxi to
-parking. Ground assigns the parking area and route.
+Switch to Ground and check in. A runway-vacated report is enough: Ground assigns
+the nearest ramp and gives the taxi route based on where the aircraft left the
+runway. If you prefer another ramp, request it in the vacated call; you can also
+request a different ramp after hearing the assignment.
 
 ```text
 ATC     Adder 1, Tower, contact Ground on channel 6.
 PILOT   Adder one, channel six, push.
 PILOT   Ground, Adder one.
 ATC     Adder 1, Ground.
-PILOT   Adder one, runway vacated, requesting taxi to parking.
-ATC     Cleared taxi to Ramp North via Alpha November.
+PILOT   Adder one, runway vacated.
+ATC     Adder 1, Ground, cleared taxi to Ramp North via Alpha November.
 PILOT   Cleared taxi to Ramp North via Alpha November, Adder one.
 ```
+
+That example assumes the aircraft vacated at A/N.
+
+For a preferred destination, say, “runway vacated, request Ramp East.” Ground
+will assign a route from the inferred exit to that ramp. Read back the assigned
+ramp and route before taxiing.
 
 This debrief ends after the parking-taxi readback. It does not show the aircraft
 reaching the ramp or shutting down.

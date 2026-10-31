@@ -256,9 +256,16 @@ function drawAirspace(af) {
 
   // Runway holding positions (P1..P4 on the MA chart).
   for (const [name, pos] of Object.entries(af.holding_points || {})) {
+    const exit = name.replace(/^Holding\s+/i, '');
+    const routes = (af.parking_routes_by_exit || {})[exit] || {};
+    const routeLines = Object.entries(routes).map(([ramp, route]) =>
+      `to ${ramp}: ${route}`);
+    const tip = routeLines.length
+      ? [`Runway exit ${exit}`, ...routeLines].join('<br>')
+      : `Holding position: ${name}`;
     L.circleMarker(pos, { radius: 5, color: '#f85149', weight: 2,
       fillColor: '#0d1117', fillOpacity: 1 })
-      .bindTooltip(`Holding position: ${name}`).addTo(staticLayer);
+      .bindTooltip(tip).addTo(staticLayer);
   }
 
   // Trainer check areas: exactly where the bot accepts a report / detects

@@ -1241,18 +1241,77 @@ def test_touchdown_handoff_is_not_a_runway_incursion(airfield, brain):
     assert brain.check_incursion("Colt 1", on_runway=True) is None
 
 
-def test_runway_vacated_on_ground_is_acknowledged(airfield, brain):
-    # Kneeboard RTB page: "runway 25 vacated, requesting taxi to parking" is
-    # said on GROUND (after the handoff). A bare "vacated" gets a roger; the
-    # combined call gets the taxi clearance.
+def test_bare_runway_vacated_on_ground_gets_nearest_ramp(airfield, brain):
+    # A bare vacated report after the Tower handoff is enough to get parking
+    # taxi instructions, using the nearest configured ramp.
     sc = _scenario(airfield, brain).on_final("25").set_alt(500)
     sc.say("Tower, Colt 1, on final", Controller.TOWER)
     brain.check_landing_handoff("Colt 1", on_runway=True)
     r = sc.say("Colt 1, runway vacated", Controller.GROUND)
-    assert "say again" not in r.lower()
+    assert "cleared taxi" in r.lower()
+    nearest = airfield.nearest_parking_area(sc.lat, sc.lon)
+    assert nearest.lower() in r.lower()
+
+
+def test_sop_vacated_request_to_parking_gets_nearest_ramp(airfield, brain):
+    # Preserve the kneeboard wording as one call: "runway 25 vacated,
+    # requesting taxi to parking". With no ramp specified, choose nearest.
+    sc = _scenario(airfield, brain).on_final("25").set_alt(500)
+    sc.say("Tower, Colt 1, on final", Controller.TOWER)
+    brain.check_landing_handoff("Colt 1", on_runway=True)
     r = sc.say("Colt 1, runway 25 vacated, requesting taxi to parking",
                Controller.GROUND)
     assert "cleared taxi" in r.lower()
+    nearest = airfield.nearest_parking_area(sc.lat, sc.lon)
+    assert nearest.lower() in r.lower()
+
+
+def test_vacated_call_can_request_a_ramp_and_routes_from_exit(airfield, brain):
+    # An explicitly requested ramp takes precedence over the nearest ramp.
+    # Ramp East is a longer taxi from exit C; use the exit-specific route.
+    sc = _scenario(airfield, brain).on_final("25").set_alt(500)
+    sc.say("Tower, Colt 1, on final", Controller.TOWER)
+    brain.check_landing_handoff("Colt 1", on_runway=True)
+    sc.holding("Holding C")
+
+    r = sc.say("Colt 1, runway 25 vacated, requesting taxi to Ramp East",
+               Controller.GROUND)
+
+    assert "Ramp East" in r
+    assert "Charlie November Delta Echo" in r
+
+
+def test_pilot_can_change_ramp_after_automatic_parking_clearance(airfield, brain):
+    # The nearest-ramp taxi clearance can be amended by requesting another
+    # ramp. The amended route must still start from the aircraft's exit.
+    sc = _scenario(airfield, brain).on_final("25").set_alt(500)
+    sc.say("Tower, Colt 1, on final", Controller.TOWER)
+    brain.check_landing_handoff("Colt 1", on_runway=True)
+    sc.holding("Holding C")
+    first = sc.say("Colt 1, runway vacated", Controller.GROUND)
+    assert "cleared taxi" in first.lower()
+    assert airfield.nearest_parking_area(sc.lat, sc.lon).lower() in first.lower()
+
+    amended = sc.say("Colt 1, request Ramp South instead", Controller.GROUND)
+    assert "Ramp South" in amended
+    assert "Charlie November Alpha Whiskey" in amended
+
+
+def test_readback_of_vacated_parking_clearance_does_not_reissue(airfield, brain):
+    sc = _scenario(airfield, brain).on_final("25").set_alt(500)
+    sc.say("Tower, Colt 1, on final", Controller.TOWER)
+    brain.check_landing_handoff("Colt 1", on_runway=True)
+    sc.holding("Holding C")
+    clearance = sc.say(
+        "Colt 1, runway 25 vacated, requesting taxi to Ramp South",
+        Controller.GROUND)
+    assert "cleared taxi to Ramp South" in clearance
+    assert "Charlie November Alpha Whiskey" in clearance
+
+    reply = sc.say(
+        "Colt 1, cleared taxi to Ramp South via Charlie November Alpha Whiskey",
+        Controller.GROUND)
+    assert reply == ""
 
 
 def test_go_around_fires_once(airfield, brain):

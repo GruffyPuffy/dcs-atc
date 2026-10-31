@@ -467,6 +467,7 @@ def _airspace_payload(airfield: Airfield, basemap: str | None = None) -> dict:
         "runways": {name: list(pos) for name, pos in airfield.runways.items()},
         "taxi_routes": airfield.taxi_routes,
         "parking_routes": airfield.parking_routes,
+        "parking_routes_by_exit": airfield.parking_routes_by_exit,
         "parking_areas": {name: list(pos) for name, pos in airfield.parking_areas.items()},
         "holding_points": {name: list(pos) for name, pos in airfield.holding_points.items()},
         # The areas the bot actually checks, derived from the same parameters

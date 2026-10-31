@@ -110,12 +110,12 @@
           "Ramp South": "Whiskey",
           "Ramp North": "November Alpha",
           "Ramp West": "Alpha",
-          "Ramp East": "Sierra"
+          "Ramp East": "Sierra Whiskey"
         },
         "25": {
           "Ramp South": "Sierra Echo",
           "Ramp North": "November Delta",
-          "Ramp West": "November Delta",
+          "Ramp West": "Alpha November Delta",
           "Ramp East": "Echo"
         }
       },
@@ -124,6 +124,32 @@
         "Ramp North": "Alpha November",
         "Ramp West": "Alpha",
         "Ramp East": "Echo"
+      },
+      "parking_routes_by_exit": {
+        "C": {
+          "Ramp West": "Charlie November Alpha",
+          "Ramp North": "Charlie November",
+          "Ramp East": "Charlie November Delta Echo",
+          "Ramp South": "Charlie November Alpha Whiskey"
+        },
+        "B": {
+          "Ramp West": "Bravo November Alpha",
+          "Ramp North": "Bravo November",
+          "Ramp East": "Bravo November Delta Echo",
+          "Ramp South": "Bravo November Alpha Whiskey"
+        },
+        "A/N": {
+          "Ramp West": "Alpha",
+          "Ramp North": "Alpha November",
+          "Ramp East": "Alpha November Delta Echo",
+          "Ramp South": "Alpha Whiskey"
+        },
+        "S/W": {
+          "Ramp West": "Sierra Whiskey Alpha",
+          "Ramp North": "Sierra Echo Delta November",
+          "Ramp East": "Sierra Echo",
+          "Ramp South": "Sierra Whiskey"
+        }
       },
       "parking_areas": {
         "Ramp West": [

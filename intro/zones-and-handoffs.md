@@ -119,7 +119,7 @@ airport diagram; the checks around it are separate from the runway clearance.*
 | Control → Stingray | Aircraft reaches the assigned climb altitude after Control check-in | Switch and check in with Stingray |
 | Stingray → Control | Pilot requests RTB; after a short pause, auto-push occurs within 50 NM | Switch and check in with Control |
 | Control → Tower | Aircraft approaches the assigned entry through its lead-in sector; entry-arc and CTR fallbacks remain | Switch and report the assigned entry |
-| Tower → Ground | Aircraft vacates the runway | Switch to Ground, report runway vacated, request parking taxi |
+| Tower → Ground | Aircraft vacates the runway | Switch to Ground and report runway vacated; Ground assigns a ramp and taxi route. Request a preferred ramp in the call if desired. |
 
 The frequency-change message is not the same as a completed check-in. A normal
 handoff is: controller gives the new channel → pilot acknowledges and switches
