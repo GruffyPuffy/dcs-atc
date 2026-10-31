@@ -75,6 +75,7 @@
     "go_around": "{callsign}, {tower}, go around, runway {runway} is occupied.",
     "go_around_traffic": "{callsign}, {tower}, go around, traffic on the runway.",
     "go_around_ack": "{callsign}, {tower}, roger, continue climbing and rejoin {downwind} downwind for runway {runway}.",
+    "go_around_continue_circuit": "{callsign}, {tower}, continue circuit, report on final.",
     "touch_and_go_approved": "{callsign}, {tower}, approved touch and go runway {runway}.",
     "altitude_bust": "{callsign}, {tower}, you are leaving the control zone, contact {control} on channel {channel}.",
     "runway_incursion": "{callsign}, {tower}, you are on the runway without clearance, vacate immediately.",

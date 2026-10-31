@@ -34,7 +34,7 @@ REQUIRED_TEMPLATES = {
     "stingray_ack", "stingray_radar_contact", "stingray_rtb_copy",
     "stingray_contact_control", "stingray_bullseye_challenge",
     "contact_tower_from_control",
-    "go_around", "ctr_warning", "roger", "say_again",
+    "go_around", "go_around_continue_circuit", "ctr_warning", "roger", "say_again",
     "say_again_no_callsign",
     "radio_check", "atc_online",
     "state_reset", "cancel_ack",

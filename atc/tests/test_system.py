@@ -1541,6 +1541,35 @@ def test_debrief_bare_overhead_brake_without_cleared_is_accepted(airfield, brain
     assert reply == ""
 
 
+def test_ohb_stt_after_break_readback_is_silent_after_clearance(airfield, brain):
+    sc = _scenario(airfield, brain).at_gate("East")
+    sc.say("Tower, Colt 1, runway in sight", Controller.TOWER)
+    # Whisper can render "right overhead break" as "right after a break".
+    assert sc.say("right after a break, runway zero seven, Colt 1",
+                  Controller.TOWER) == ""
+
+
+def test_go_around_request_landing_stays_in_circuit(airfield, brain):
+    sc = _scenario(airfield, brain).on_final("25").set_alt(2000)
+    pilot = brain._pilot("Colt 1")
+    pilot.phase = Phase.LANDING
+    pilot.cleared_landing = True
+
+    ack = sc.say("Tower, Colt 1, airborne", Controller.TOWER)
+    assert "rejoin" in ack.lower() and "downwind" in ack.lower()
+    assert not pilot.cleared_landing
+
+    reply = sc.say("Tower, Colt 1, request landing", Controller.TOWER)
+    assert "continue circuit" in reply.lower()
+    assert "report on final" in reply.lower()
+    assert "control zone entry" not in reply.lower()
+    assert not pilot.cleared_landing
+
+    clearance = sc.say("Tower, Colt 1, on final", Controller.TOWER)
+    assert "cleared to land" in clearance.lower()
+    assert pilot.cleared_landing
+
+
 def test_debrief_runway_seven_taxi_readback_is_correct(airfield, brain):
     # "runway seven" (words, no leading zero) failed the check against
     # clearance "runway 07" -> "readback incomplete, I did not get your runway".

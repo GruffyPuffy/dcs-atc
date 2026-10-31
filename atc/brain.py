@@ -491,6 +491,9 @@ class PilotState:
     # 20:49:55: cleared to land 1 s after the RWIS report, 8 NM out).
     pattern_flown: bool = False
     go_around_issued: bool = False
+    # The pilot is flying the circuit after a go-around/touch-and-go. Keep
+    # landing requests in this flow until a fresh landing clearance is issued.
+    go_around_circuit: bool = False
     descend_issued: bool = False  # Control has issued the descent to 1500 ft
     descend_intermediate: bool = False  # Control issued the far-out step-down
     climb_issued: bool = False  # Control has issued the departure climb
@@ -1963,6 +1966,7 @@ class AtcBrain:
         pilot.break_cleared = False
         pilot.pattern_flown = False
         pilot.go_around_issued = False
+        pilot.go_around_circuit = False
         pilot.descend_issued = False
         pilot.descend_intermediate = False
         pilot.climb_issued = False
@@ -2018,6 +2022,7 @@ class AtcBrain:
         pilot.cleared_landing = False
         pilot.break_cleared = False
         pilot.pattern_flown = False
+        pilot.go_around_circuit = False
         pilot.descend_issued = False
         pilot.descend_intermediate = False
         pilot.awaiting_takeoff = False
@@ -2325,6 +2330,7 @@ class AtcBrain:
             pilot.cleared_landing = False
             pilot.pattern_flown = False
             pilot.go_around_issued = True
+            pilot.go_around_circuit = True
             pilot.landing_handoff_announced = False
             if repeated:
                 return ""
@@ -2346,6 +2352,7 @@ class AtcBrain:
                 pilot.cleared_landing = False
                 pilot.pattern_flown = False
                 pilot.go_around_issued = True
+                pilot.go_around_circuit = True
                 return self._say("go_around_traffic", callsign)
             pilot.phase = Phase.INBOUND
             pilot.cleared_landing = False
@@ -2417,6 +2424,13 @@ class AtcBrain:
                 and not re.search(r"\b(to land|on final|in the br(eak|ake))\b",
                                   low):
             pilot.break_cleared = True
+            return ""
+        # Whisper may transcribe the OHB readback "right overhead break" as
+        # "right after a break". Accept it only after Tower has issued the
+        # break clearance; on its own this wording is not a new request.
+        if (pilot.phase == Phase.LANDING and pilot.break_cleared
+                and re.search(r"\b(?:right\s+)?after\s+(?:(?:the|a)\s+)?"
+                              r"br(?:eak|ake)\b", low)):
             return ""
         # Tower asks for a position after check-in. Accept an assigned entry
         # report, a named marking/BRA report, or a plain location report; use
@@ -2592,6 +2606,8 @@ class AtcBrain:
         if re.search(r"\binbound\b|\bon approach\b|\blanding\b|\bentry\b|"
                      r"\brequest(?:ing)?\s+(?:to\s+)?land\b|\bready to land\b|"
                      r"\brequest\s+landing\b", low):
+            if pilot.go_around_circuit and pilot.phase == Phase.INBOUND:
+                return self._say("go_around_continue_circuit", callsign)
             pilot.phase = Phase.INBOUND
             pilot.cleared_inbound = True
             return self._inbound_reply(callsign, pilot, track, low)
@@ -3821,6 +3837,7 @@ class AtcBrain:
         Arms landing clearance is valid for the whole flight.
         """
         pilot.phase = Phase.LANDING
+        pilot.go_around_circuit = False
         pilot.cleared_landing = True
         pilot.awaiting_landing = False
         pilot.landing_ready_announced = False
@@ -3849,6 +3866,7 @@ class AtcBrain:
             pilot.phase = Phase.INBOUND
             pilot.cleared_landing = False
             pilot.pattern_flown = False
+            pilot.go_around_circuit = True
             pilot.landing_handoff_announced = False
             key = ("go_around_traffic" if self._traffic_on_runway(traffic)
                    else "go_around")
