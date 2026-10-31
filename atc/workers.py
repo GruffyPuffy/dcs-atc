@@ -142,6 +142,7 @@ class ControllerWorker:
             reply = self.shared.brain.handle(
                 text, track, controller=self.controller, traffic=traffic,
                 speaker=who)
+            radio_policy, radio_wait = self.shared.brain.take_radio_policy()
             callsign = self.shared.brain.extract_callsign(text, who)
             if callsign:
                 self.shared.brain.remember_speaker(who, callsign)
@@ -164,7 +165,9 @@ class ControllerWorker:
                 + (f"  [phase={state.phase.value} entry={state.entry_gate!r} "
                    f"exit={state.exit_gate!r}]" if state else ""))
             self.shared.speak(reply, self.freq_hz, self.voice, self.controller,
-                              callsign=callsign or "")
+                              callsign=callsign or "",
+                              radio_policy=radio_policy,
+                              radio_wait=radio_wait)
         elif reply == "":
             # A deliberate silent acknowledgement: a handoff ack ("channel 8,
             # push") or a flight check-in ("Colt 1" / "2"). The pilot is doing

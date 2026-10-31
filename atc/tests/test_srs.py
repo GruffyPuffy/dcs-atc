@@ -44,3 +44,57 @@ def test_own_guids_all_ignored_across_clients():
     for c in clients:
         assert own <= c.ignore_guids         # ignores every bot guid
         assert "PILOTGUID" not in c.ignore_guids  # but not a real pilot
+
+
+def test_normal_transmission_waits_until_channel_gap_expires():
+    c = _client("tower", set())
+    freq = 250_000_000
+    c._record_tx_complete(freq, 2.0, now=10.0)
+    c._tx_queue.append((freq, [b"ordinary"], 2.0, False))
+
+    assert c._next_tx_item(now=11.99) is None
+    assert c._next_tx_item(now=12.0) == (freq, [b"ordinary"], 2.0, False)
+
+
+def test_answer_window_is_a_single_requested_wait_not_added_to_normal():
+    c = _client("tower", set())
+    freq = 250_000_000
+    c._record_tx_complete(freq, 5.0, now=10.0)
+    c._tx_queue.append((freq, [b"answer"], 5.0, False))
+
+    assert c._next_tx_item(now=14.99) is None
+    assert c._next_tx_item(now=15.0) is not None
+
+
+def test_pilot_transmission_cancels_remaining_wait_then_lbt_releases_queue():
+    c = _client("tower", set())
+    freq = 250_000_000
+    c._record_tx_complete(freq, 5.0, now=10.0)
+    c._tx_queue.append((freq, [b"queued ATC"], 2.0, False))
+
+    # Activity cancels the outstanding answer timeout, but ATC remains blocked
+    # for as long as SRS considers the pilot's receive stream active.
+    c._stream_start[freq] = 11.0
+    c._cancel_tx_wait(freq)
+    assert c._next_tx_item(now=11.1) is None
+
+    del c._stream_start[freq]  # SRS watchdog marks the receive stream ended
+    assert c._next_tx_item(now=11.2) == (freq, [b"queued ATC"], 2.0, False)
+
+
+def test_emergency_bypasses_wait_but_still_listens_to_pilot():
+    c = _client("tower", set())
+    freq = 250_000_000
+    c._record_tx_complete(freq, 2.0, now=10.0)
+    c._tx_queue.append((freq, [b"routine"], 2.0, False))
+    c._tx_queue.append((freq, [b"emergency"], 2.0, True))
+
+    c._stream_start[freq] = 12.0
+    assert c._next_tx_item(now=10.1) is None
+    assert len(c._tx_queue) == 2
+
+    del c._stream_start[freq]
+    assert c._next_tx_item(now=10.1) == (freq, [b"emergency"], 2.0, True)
+    c._record_tx_complete(freq, 2.0, now=10.2)
+    assert c._next_tx_item(now=12.19) is None
+    assert c._next_tx_item(now=12.2) == (freq, [b"routine"], 2.0, False)

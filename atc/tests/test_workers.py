@@ -32,6 +32,23 @@ def test_worker_routes_to_controller(brain):
     assert "cleared taxi" in text
 
 
+def test_worker_passes_reply_wait_policy_to_radio_output(brain):
+    spoken, log, policies = [], [], []
+    shared = _shared(brain, spoken, log)
+    shared.speak = lambda *args, **kwargs: policies.append(
+        (kwargs["radio_policy"], kwargs["radio_wait"]))
+    ground = ControllerWorker(Controller.GROUND, 250_000_000, shared)
+    ground.start()
+
+    ground.submit("PilotA", b"Ground, Colt 1, requesting taxi", 2.0)
+    ground.queue.join()
+    assert policies[-1] == ("answer", 5.0)
+
+    ground.submit("PilotA", b"Ground, Colt 1, declaring emergency", 2.0)
+    ground.queue.join()
+    assert policies[-1] == ("emergency", 2.0)
+
+
 def test_workers_share_pilot_state(brain):
     """Ground and Control workers must see the same pilot state."""
     spoken, log = [], []

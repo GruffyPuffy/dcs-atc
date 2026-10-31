@@ -33,6 +33,10 @@ MSG_EAM_DC = 8
 
 MODULATION_DISABLED = 3
 
+# Minimum quiet interval requested after an ATC transmission. The answer
+# interval is a single bounded turn-taking pause; it is not added to 2s.
+NORMAL_TX_GAP_SECONDS = 2.0
+
 
 def new_guid() -> str:
     # SRS ShortGuid: 22-char ASCII, base64-ish without padding chars
@@ -66,8 +70,9 @@ class SrsClient:
         # libopus decodes to stereo by default; SRS voice is mono. Without this
         # resampler the interleaved stereo bytes saved as mono play at half speed.
         self._resampler = av.AudioResampler(format="s16", layout="mono", rate=48000)
-        self._tx_queue: list[bytes] = []
+        self._tx_queue: list[tuple[float, list[bytes], float, bool]] = []
         self._tx_lock = threading.Lock()
+        self._tx_not_before: dict[float, float] = {}
         self._tx_thread = None
         self._udp_ready = threading.Event()
         self._running = False
@@ -225,6 +230,9 @@ class SrsClient:
                 self._last_rx[key] = now
                 if self.on_transmission_start:
                     self.on_transmission_start(key, name)
+            # Mark the stream active before clearing the timer, so the TX loop
+            # cannot mistake this first packet for a quiet channel.
+            self._cancel_tx_wait(key)
             self._last_rx[key] = now
             self.audio[key].append(pcm)
 
@@ -264,7 +272,9 @@ class SrsClient:
 
     # ---------- transmit ----------
 
-    def transmit(self, pcm_48k: bytes, freq_hz: float) -> None:
+    def transmit(self, pcm_48k: bytes, freq_hz: float,
+                 wait_after: float = NORMAL_TX_GAP_SECONDS,
+                 emergency: bool = False) -> None:
         """Queue 48 kHz s16 mono PCM for transmission on freq_hz (AM).
         Encodes to 40 ms opus frames (3840 bytes PCM each, like the SRS
         ExternalAudioClient); the TX thread paces them at 40 ms.
@@ -294,18 +304,51 @@ class SrsClient:
             packets += [bytes(p) for p in encoder.encode(frame)]
         packets += [bytes(p) for p in encoder.encode(None)]
         with self._tx_lock:
-            self._tx_queue.append((freq_hz, packets))
+            self._tx_queue.append((freq_hz, packets, max(0.0, wait_after),
+                                   emergency))
+
+    def _next_tx_item(self, now: float):
+        """Take a transmission only when its channel is free and its wait ends.
+
+        Emergency traffic bypasses the previous ATC wait, but still observes
+        listen-before-talk while a pilot is transmitting.
+        """
+        with self._tx_lock:
+            emergency_index = next(
+                (i for i, item in enumerate(self._tx_queue) if item[3]), None)
+            indices = ([emergency_index] if emergency_index is not None else [])
+            indices.extend(i for i in range(len(self._tx_queue))
+                           if i != emergency_index)
+            for index in indices:
+                freq_hz, _packets, _wait_after, emergency = self._tx_queue[index]
+                key = round(freq_hz)
+                if key in self._stream_start:
+                    continue
+                if not emergency and now < self._tx_not_before.get(key, 0.0):
+                    continue
+                return self._tx_queue.pop(index)
+        return None
+
+    def _record_tx_complete(self, freq_hz: float, wait_after: float,
+                            now: float) -> None:
+        """Start the requested quiet interval when the audio has finished."""
+        with self._tx_lock:
+            self._tx_not_before[round(freq_hz)] = now + wait_after
+
+    def _cancel_tx_wait(self, freq_hz: float) -> None:
+        """Pilot activity cancels any remaining ATC-to-ATC wait on a channel."""
+        with self._tx_lock:
+            self._tx_not_before.pop(round(freq_hz), None)
 
     def _tx_loop(self) -> None:
         """Send queued transmissions paced at 40 ms per 40 ms opus frame."""
         packet_id = 1
         while self._running:
-            with self._tx_lock:
-                item = self._tx_queue.pop(0) if self._tx_queue else None
+            item = self._next_tx_item(time.monotonic())
             if item is None:
                 time.sleep(0.05)
                 continue
-            freq_hz, packets = item
+            freq_hz, packets, wait_after, _emergency = item
             freq_part = struct.pack("<dBB", float(freq_hz), 0, 0)  # AM, no encryption
             started = time.monotonic()
             for n, opus in enumerate(packets):
@@ -323,6 +366,7 @@ class SrsClient:
                 except OSError:
                     return
                 packet_id += 1
+            self._record_tx_complete(freq_hz, wait_after, time.monotonic())
 
     # ---------- lifecycle ----------
 

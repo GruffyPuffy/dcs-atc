@@ -31,7 +31,8 @@ import numpy as np
 
 from airspace import Airspace, bearing_distance
 from atis import build_atis
-from brain import AtcBrain, Controller, Phraseology
+from brain import (AtcBrain, Controller, Phraseology, RADIO_ANSWER_POLICY,
+                   RADIO_EMERGENCY_POLICY, RADIO_NORMAL_POLICY)
 from callsigns import CallsignRegistry
 from ctr import CtrEvent, CtrTracker
 from phonetics import stt_hint
@@ -395,7 +396,9 @@ def main() -> None:
               controller: Controller | None = None,
               agency: str | None = None, log_chatter: bool = True,
               callsign: str = "",
-              audio_cache: dict[str, bytes] | None = None) -> float | None:
+              audio_cache: dict[str, bytes] | None = None,
+              radio_policy: str = RADIO_NORMAL_POLICY[0],
+              radio_wait: float = RADIO_NORMAL_POLICY[1]) -> float | None:
         """TTS the reply in the given voice and transmit it on the frequency.
 
         `log_chatter=False` transmits without recording the line in the log or
@@ -445,7 +448,9 @@ def main() -> None:
         volume = brain.tx_volume if brain.tx_volume is not None else args.tx_volume
         pcm48k = scale_pcm(pcm48k, volume)
         # Transmit outside the synthesis lock; the per-agency client queues audio.
-        client_for(controller, freq).transmit(pcm48k, freq)
+        client_for(controller, freq).transmit(
+            pcm48k, freq, wait_after=radio_wait,
+            emergency=(radio_policy == "emergency"))
         audio_duration = len(pcm48k) / (SAMPLE_RATE * 2)
         if save_audio:
             stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
@@ -483,10 +488,13 @@ def main() -> None:
         with lock:
             return brain.working_controller(callsign)
 
-    def speak_to_pilot(callsign: str, text: str) -> None:
+    def speak_to_pilot(callsign: str, text: str,
+                       radio_policy: str = RADIO_NORMAL_POLICY[0],
+                       radio_wait: float = RADIO_NORMAL_POLICY[1]) -> None:
         """Unsolicited TX on the pilot's working frequency."""
         ctrl = working_controller(callsign)
-        speak(text, freq=freq_for(ctrl), controller=ctrl, callsign=callsign)
+        speak(text, freq=freq_for(ctrl), controller=ctrl, callsign=callsign,
+              radio_policy=radio_policy, radio_wait=radio_wait)
 
     def play_wav(path, freq: int = freq_hz,
                  controller: Controller | None = None,
@@ -889,7 +897,8 @@ def main() -> None:
                         warning = brain.on_ctr_event(callsign, event, tr)
                     if warning:
                         log(f"CTR {event.value}: {callsign} ({ac.player})")
-                        speak_to_pilot(callsign, warning)
+                        speak_to_pilot(callsign, warning,
+                                       *RADIO_EMERGENCY_POLICY)
                     # TopGun easter egg: only for a pilot who asked to bust the
                     # tower, and only once per pass. This is off to the side of
                     # the ATC state machine: it plays a sting and adds nothing to
@@ -936,7 +945,8 @@ def main() -> None:
                                                      occupied, all_units)
                         if call:
                             log(f"RUNWAY OCCUPIED: {callsign} ({ac.player})")
-                            speak_to_pilot(callsign, call)
+                            speak_to_pilot(callsign, call,
+                                           *RADIO_EMERGENCY_POLICY)
                     else:
                         with lock:
                             brain.check_final(callsign, False, False)
@@ -950,14 +960,16 @@ def main() -> None:
                     if land_call:
                         log(f"CLEARED TO LAND (radar): {callsign} "
                             f"({ac.player})")
-                        speak_to_pilot(callsign, land_call)
+                        speak_to_pilot(callsign, land_call,
+                                       *RADIO_ANSWER_POLICY)
                     # Altitude bust: above the CTR ceiling while still under
                     # Tower/Ground control (not handed to Control).
                     with lock:
                         alt_call = brain.check_altitude(callsign, tr)
                     if alt_call:
                         log(f"ALTITUDE BUST: {callsign} ({ac.player})")
-                        speak_to_pilot(callsign, alt_call)
+                        speak_to_pilot(callsign, alt_call,
+                                       *RADIO_EMERGENCY_POLICY)
                     # Runway incursion: on the runway without a clearance.
                     on_rwy = airfield.runway_occupied(
                         [ac], exclude=None, on_runway=True)
@@ -965,7 +977,8 @@ def main() -> None:
                         inc_call = brain.check_incursion(callsign, on_rwy)
                     if inc_call:
                         log(f"RUNWAY INCURSION: {callsign} ({ac.player})")
-                        speak_to_pilot(callsign, inc_call)
+                        speak_to_pilot(callsign, inc_call,
+                                       *RADIO_EMERGENCY_POLICY)
                     # Call back a pilot held for an occupied runway, unprompted,
                     # once it clears (takeoff line-up or landing clearance).
                     busy = airfield.runway_occupied(all_units, exclude=ac.player)
@@ -974,7 +987,9 @@ def main() -> None:
                     if clear_call:
                         log(f"RUNWAY CLEAR: {callsign} ({ac.player})")
                         speak(clear_call, controller=Controller.TOWER,
-                              callsign=callsign)
+                              callsign=callsign,
+                              radio_policy=RADIO_ANSWER_POLICY[0],
+                              radio_wait=RADIO_ANSWER_POLICY[1])
                     # After landing, Tower pushes the flight to Ground at
                     # touchdown (Master Arms SOP) — the pilot does not have to
                     # report "vacated" to Tower.
@@ -991,14 +1006,18 @@ def main() -> None:
                     if handoff:
                         log(f"LANDED: {callsign} ({ac.player}) -> Ground")
                         speak(handoff, controller=Controller.TOWER,
-                              callsign=callsign)
+                              callsign=callsign,
+                              radio_policy=RADIO_ANSWER_POLICY[0],
+                              radio_wait=RADIO_ANSWER_POLICY[1])
                     # Tower hands the flight to Control at its outbound exit arc.
                     with lock:
                         dep_handoff = brain.check_departure_handoff(callsign, tr)
                     if dep_handoff:
                         log(f"AIRBORNE: {callsign} ({ac.player}) -> Control")
                         speak(dep_handoff, controller=Controller.TOWER,
-                              callsign=callsign)
+                              callsign=callsign,
+                              radio_policy=RADIO_ANSWER_POLICY[0],
+                              radio_wait=RADIO_ANSWER_POLICY[1])
                     # Control may issue a climb only after the pilot checks in.
                     # If still inside the CTR, wait until the aircraft clears it.
                     with lock:
@@ -1006,7 +1025,9 @@ def main() -> None:
                     if climb:
                         log(f"CLIMB: {callsign} ({ac.player})")
                         speak(climb, freq=freq_for(Controller.CONTROL),
-                              controller=Controller.CONTROL, callsign=callsign)
+                              controller=Controller.CONTROL, callsign=callsign,
+                              radio_policy=RADIO_ANSWER_POLICY[0],
+                              radio_wait=RADIO_ANSWER_POLICY[1])
                     # Stingray handoff: once the departure is at Angels 15,
                     # Control pushes them to AWACS on channel 3 (SOP). We do
                     # not simulate Stingray, but the call still goes out.
@@ -1015,7 +1036,9 @@ def main() -> None:
                     if stingray:
                         log(f"STINGRAY: {callsign} ({ac.player})")
                         speak(stingray, freq=freq_for(Controller.CONTROL),
-                              controller=Controller.CONTROL, callsign=callsign)
+                              controller=Controller.CONTROL, callsign=callsign,
+                              radio_policy=RADIO_ANSWER_POLICY[0],
+                              radio_wait=RADIO_ANSWER_POLICY[1])
                     # After an RTB call, AWACS makes one distance-based push
                     # back to Control. A pilot who misses it can still check in
                     # directly on Control; no repeated push is needed.
@@ -1025,7 +1048,9 @@ def main() -> None:
                     if rtb_handoff:
                         log(f"RTB HANDOFF: {callsign} ({ac.player}) -> Control")
                         speak(rtb_handoff, freq=freq_for(Controller.STINGRAY),
-                              controller=Controller.STINGRAY, callsign=callsign)
+                              controller=Controller.STINGRAY, callsign=callsign,
+                              radio_policy=RADIO_ANSWER_POLICY[0],
+                              radio_wait=RADIO_ANSWER_POLICY[1])
                     # Give Control's 15 NM descent backstop priority over a
                     # same-tick spatial handoff. If it issues the clearance,
                     # let that call go out first; the handoff monitor can
@@ -1035,7 +1060,9 @@ def main() -> None:
                     if descend:
                         log(f"DESCEND: {callsign} ({ac.player})")
                         speak(descend, freq=freq_for(Controller.CONTROL),
-                              controller=Controller.CONTROL, callsign=callsign)
+                              controller=Controller.CONTROL, callsign=callsign,
+                              radio_policy=RADIO_ANSWER_POLICY[0],
+                              radio_wait=RADIO_ANSWER_POLICY[1])
                     else:
                         # Control transfers in the active entry's lead-in
                         # zone. Entry arc and CTR remain late fallbacks; a
@@ -1048,7 +1075,9 @@ def main() -> None:
                             speak(tower_handoff,
                                   freq=freq_for(Controller.CONTROL),
                                   controller=Controller.CONTROL,
-                                  callsign=callsign)
+                                  callsign=callsign,
+                                  radio_policy=RADIO_ANSWER_POLICY[0],
+                                  radio_wait=RADIO_ANSWER_POLICY[1])
                     # Takeoff clearance: after the pilot reads back "line up and
                     # wait", wait until they are actually lined up on the runway
                     # before clearing takeoff (they may still be taxiing on).
@@ -1057,7 +1086,9 @@ def main() -> None:
                     if lineup:
                         log(f"LINED UP: {callsign} ({ac.player})")
                         speak(lineup, controller=Controller.TOWER,
-                              callsign=callsign)
+                              callsign=callsign,
+                              radio_policy=RADIO_ANSWER_POLICY[0],
+                              radio_wait=RADIO_ANSWER_POLICY[1])
             except (OSError, RuntimeError):
                 pass  # bridge down or mission not running; retry next tick
 

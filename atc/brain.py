@@ -37,6 +37,53 @@ TOWER = "Kutaisi Tower"
 RUNWAY = "25"
 DEFAULT_PHRASEOLOGY = Path(__file__).with_name("phraseology.json")
 
+RADIO_NORMAL_POLICY = ("normal", 2.0)
+RADIO_ANSWER_POLICY = ("answer", 5.0)
+RADIO_EMERGENCY_POLICY = ("emergency", 2.0)
+
+# These are replies where a pilot is reasonably expected to answer promptly:
+# clearances/readbacks in the MA SOP, explicit requests for a report or repeat,
+# corrections/challenges, and frequency handoffs. Reports requested for a later
+# point in the flight deliberately stay on the normal gap.
+RADIO_ANSWER_KEYS = frozenset({
+    "taxi", "taxi_parking", "hold_short", "hold_short_traffic",
+    "line_up", "lineup_readback", "lineup_readback_straight",
+    "lineup_readback_left", "takeoff",
+    "cleared_land", "cleared_overhead", "touch_and_go_approved",
+    "departure_exit", "departure_exit_straight", "inbound_inside",
+    "control_join", "control_join_straight", "control_join_nohdg",
+    "control_join_requested", "control_join_requested_straight",
+    "control_join_requested_nohdg",
+    "control_climb", "control_descend", "control_descend_step",
+    "control_too_early", "continue_approach", "position_challenge",
+    "tower_position_bra_challenge", "tower_report_position", "vectors",
+    "contact_ground", "contact_tower", "contact_tower_from_control",
+    "contact_control", "contact_stingray", "contact_agency",
+    "control_handoff_repeat", "stingray_contact_control",
+    "ground_info", "ground_info_weather", "ground_info_readback",
+    "readback_incomplete", "say_again", "say_again_no_callsign",
+    "speed_position_unknown", "speed_restriction_ctr",
+    "stingray_bullseye_challenge", "stingray_angels_rounding",
+    "stingray_angels_and_position",
+})
+
+# Safety-priority traffic bypasses a pending ATC gap, while the SRS transmit
+# loop still waits for the current radio user to stop transmitting.
+RADIO_EMERGENCY_KEYS = frozenset({
+    "go_around", "go_around_traffic", "go_around_ack",
+    "runway_incursion", "ctr_warning", "altitude_bust",
+    "emergency_not_implemented",
+})
+
+
+def radio_policy_for_key(key: str) -> tuple[str, float]:
+    """Return the scheduling policy for one phraseology template key."""
+    if key in RADIO_EMERGENCY_KEYS:
+        return RADIO_EMERGENCY_POLICY
+    if key in RADIO_ANSWER_KEYS:
+        return RADIO_ANSWER_POLICY
+    return RADIO_NORMAL_POLICY
+
 # How close (NM) a pilot must be to a named entry gate for an "at the entry"
 # report to be accepted. Beyond this, Control challenges the position instead of
 # handing the flight to Tower (a pilot who is not actually at the entry point
@@ -621,6 +668,10 @@ class AtcBrain:
         self.phraseology = phraseology or Phraseology.load()
         self.callsigns = callsigns or CallsignRegistry()
         self.pilots: dict[str, PilotState] = {}
+        # Side-channel for the radio output scheduler. ``handle`` is called
+        # under the shared brain lock, so the worker can take this policy
+        # immediately after the reply is produced without changing reply text.
+        self._radio_policy = RADIO_NORMAL_POLICY
         self.wind = "calm"  # spoken phrase, updated from live weather
         self.wind_dir = 0.0  # meteorological FROM, degrees
         self.wind_speed = 0.0  # as reported by weather (m/s)
@@ -1082,6 +1133,7 @@ class AtcBrain:
 
     def _say(self, key: str, callsign: str, agency: str | None = None,
              **fields: object) -> str:
+        self._radio_policy = radio_policy_for_key(key)
         # The radio address is configurable per airfield. MA currently wants
         # the lead's individual element callsign (Adder 1-1) for both solo and
         # multi-ship flights. Legacy airfields can retain the formation-based
@@ -1126,6 +1178,11 @@ class AtcBrain:
             control=self.control_short, stingray=self.stingray_short,
             qnh=self.qnh, weather=self.weather,
             **overrides, **fields)
+
+    def take_radio_policy(self) -> tuple[str, float]:
+        """Take the policy associated with the last generated reply."""
+        policy, self._radio_policy = self._radio_policy, RADIO_NORMAL_POLICY
+        return policy
 
     def _agency(self, controller: Controller) -> str:
         """Short name of the agency handling a controller role."""
@@ -1382,6 +1439,7 @@ class AtcBrain:
         `speaker` is the transmitting pilot's SRS/DCS name, used to exclude them
         from the runway-occupancy check (they are not traffic to themselves).
         """
+        self._radio_policy = RADIO_NORMAL_POLICY
         # Flight check-in (Master Arms SOP): on switching frequency a flight
         # checks in *as a flight* before addressing the agency — the lead says
         # just the flight callsign ("Adder1"), each wingman answers with their

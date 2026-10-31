@@ -3,6 +3,9 @@
 import dataclasses
 
 from brain import (AtcBrain, Controller, INCURSION_POLLS, Phase, Phraseology,
+                   RADIO_ANSWER_KEYS, RADIO_ANSWER_POLICY,
+                   RADIO_EMERGENCY_KEYS, RADIO_EMERGENCY_POLICY,
+                   RADIO_NORMAL_POLICY, radio_policy_for_key,
                    _fold_bullseye_figures, _fold_spoken_figures,
                    _spoken_figure, parse_bullseye_call, parse_marking_call)
 from ctr import AircraftTrack
@@ -23,6 +26,64 @@ def _brain_for(airfield, callsigns):
                     ground=airfield.ground, control=airfield.control,
                     gates=list(airfield.gates),
                     gate_locator=airfield.nearest_gate, airfield=airfield)
+
+
+def test_radio_policy_classifies_clearances_emergencies_and_resets():
+    b = AtcBrain()
+    b._say("cleared_land", "Colt 1")
+    assert b.take_radio_policy() == RADIO_ANSWER_POLICY
+    assert b.take_radio_policy() == RADIO_NORMAL_POLICY
+
+    b._say("go_around_traffic", "Colt 1")
+    assert b.take_radio_policy() == RADIO_EMERGENCY_POLICY
+
+    b._say("roger", "Colt 1")
+    assert b.take_radio_policy() == RADIO_NORMAL_POLICY
+
+
+def test_radio_policy_classifies_ma_readbacks_and_prompted_answers():
+    ma_readbacks = {
+        "departure_exit", "departure_exit_straight", "taxi", "taxi_parking",
+        "line_up", "takeoff", "lineup_readback", "cleared_land",
+        "cleared_overhead", "control_join", "control_join_nohdg",
+        "control_climb", "control_descend", "control_descend_step",
+        "ground_info", "ground_info_weather", "hold_short_traffic",
+    }
+    prompted_answers = {
+        "inbound_inside", "ground_info_readback", "readback_incomplete",
+        "say_again", "say_again_no_callsign", "tower_report_position",
+        "speed_position_unknown", "stingray_bullseye_challenge",
+        "stingray_angels_rounding", "stingray_angels_and_position",
+        "stingray_contact_control", "speed_restriction_ctr",
+    }
+    assert ma_readbacks | prompted_answers <= RADIO_ANSWER_KEYS
+    assert all(radio_policy_for_key(key) == RADIO_ANSWER_POLICY
+               for key in ma_readbacks | prompted_answers)
+
+
+def test_radio_policy_separates_safety_priority_from_normal_acknowledgments():
+    urgent = {
+        "go_around", "go_around_traffic", "go_around_ack",
+        "runway_incursion", "ctr_warning", "altitude_bust",
+        "emergency_not_implemented",
+    }
+    assert urgent <= RADIO_EMERGENCY_KEYS
+    assert all(radio_policy_for_key(key) == RADIO_EMERGENCY_POLICY
+               for key in urgent)
+    # A bare radar-contact acknowledgment requests no pilot response.
+    assert radio_policy_for_key("control_contact") == RADIO_NORMAL_POLICY
+    # These request a report at a later point in flight, not an immediate
+    # readback that should reserve the channel.
+    for key in ("report_runway_in_sight", "inbound_outside",
+                "inbound_via_gate", "tower_continue_entry",
+                "go_around_continue_circuit"):
+        assert radio_policy_for_key(key) == RADIO_NORMAL_POLICY
+
+
+def test_all_radio_policy_keys_have_phraseology_templates():
+    templates = AtcBrain().phraseology.templates
+    assert RADIO_ANSWER_KEYS <= templates.keys()
+    assert RADIO_EMERGENCY_KEYS <= templates.keys()
 
 
 # ---------- Radio channels (per-airfield) ----------
