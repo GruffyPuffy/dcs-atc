@@ -210,12 +210,15 @@
       "stingray": "Stingray",
       "stingray_frequency_mhz": 265.0,
       "address_lead_by_individual_callsign": true,
+      "magnetic_variation_deg": 6.0,
+      "map_rotation_deg": 5.4,
       "elevation_ft": 69,
       "active_runway": "15",
       "default_runway": "33",
       "ctr": {
         "ceiling_ft_agl": 1500,
         "radius_nm": 5.0,
+        "speed_limit_kt": 300,
         "reference": [
           43.11427,
           40.56978
@@ -255,29 +258,41 @@
       },
       "taxi_routes": {
         "15": {
-          "Ramp West": "Alpha Bravo",
-          "Ramp South": "Zulu Whiskey"
+          "Ramp South": "Alpha"
         },
         "33": {
-          "Ramp West": "Alpha Whiskey",
-          "Ramp South": "Zulu Echo"
+          "Ramp South": "Alpha Echo"
         }
       },
       "parking_routes": {
-        "Ramp West": "Alpha",
-        "Ramp South": "Zulu"
+        "Ramp South": "Alpha"
+      },
+      "parking_routes_by_exit": {
+        "C": {
+          "Ramp South": "Charlie Alpha"
+        },
+        "A": {
+          "Ramp South": "Alpha"
+        },
+        "E": {
+          "Ramp South": "Echo"
+        }
       },
       "parking_areas": {
-        "Ramp West": [
-          43.11631,
-          40.56084
-        ],
         "Ramp South": [
           43.1048,
           40.56896
         ]
       },
       "holding_points": {
+        "Holding C": [
+          43.119381,
+          40.566006
+        ],
+        "Holding A": [
+          43.124058,
+          40.562802
+        ],
         "Holding D": [
           43.11968,
           40.56718
@@ -298,7 +313,7 @@
         "atis": "21",
         "stingray": "3"
       },
-      "_attribution": "Gudauta (UG23) aerodrome chart, Hoggit DCS World Wiki (TERPS chart). Frequencies use the Master Arms common UHF channel plan (Ch 6 Ground 250.000, Ch 7 Tower 270.000, Ch 8 Control 257.000, Ch 21 ATIS 270.500) so every airfield shares one radio setup. Taxi routes are best-effort from the chart taxiway letters; verify."
+      "_attribution": "Gudauta (UG23) aerodrome chart, Hoggit DCS World Wiki (TERPS chart). VAD chart variation is 6°E (2010); 5.4° map rotation follows GEOREF.md. Frequencies use the Master Arms common UHF channel plan (Ch 6 Ground 250.000, Ch 7 Tower 270.000, Ch 8 Control 257.000, Ch 21 ATIS 270.500) so every airfield shares one radio setup. Taxi routes follow the chart taxiway letters; Holding A/C exit points are approximate coordinates derived from the georeferenced overlay. Verify in-sim."
     }
   }
 }

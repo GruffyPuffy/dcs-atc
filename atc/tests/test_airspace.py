@@ -359,6 +359,11 @@ def test_gudauta_loads_with_circular_ctr():
     assert af is not None
     assert af.active_runway == "15"
     assert af.frequency_mhz == 270.0  # MA common UHF Ch 7
+    assert af.ctr_speed_limit_kt == 300
+    assert af.magnetic_variation_deg == 6.0
+    assert af.map_rotation_deg == 5.4
+    assert af.arrival_tower_handoff_zone_angle_deg == 200
+    assert af.arrival_tower_handoff_zone_radius_nm == 5.0
     # circular CTR: the reference point is inside, a far point is outside
     assert af.ctr.contains(af.ctr.center_lat, af.ctr.center_lon, 1000)
     assert not af.ctr.contains(af.ctr.center_lat + 0.5, af.ctr.center_lon, 1000)
@@ -383,7 +388,25 @@ def test_gudauta_runway_geometry():
 def test_gudauta_holding_points():
     from airspace import Airspace
     af = Airspace.load().get("Gudauta")
-    assert set(af.holding_points) == {"Holding D", "Holding E", "Holding A/X"}
+    assert set(af.holding_points) == {
+        "Holding A", "Holding C", "Holding D", "Holding E", "Holding A/X"}
+
+
+def test_gudauta_uses_only_south_ramp_and_charted_taxiways():
+    from airspace import Airspace
+    af = Airspace.load().get("Gudauta")
+    assert set(af.parking_areas) == {"Ramp South"}
+    assert af.taxi_routes == {
+        "15": {"Ramp South": "Alpha"},
+        "33": {"Ramp South": "Alpha Echo"},
+    }
+    assert af.taxi_route(None, None, "15") == "Alpha"
+    assert af.taxi_route(None, None, "33") == "Alpha Echo"
+    for exit_name, route in {"A": "Alpha", "C": "Charlie Alpha",
+                             "E": "Echo"}.items():
+        pos = af.holding_points[f"Holding {exit_name}"]
+        assert af.nearest_holding_point(*pos) == f"Holding {exit_name}"
+        assert af.parking_route(*pos, "Ramp South") == route
 
 
 def test_pattern_zones_geometry_one_per_runway(airfield):
