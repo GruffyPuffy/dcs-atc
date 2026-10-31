@@ -2357,6 +2357,7 @@ class AtcBrain:
             pilot.phase = Phase.INBOUND
             pilot.cleared_landing = False
             pilot.pattern_flown = False
+            pilot.go_around_circuit = True
             pilot.landing_handoff_announced = False
             return self._say("touch_and_go_approved", callsign)
         # Accept a spoken exit report while still on Tower. A valid report

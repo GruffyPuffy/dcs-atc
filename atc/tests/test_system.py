@@ -1570,6 +1570,31 @@ def test_go_around_request_landing_stays_in_circuit(airfield, brain):
     assert pilot.cleared_landing
 
 
+def test_touch_and_go_request_landing_stays_in_circuit_without_airborne(
+        airfield, brain):
+    sc = _scenario(airfield, brain).on_final("25").set_alt(2000)
+    pilot = brain._pilot("Colt 1")
+    pilot.phase = Phase.LANDING
+    pilot.cleared_landing = True
+
+    approved = sc.say("Tower, Colt 1, request touch and go",
+                      Controller.TOWER)
+    assert "approved touch and go" in approved.lower()
+    assert pilot.go_around_circuit
+    assert not pilot.cleared_landing
+
+    reply = sc.say("Tower, Colt 1, request landing", Controller.TOWER)
+    assert "continue circuit" in reply.lower()
+    assert "report on final" in reply.lower()
+    assert "control zone entry" not in reply.lower()
+    assert not pilot.cleared_landing
+
+    clearance = sc.say("Tower, Colt 1, on final", Controller.TOWER)
+    assert "cleared to land" in clearance.lower()
+    assert pilot.cleared_landing
+    assert not pilot.go_around_circuit
+
+
 def test_debrief_runway_seven_taxi_readback_is_correct(airfield, brain):
     # "runway seven" (words, no leading zero) failed the check against
     # clearance "runway 07" -> "readback incomplete, I did not get your runway".
