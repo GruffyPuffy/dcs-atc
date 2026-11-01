@@ -697,6 +697,59 @@ def test_control_join_readback_descends(brain):
     assert brain.pilots["Colt 1"].descend_issued
 
 
+def _start_control_join_for_readback(brain, airfield):
+    import re
+    south = _track(airfield, airfield.ctr.center_lat - 0.3,
+                   airfield.ctr.center_lon, alt_ft=15000)
+    clearance = brain.handle("Control, Colt 1, inbound 35 miles south",
+                             track=south, controller=Controller.CONTROL)
+    heading = int(re.search(r"heading (\d{3})", clearance).group(1))
+    return south, heading
+
+
+def test_control_join_wrong_heading_gets_feedback_and_can_be_corrected(
+        brain, airfield):
+    south, heading = _start_control_join_for_readback(brain, airfield)
+    wrong_heading = (heading + 90) % 360
+    reply = brain.handle(
+        f"turn right heading {wrong_heading:03d} to join via Entry East, Colt 1",
+        track=south, controller=Controller.CONTROL)
+
+    assert "readback incomplete" in reply.lower()
+    assert "your heading" in reply.lower()
+    assert brain.pilots["Colt 1"].phase == Phase.INBOUND
+    assert not brain.pilots["Colt 1"].arrival_join_readback_complete
+    assert (brain.pilots["Colt 1"].descend_intermediate
+            or brain.pilots["Colt 1"].descend_issued)
+
+    corrected = brain.handle(
+        f"turn right heading {heading:03d} to join via Entry East, Colt 1",
+        track=south, controller=Controller.CONTROL)
+    assert "readback correct" in corrected.lower()
+    assert brain.pilots["Colt 1"].arrival_join_readback_complete
+
+
+def test_control_join_checks_turn_when_pilot_reads_one_back(brain, airfield):
+    south, heading = _start_control_join_for_readback(brain, airfield)
+    reply = brain.handle(
+        f"turn left heading {heading:03d} to join via Entry East, Colt 1",
+        track=south, controller=Controller.CONTROL)
+
+    assert "readback incomplete" in reply.lower()
+    assert "your turn" in reply.lower()
+    assert brain.pilots["Colt 1"].phase == Phase.INBOUND
+
+
+def test_control_join_readback_allows_omitting_turn_direction(brain, airfield):
+    south, heading = _start_control_join_for_readback(brain, airfield)
+    reply = brain.handle(
+        f"heading {heading:03d} to join via Entry East, Colt 1",
+        track=south, controller=Controller.CONTROL)
+
+    assert "readback incomplete" not in reply.lower()
+    assert brain.pilots["Colt 1"].arrival_join_readback_complete
+
+
 def test_control_descent_readback_uses_the_noun(brain):
     """A readback phrased "descent of 1,500 feet" is accepted silently.
 

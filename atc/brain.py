@@ -167,6 +167,15 @@ _FIGURE_CONTEXT_RE = re.compile(
     rf"((?:(?:{_FIGURE_WORD})\s*){{1,4}}(?:thousand)?)",
     re.IGNORECASE)
 
+# Departure check-ins also commonly report altitude as "at one thousand feet".
+# Keep this recognition scoped to an explicit altitude unit rather than treating
+# arbitrary spoken numbers after "at" as numeric context.
+_SPOKEN_ALTITUDE_WORD = rf"(?:{_FIGURE_WORD}|hundred|thousand)"
+_SPOKEN_ALTITUDE_REPORT_RE = re.compile(
+    rf"\bat\s+(?:\d+|{_SPOKEN_ALTITUDE_WORD}"
+    rf"(?:\s+{_SPOKEN_ALTITUDE_WORD})*)\s+(?:feet|ft)\b",
+    re.IGNORECASE)
+
 
 def _normalize_picture_transcription(text: str) -> str:
     """Repair two recurring Whisper variants inside BRA/marking calls."""
@@ -554,6 +563,10 @@ class PilotState:
     exit_gate: str = ""  # assigned departure exit point
     entry_gate: str = ""  # assigned arrival entry point
     arrival_join_issued: bool = False  # Control has assigned the inbound entry
+    arrival_join_heading: str = ""  # heading assigned in the current join
+    arrival_join_turn: str = ""  # left/right, or empty for fly heading
+    arrival_join_readback_complete: bool = False
+    arrival_join_readback_fails: int = 0
     vector_heading: str = ""  # latest assigned vector, used to consume readback
     vector_runway: str = ""
     departure_previous_range_nm: float | None = None
@@ -1367,6 +1380,63 @@ class AtcBrain:
         return self._say("readback_incomplete", callsign, agency=agency,
                          item=item)
 
+    def _remember_arrival_join(self, pilot: PilotState,
+                               heading: float | None,
+                               turn: str = "") -> None:
+        """Remember the assigned join values for its later pilot readback."""
+        pilot.arrival_join_heading = (
+            f"{self._cockpit_bearing(heading):03.0f}"
+            if heading is not None else "")
+        pilot.arrival_join_turn = turn or ""
+        pilot.arrival_join_readback_complete = False
+        pilot.arrival_join_readback_fails = 0
+
+    def _arrival_join_readback_feedback(self, callsign: str,
+                                        pilot: PilotState, low: str,
+                                        controller: Controller) -> str:
+        """Coach a wrong join heading/entry/turn without blocking the flow.
+
+        MA's readback example requires the assigned heading and entry. Turn
+        direction is checked when the pilot says one, but is not required in
+        the readback. A wrong readback gets feedback while the arrival state
+        continues to its next instruction.
+        """
+        if pilot.arrival_join_readback_complete:
+            return ""
+        if pilot.arrival_join_heading:
+            turn_clause = (f"turn {pilot.arrival_join_turn} "
+                           if pilot.arrival_join_turn else "fly ")
+            clearance = (f"{turn_clause}heading "
+                         f"{pilot.arrival_join_heading} to join via "
+                         f"{pilot.entry_gate}")
+        else:
+            clearance = f"join via {pilot.entry_gate}"
+        item = self._readback_item(low, clearance)
+        if pilot.arrival_join_heading:
+            spoken = self._numbers(self.callsigns.strip(low))
+            expected_heading = (pilot.arrival_join_heading.lstrip("0") or "0")
+            if not any((number.lstrip("0") or "0") == expected_heading
+                       for number in spoken):
+                item = "heading"
+        said_turn = re.search(r"\b(?:turn\s+)?(left|right)\b", low)
+        if (item is None and said_turn
+                and said_turn.group(1) != pilot.arrival_join_turn):
+            item = "turn"
+        pilot.last_readback = True
+        if item is None:
+            corrected = pilot.arrival_join_readback_fails > 0
+            pilot.arrival_join_readback_fails = 0
+            pilot.arrival_join_readback_complete = True
+            if corrected:
+                return self._say("readback_correct", callsign,
+                                 agency=self._agency(controller))
+            return ""
+        pilot.arrival_join_readback_fails += 1
+        if item == "clearance":
+            item = "entry"
+        return self._say("readback_incomplete", callsign,
+                         agency=self._agency(controller), item=item)
+
     def _readback_coaching(self, callsign, pilot, low, clearance,
                            controller) -> str:
         """A readback-incomplete note for a clearance that is issued regardless.
@@ -2036,6 +2106,10 @@ class AtcBrain:
         pilot.exit_gate = ""
         pilot.entry_gate = ""
         pilot.arrival_join_issued = False
+        pilot.arrival_join_heading = ""
+        pilot.arrival_join_turn = ""
+        pilot.arrival_join_readback_complete = False
+        pilot.arrival_join_readback_fails = 0
         pilot.vector_heading = ""
         pilot.vector_runway = ""
         pilot.arrival_previous_range_nm = None
@@ -2709,10 +2783,12 @@ class AtcBrain:
                 heading = self.airfield.join_heading(track.lat, track.lon,
                                                      requested)
             if heading is None:
+                self._remember_arrival_join(pilot, None)
                 pilot.arrival_join_issued = True
                 return self._say("control_join_requested_nohdg", callsign,
                                  gate=requested)
             turn = self._join_turn(track, heading)
+            self._remember_arrival_join(pilot, heading, turn)
             key = ("control_join_requested" if turn
                    else "control_join_requested_straight")
             pilot.arrival_join_issued = True
@@ -2742,9 +2818,11 @@ class AtcBrain:
                 heading = self.airfield.join_heading(track.lat, track.lon,
                                                      gate)
             if heading is None:
+                self._remember_arrival_join(pilot, None)
                 pilot.arrival_join_issued = True
                 return self._say("control_join_nohdg", callsign, gate=gate)
             turn = self._join_turn(track, heading)
+            self._remember_arrival_join(pilot, heading, turn)
             key = "control_join" if turn else "control_join_straight"
             pilot.arrival_join_issued = True
             return self._say(key, callsign, gate=gate,
@@ -2761,6 +2839,12 @@ class AtcBrain:
         if pilot.phase == Phase.INBOUND and re.search(
                 r"\b(join|via|heading|turn|descend\w*|descent|maintain\w*|"
                 r"level(?:ling|ling off)?|1500?|5000?)\b", low):
+            join_feedback = ""
+            if (pilot.arrival_join_issued
+                    and not pilot.arrival_join_readback_complete
+                    and re.search(r"\b(join|via|entry|heading|turn)\b", low)):
+                join_feedback = self._arrival_join_readback_feedback(
+                    callsign, pilot, low, Controller.CONTROL)
             if not pilot.descend_issued:
                 # Step the descent by distance: far out -> an intermediate
                 # altitude; close to the entry -> the final 1500 ft. The
@@ -2774,10 +2858,12 @@ class AtcBrain:
                 if pilot.descend_readback:
                     # Already read back the descent plan. The monitor handles
                     # the assigned entry lead-in zone and late fallbacks.
-                    return ""
-                return self._descend_reply(callsign, pilot, track)
+                    return join_feedback
+                descent = self._descend_reply(callsign, pilot, track)
+                return (f"{join_feedback} {descent}".strip()
+                        if join_feedback else descent)
             pilot.descend_readback = True
-            return ""
+            return join_feedback
         # Already inbound / handed off, and the pilot reports being at or near
         # the entry point -> hand to Tower. NEVER re-issue the join here: once
         # the join has been given, an "entry" mention must not loop the arrival
@@ -2830,9 +2916,11 @@ class AtcBrain:
             if track is not None and self.airfield is not None:
                 heading = self.airfield.join_heading(track.lat, track.lon, gate)
             if heading is None:
+                self._remember_arrival_join(pilot, None)
                 pilot.arrival_join_issued = True
                 return self._say("control_join_nohdg", callsign, gate=gate)
             turn = self._join_turn(track, heading)
+            self._remember_arrival_join(pilot, heading, turn)
             key = "control_join" if turn else "control_join_straight"
             pilot.arrival_join_issued = True
             return self._say(key, callsign, gate=gate,
@@ -2843,9 +2931,10 @@ class AtcBrain:
         # climb — a readback or a follow-up level report ("climbing angels 15",
         # "at angels 16") is acknowledged, not re-cleared, so the pilot is not
         # handed an endless "climb to Angels 15".
-        if re.search(r"\b(airborne|climbing|climb|departing|departed|level|"
-                     r"angels|on the way|at \d+|checking in|with you|"
-                     r"ready to climb)\b", low):
+        if (re.search(r"\b(airborne|climbing|climb|departing|departed|level|"
+                      r"angels|on the way|at \d+|checking in|with you|"
+                      r"ready to climb)\b", low)
+                or _SPOKEN_ALTITUDE_REPORT_RE.search(low)):
             # A departure stays a departure: it must NOT be flipped to Inbound
             # here, or Control would treat the outbound leg as an arrival
             # (debrief 2026-10-22: the post-takeoff check-in moved the pilot
@@ -2900,6 +2989,7 @@ class AtcBrain:
             pilot.cleared_inbound = True
             gate = self._pick_entry_gate(track, low, pilot)
             pilot.entry_gate = gate
+            self._remember_arrival_join(pilot, None)
             return self._say("control_join_nohdg", callsign, gate=gate)
         # Initial Control check-in, bare: "Kutaisi Control, Adder11" (Master Arms
         # kneeboard page 2, step 1) -> "Adder11, Control". Answer it instead of
@@ -3273,6 +3363,8 @@ class AtcBrain:
         pilot.departure_previous_bearing_deg = None
         pilot.control_checkin_received = False
         pilot.climb_issued = False
+        pilot.arrival_join_issued = False
+        self._remember_arrival_join(pilot, None)
         pilot.parking_cleared = False
         turnout = self._takeoff_turnout(pilot)
         if turnout == "right":
