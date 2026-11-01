@@ -621,6 +621,9 @@ class MapService:
         self._spawn_callsigns: dict[str, str] = {}
         self._spawn_debug_markers: dict[str, list[dict]] = {}
         self._debug_markers: list[dict] = []
+        # Live view only shows markers recorded since its most recent return
+        # from replay. The full list remains available for debrief saving.
+        self._live_debug_marker_start = 0
         self._replay_debug_markers: list[dict] = []
         self._last_saved = 0.0
         existed = self.tracks_file is not None and self.tracks_file.is_file()
@@ -778,7 +781,8 @@ class MapService:
 
     def _visible_debug_markers(self) -> list[dict]:
         """Flatten session/replay marker positions for the map overlay."""
-        source = self._replay_debug_markers if self.replay else self._debug_markers
+        source = (self._replay_debug_markers if self.replay else
+                  self._debug_markers[self._live_debug_marker_start:])
         out = []
         for marker in source:
             if isinstance(marker.get("positions"), dict):
@@ -1005,6 +1009,9 @@ class MapService:
     def unload_debrief(self) -> dict:
         """Return the display to live data without changing recording state."""
         with self.lock:
+            # Keep historical DEBUG markers in saved debriefs, but start a
+            # fresh live-map view from this point onward.
+            self._live_debug_marker_start = len(self._debug_markers)
             self._replay_tracks = None
             self._replay_chatter = []
             self._replay_debug_markers = []
