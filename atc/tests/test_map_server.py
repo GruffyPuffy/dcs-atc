@@ -785,6 +785,16 @@ def _assert_picture_overlay_review_contract(js):
     assert b"Actual ${call.point}:" in js
     assert b"actualAngelsAt" in js
     assert b"name === 'kutasi'" in js
+    # Viewer accepts the report forms seen in the Empress transcript and does
+    # not silently discard an unfamiliar reference name. If the recorded
+    # position does not uniquely identify a reference, its overlay is labelled
+    # as a possible reference rather than presented as verified.
+    assert b"bulls?|marking" in js
+    assert r"f\s*[-–—]\s*(\d{1,3})".encode() in js
+    assert b"marking\\\\s*,\\\\s*([a-z']+)" in js
+    assert b"const refs = []" in js
+    assert b"referenceCertain = fits.length === 1" in js
+    assert "Possible reference · ".encode() in js
 
     # All arrow parts and the actual-position ring are independently clickable.
     assert b"`${popupKeyBase}|line`" in js

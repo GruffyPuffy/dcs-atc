@@ -63,7 +63,8 @@ RADIO_ANSWER_KEYS = frozenset({
     "ground_info", "ground_info_weather", "ground_info_readback",
     "readback_incomplete", "say_again", "say_again_no_callsign",
     "speed_position_unknown", "speed_restriction_ctr",
-    "stingray_bullseye_challenge", "stingray_angels_rounding",
+    "stingray_bullseye_challenge", "stingray_marking_unclear",
+    "stingray_angels_rounding",
     "stingray_angels_and_position",
 })
 
@@ -178,12 +179,31 @@ _SPOKEN_ALTITUDE_REPORT_RE = re.compile(
 
 
 def _normalize_picture_transcription(text: str) -> str:
-    """Repair two recurring Whisper variants inside BRA/marking calls."""
-    if not re.search(r"\b(bull'?s?eye|marking)\b", text, re.IGNORECASE):
+    """Repair common Whisper punctuation/wording inside BRA calls."""
+    if not re.search(r"\b(bull'?s?eye|bulls?|marking)\b", text,
+                     re.IGNORECASE):
         return text
     # Whisper sometimes hears "marking bulls" as "marking balls". In a
     # marking/BRA report, that is the bullseye reference, not a named point.
     text = re.sub(r"\b(marking\s+)balls?\b", r"\1bulls", text,
+                  flags=re.IGNORECASE)
+    # Whisper sometimes inserts a comma after "marking" and between each
+    # spoken digit: "marking, Kutaisi, one, three, five, four, eight miles".
+    # Fold this constrained named-point form into the normal BRA grammar.
+    def normalize_named_marking(match: re.Match) -> str:
+        bearing = _spoken_figure(match.group(2).replace(",", " "))
+        distance = _spoken_figure(match.group(3).replace(",", " "))
+        if not bearing or not distance:
+            return match.group(0)
+        return f"marking {match.group(1)} {bearing} for {distance}"
+
+    text = re.sub(r"\bmarking\s*,\s*([a-z']+)\s*,\s*"
+                  r"([a-z']+(?:\s*,\s*[a-z']+){2})"
+                  r"\s*,\s*([a-z']+(?:\s*,\s*[a-z']+){0,2})"
+                  r"(?=\s+(?:miles?|nm)\b)",
+                  normalize_named_marking, text, flags=re.IGNORECASE)
+    # The radio phrase "for thirty" is often transcribed as "F-30".
+    text = re.sub(r"\bf\s*[-–—]\s*(\d{1,3})\b", r"for \1", text,
                   flags=re.IGNORECASE)
     # "angels fifteen" is occasionally transcribed as "in just fifteen".
     # Keep this repair scoped to picture calls so ordinary speech is untouched.
@@ -278,7 +298,8 @@ def _fold_spoken_figures(text: str) -> str:
 # pass so the range cannot be mistaken for the bearing (a separate range pass
 # would match the comma *before* the bearing and strip its leading zero).
 _BULLSEYE_FOLD_RE = re.compile(
-    rf"\b(bull'?s?eye|marking)((?:\s+(?!(?:{_FIGURE_WORD})\b)[a-z]+)?)"
+    rf"\b(bull'?s?eye|bulls?|marking)"
+    rf"((?:\s+(?!(?:{_FIGURE_WORD})\b)[a-z]+)?)"
     rf"([\s,]+)((?:(?:{_FIGURE_WORD})\s*){{1,4}})"
     rf"(?:(for|at|,)([\s,]*)((?:(?:{_FIGURE_WORD})\s*){{1,4}}))?",
     re.IGNORECASE)
@@ -294,7 +315,8 @@ def _fold_bullseye_figures(text: str) -> str:
     "angels five"), and only when the transmission is a bullseye/marking call —
     the range context ("for"/"at"/",") is far too common to fold globally.
     """
-    if not re.search(r"\b(bull'?s?eye|marking)\b", text, re.IGNORECASE):
+    if not re.search(r"\b(bull'?s?eye|bulls?|marking)\b", text,
+                     re.IGNORECASE):
         return text
 
     def merge(match: "re.Match") -> str:
@@ -350,7 +372,8 @@ def _stem(word: str) -> str:
 # the map server can parse the same call for its debug overlay (one parser, so
 # the drawn arrow can never disagree with what the brain checked).
 _BULLSEYE_CALL_RE = re.compile(
-    r"\bbull'?s?eye\b\s*,?\s*(\d{2,3})\s*(?:for|at|,)\s*(\d{1,3})")
+    r"\b(?:bull'?s?eye|bulls?)\b\s*,?\s*(\d{2,3})"
+    r"\s*,?\s*(?:for|at|,)\s*(\d{1,3})")
 _ANGELS_RE = re.compile(r"\bangels\s*,?\s*(\d{1,3})\b")
 # An exact-altitude statement: "angels 15703", "15703 feet", "15703 tf". The SOP
 # wants whole thousands ("angels 16"); reading the digits off the altimeter is a
@@ -364,7 +387,8 @@ _EXACT_ALT_RE = re.compile(
 # separator is "for"/"at" or just a comma (Mags' "marking bull, 077, 440").
 # Matched against the folded text, so spoken figures work too.
 _MARKING_RE = re.compile(
-    r"\bmarking\s+([a-z']+)\s*,?\s*(\d{2,3})\s*(?:for|at|,)\s*(\d{1,3})\b")
+    r"\bmarking\s*,?\s*([a-z']+)\s*,?\s*(\d{2,3})"
+    r"\s*,?\s*(?:for|at|,)\s*(\d{1,3})\b")
 # The words a pilot uses for the bullseye itself, as opposed to a named point.
 _BULLSEYE_WORDS = {"bull", "bulls", "bullseye", "bull's", "bulls'", "bullseye's"}
 
@@ -550,6 +574,9 @@ class PilotState:
     # The pilot is flying the circuit after a go-around/touch-and-go. Keep
     # landing requests in this flow until a fresh landing clearance is issued.
     go_around_circuit: bool = False
+    # Tower approved a touch-and-go and is waiting for the aircraft to report
+    # airborne/on-the-go before treating a later final as a full-stop landing.
+    touch_and_go_pending: bool = False
     descend_issued: bool = False  # Control has issued the descent to 1500 ft
     descend_intermediate: bool = False  # Control issued the far-out step-down
     climb_issued: bool = False  # Control has issued the departure climb
@@ -2098,6 +2125,7 @@ class AtcBrain:
         pilot.pattern_flown = False
         pilot.go_around_issued = False
         pilot.go_around_circuit = False
+        pilot.touch_and_go_pending = False
         pilot.descend_issued = False
         pilot.descend_intermediate = False
         pilot.climb_issued = False
@@ -2158,6 +2186,7 @@ class AtcBrain:
         pilot.break_cleared = False
         pilot.pattern_flown = False
         pilot.go_around_circuit = False
+        pilot.touch_and_go_pending = False
         pilot.descend_issued = False
         pilot.descend_intermediate = False
         pilot.awaiting_takeoff = False
@@ -2466,6 +2495,9 @@ class AtcBrain:
             pilot.pattern_flown = False
             pilot.go_around_issued = True
             pilot.go_around_circuit = True
+            # The airborne/on-the-go report confirms the next circuit has
+            # started; only then may that circuit receive a full-stop clearance.
+            pilot.touch_and_go_pending = False
             pilot.landing_handoff_announced = False
             if repeated:
                 return ""
@@ -2488,11 +2520,19 @@ class AtcBrain:
                 pilot.pattern_flown = False
                 pilot.go_around_issued = True
                 pilot.go_around_circuit = True
+                pilot.touch_and_go_pending = False
+                pilot.awaiting_landing = False
+                pilot.landing_ready_announced = False
                 return self._say("go_around_traffic", callsign)
-            pilot.phase = Phase.INBOUND
+            # Tower retains the aircraft in the pattern; this is not a
+            # full-stop landing clearance.
+            pilot.phase = Phase.LANDING
             pilot.cleared_landing = False
             pilot.pattern_flown = False
             pilot.go_around_circuit = True
+            pilot.touch_and_go_pending = True
+            pilot.awaiting_landing = False
+            pilot.landing_ready_announced = False
             pilot.landing_handoff_announced = False
             return self._say("touch_and_go_approved", callsign)
         # Accept a spoken exit report while still on Tower. A valid report
@@ -2707,6 +2747,10 @@ class AtcBrain:
         # Bare "final" is accepted so a clipped "Adder 1 final" still works;
         # "turning final" already returned above.
         if re.search(r"\b(on final|short final|final)\b", low):
+            # The touch-and-go clearance already authorizes this approach. A
+            # full-stop landing clearance belongs to a later circuit.
+            if pilot.touch_and_go_pending:
+                return ""
             # After the clearance (voice or radar), "on final" is just a
             # status report — the pilot confirming what we already cleared.
             # Stay silent (Master Arms: no extra comms after the readback).
@@ -2742,7 +2786,8 @@ class AtcBrain:
         if re.search(r"\binbound\b|\bon approach\b|\blanding\b|\bentry\b|"
                      r"\brequest(?:ing)?\s+(?:to\s+)?land\b|\bready to land\b|"
                      r"\brequest\s+landing\b", low):
-            if pilot.go_around_circuit and pilot.phase == Phase.INBOUND:
+            if pilot.go_around_circuit and pilot.phase in (
+                    Phase.INBOUND, Phase.LANDING):
                 return self._say("go_around_continue_circuit", callsign)
             pilot.phase = Phase.INBOUND
             pilot.cleared_inbound = True
@@ -3151,6 +3196,18 @@ class AtcBrain:
           bullseye; a point we do not know is acknowledged without a check
           rather than guessed at.
         """
+        # Do not let an unparsed BRA fall through to the generic "radar
+        # contact" acknowledgment: that sounds like a position check passed.
+        if (re.search(r"\bmarking\b", low)
+                and parse_marking_call(low) is None):
+            return self._say("stingray_marking_unclear", callsign,
+                             airfield=self.airfield.name
+                             if self.airfield else "the airfield")
+        if (re.search(r"\bbulls?\b", low)
+                and parse_bullseye_call(low) is None):
+            return self._say("stingray_marking_unclear", callsign,
+                             airfield=self.airfield.name
+                             if self.airfield else "the airfield")
         exact = parse_exact_altitude(low)
         if exact is not None:
             # The altitude format was wrong; the position may still be off, so
@@ -3158,12 +3215,20 @@ class AtcBrain:
             # not be said on the radio).
             rounded = f"{round(exact / 1000.0):.0f}"
             off = self._verify_picture(callsign, low, track)
+            if off and off.get("reference_unclear"):
+                return self._say("stingray_marking_unclear", callsign,
+                                 airfield=self.airfield.name
+                                 if self.airfield else "the airfield")
             if off:
                 return self._say("stingray_angels_and_position", callsign,
                                  angels=rounded, **off)
             return self._say("stingray_angels_rounding", callsign,
                              angels=rounded)
         off = self._verify_picture(callsign, low, track)
+        if off and off.get("reference_unclear"):
+            return self._say("stingray_marking_unclear", callsign,
+                             airfield=self.airfield.name
+                             if self.airfield else "the airfield")
         if off:
             return self._say("stingray_bullseye_challenge", callsign, **off)
         return self._say("stingray_radar_contact", callsign)
@@ -3176,21 +3241,47 @@ class AtcBrain:
         ``angels``) when the position is off, or None when it checks out or
         states no position we can verify (the caller then acknowledges).
         """
-        if track is None:
-            return None
         marking = parse_marking_call(low)
         if marking is not None:
             name, reported_bearing, reported_range = marking
             reported_variants = _picture_bra_variants(reported_bearing,
                                                        reported_range)
             point = self._resolve_point(name)
+            if point is None:
+                if track is None:
+                    return {"reference_unclear": True}
+                possible = [self._resolve_point("bullseye")]
+                if self.airfield is not None:
+                    possible.append(self._resolve_point(
+                        self.airfield.name.lower()))
+                possible = [candidate for candidate in possible if candidate]
+                matching_points = []
+                for candidate in possible:
+                    _, (plat, plon) = candidate
+                    bearing, distance = bearing_distance(
+                        plat, plon, track.lat, track.lon)
+                    bearing = self._cockpit_bearing(bearing)
+                    if any(
+                        abs((candidate_bearing - bearing + 180) % 360 - 180)
+                        <= BULLSEYE_TOLERANCE_DEG
+                        and abs(candidate_range - distance)
+                        <= BULLSEYE_TOLERANCE_NM
+                        for candidate_bearing, candidate_range
+                        in reported_variants
+                    ):
+                        matching_points.append(candidate)
+                point = matching_points[0] if len(matching_points) == 1 else None
+                if point is None:
+                    return {"reference_unclear": True}
         else:
             reported_variants = _picture_call_variants(low)
             if not reported_variants:
                 return None
             point = self._resolve_point("bullseye")
-        if point is None:
+        if track is None:
             return None
+        if point is None:
+            return {"reference_unclear": True}
         label, (plat, plon) = point
         bearing, distance = bearing_distance(plat, plon, track.lat, track.lon)
         # The pilot reports BRA in cockpit units (true − variation − rotation,
@@ -3926,9 +4017,10 @@ class AtcBrain:
         the takeoff clearance works (`check_lineup`): the pilot's calls arm
         the flow, the radar delivers the clearance.
 
-        Fires once per approach (re-arms on a go-around / touch-and-go, when
-        the phase returns to Inbound). Without a live track we do nothing —
-        the pilot's "on final" call remains the fallback path.
+        Fires once per approach. A pending approved touch-and-go suppresses
+        this full-stop clearance until the pilot reports airborne/on-the-go;
+        the next circuit then re-arms normally. Without a live track we do
+        nothing — the pilot's "on final" call remains the fallback path.
 
         The phase gate accepts both arrival phases: INBOUND (straight-in or
         radar arrival) and LANDING (post-OHB — the break clearance puts the
@@ -3952,6 +4044,7 @@ class AtcBrain:
         """
         pilot = self._pilot(callsign)
         if (track is None or self.airfield is None
+                or pilot.touch_and_go_pending
                 or pilot.phase not in (Phase.INBOUND, Phase.LANDING)
                 or not pilot.break_cleared or pilot.cleared_landing):
             return None
@@ -3992,6 +4085,7 @@ class AtcBrain:
         """
         pilot.phase = Phase.LANDING
         pilot.go_around_circuit = False
+        pilot.touch_and_go_pending = False
         pilot.cleared_landing = True
         pilot.awaiting_landing = False
         pilot.landing_ready_announced = False
@@ -4021,6 +4115,7 @@ class AtcBrain:
             pilot.cleared_landing = False
             pilot.pattern_flown = False
             pilot.go_around_circuit = True
+            pilot.touch_and_go_pending = False
             pilot.landing_handoff_announced = False
             key = ("go_around_traffic" if self._traffic_on_runway(traffic)
                    else "go_around")

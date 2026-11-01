@@ -7,6 +7,7 @@ from brain import (AtcBrain, Controller, INCURSION_POLLS, Phase, Phraseology,
                    RADIO_EMERGENCY_KEYS, RADIO_EMERGENCY_POLICY,
                    RADIO_NORMAL_POLICY, radio_policy_for_key,
                    _fold_bullseye_figures, _fold_spoken_figures,
+                   _normalize_picture_transcription,
                    _spoken_figure, parse_bullseye_call, parse_marking_call)
 from ctr import AircraftTrack
 
@@ -1405,9 +1406,11 @@ def test_touch_and_go_request_is_cleared_and_rearms_next_circuit(brain):
     reply = brain.handle("Tower, Colt 1, request touch and go",
                          controller=Controller.TOWER)
     assert "approved touch and go" in reply.lower()
-    assert pilot.phase == Phase.INBOUND
+    assert pilot.phase == Phase.LANDING
     assert not pilot.cleared_landing
     assert not pilot.pattern_flown
+    assert pilot.touch_and_go_pending
+    assert pilot.go_around_circuit
     assert not pilot.landing_handoff_announced
 
 
@@ -1418,6 +1421,39 @@ def test_touch_and_go_readback_is_silent(brain):
                          controller=Controller.TOWER)
     assert reply == ""
     assert pilot.phase == Phase.INBOUND
+
+
+def test_touch_and_go_blocks_radar_and_voice_landing_until_airborne(
+        brain, airfield):
+    pilot = _airborne(brain, phase=Phase.LANDING)
+    pilot.break_cleared = True
+    pilot.cleared_landing = True
+    reply = brain.handle("Tower, Colt 1, request touch and go",
+                         controller=Controller.TOWER)
+    assert "approved touch and go" in reply.lower()
+    assert pilot.touch_and_go_pending
+    assert not pilot.cleared_landing
+
+    inbound = _inbound_bearing(airfield)
+    turn = _track_on(airfield, (inbound + 90) % 360, 2.0)
+    final = _track_on(airfield, inbound, 2.9)
+    pilot.pattern_flown = True  # radar observed the turn in this approach
+    assert brain.check_landing_clearance("Colt 1", final) is None
+    assert brain.handle("Colt 1, on final", final,
+                        controller=Controller.TOWER) == ""
+    assert not pilot.cleared_landing
+
+    # The airborne report marks the end of the approved touch-and-go and
+    # starts a new circuit. Radar must observe a new turn before clearing.
+    reply = brain.handle("Tower, Colt 1, airborne", controller=Controller.TOWER)
+    assert "continue climbing" in reply.lower()
+    assert not pilot.touch_and_go_pending
+    assert not pilot.pattern_flown
+    assert brain.check_landing_clearance("Colt 1", final) is None
+    assert brain.check_landing_clearance("Colt 1", turn) is None
+    clearance = brain.check_landing_clearance("Colt 1", final)
+    assert clearance and "cleared to land" in clearance.lower()
+    assert pilot.cleared_landing
 
 
 # ---------- Traffic sequencing (players + AI) ----------
@@ -3700,18 +3736,72 @@ def test_marking_a_named_point_is_verified_against_the_airfield(brain):
     assert "Kutaisi" in reply
 
 
-def test_marking_an_unknown_point_is_acknowledged_not_guessed(brain):
-    # A point the trainer does not know (another airfield) is acknowledged
-    # without a check — verifying against a guess would teach the wrong number.
+def test_marking_unknown_point_can_be_inferred_from_unique_position(brain):
+    # Some STT results replace the reference with a nonsense word. Infer only
+    # when exactly one supported reference agrees with recorded aircraft pos.
+    from scenario import _bearing_range_point
     from ctr import AircraftTrack
+    brain.cockpit_bearing_offset_deg = 0
+    brain.set_bullseye(42.05, 42.40)
+    _stingray(brain)
+    lat, lon = _bearing_range_point(42.05, 42.40, 75, 30)
+    track = AircraftTrack(callsign="Colt 1", inside=False, lat=lat, lon=lon,
+                          alt_ft=5000.0, distance_nm=20.0,
+                          relative="southwest", heading=200.0)
+    reply = brain.handle("Stingray, Colt 1, marking Rolls 075 for 30, angels 5",
+                         controller=Controller.STINGRAY, track=track)
+    assert "radar contact" in reply.lower()
+    assert "negative" not in reply.lower()
+
+
+def test_marking_unknown_point_requests_clarification_when_no_reference_fits(brain):
+    from ctr import AircraftTrack
+    brain.set_bullseye(42.05, 42.40)
     _stingray(brain)
     track = AircraftTrack(callsign="Colt 1", inside=False, lat=42.0, lon=42.2,
                           alt_ft=5000.0, distance_nm=20.0,
                           relative="southwest", heading=200.0)
-    reply = brain.handle("Stingray, Colt 1, marking Batumi 200 for 20, angels 5",
-                         controller=Controller.STINGRAY, track=track)
-    assert "radar contact" in reply.lower()
-    assert "negative" not in reply.lower()
+    reply = brain.handle(
+        "Stingray, Colt 1, marking Batumi 200 for 20, angels 5",
+        controller=Controller.STINGRAY, track=track)
+    assert "say the reference again" in reply.lower()
+    assert "bulls or kutaisi" in reply.lower()
+    assert "radar contact" not in reply.lower()
+
+
+def test_recorded_bulls_f30_picture_call_is_accepted(brain):
+    from scenario import _bearing_range_point
+    brain.cockpit_bearing_offset_deg = 0
+    brain.set_bullseye(42.05, 42.40)
+    lat, lon = _bearing_range_point(42.05, 42.40, 55, 30)
+    track = _track(brain.airfield, lat, lon, alt_ft=15000)
+    _stingray(brain)
+    reply = brain.handle(
+        "Stingray, Colt 1, Bulls 055, F-30, Angels 15",
+        controller=Controller.STINGRAY, track=track)
+    assert "radar contact" in reply.lower(), reply
+
+
+def test_recorded_comma_separated_marking_transcript_is_accepted(brain, airfield):
+    from scenario import _bearing_range_point
+    brain.cockpit_bearing_offset_deg = 0
+    lat, lon = _bearing_range_point(airfield.ctr.center_lat,
+                                    airfield.ctr.center_lon, 135, 48)
+    track = _track(airfield, lat, lon, alt_ft=15000)
+    _stingray(brain)
+    reply = brain.handle(
+        "Stingray, Colt 1, marking, Kutaisi, one, three, five, four, "
+        "eight miles, angels fifteen",
+        controller=Controller.STINGRAY, track=track)
+    assert "radar contact" in reply.lower(), reply
+
+
+def test_picture_transcription_repairs_stt_forms():
+    bulls = _normalize_picture_transcription("Bulls 055, F-30, Angels 15")
+    assert "Bulls 055, for 30, Angels 15" == bulls
+    marking = _normalize_picture_transcription(
+        "marking, Kutaisi, one, three, five, four, eight miles")
+    assert marking == "marking Kutaisi 135 for 48 miles"
 
 
 def test_exact_altitude_is_coached_to_round(brain):

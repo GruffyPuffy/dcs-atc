@@ -1570,29 +1570,84 @@ def test_go_around_request_landing_stays_in_circuit(airfield, brain):
     assert pilot.cleared_landing
 
 
-def test_touch_and_go_request_landing_stays_in_circuit_without_airborne(
+def test_touch_and_go_then_full_stop_landing_in_next_circuit(
         airfield, brain):
     sc = _scenario(airfield, brain).on_final("25").set_alt(2000)
     pilot = brain._pilot("Colt 1")
     pilot.phase = Phase.LANDING
     pilot.cleared_landing = True
+    pilot.break_cleared = True
 
     approved = sc.say("Tower, Colt 1, request touch and go",
                       Controller.TOWER)
     assert "approved touch and go" in approved.lower()
     assert pilot.go_around_circuit
+    assert pilot.touch_and_go_pending
     assert not pilot.cleared_landing
 
+    # The clearance applies to this approach. A radar pass over final and a
+    # voice final report must not overwrite it with a full-stop clearance.
+    sc.on_final("25", nm=2.0)
+    pilot.pattern_flown = True
+    assert brain.check_landing_clearance("Colt 1", sc._track()) is None
+    assert sc.say("Tower, Colt 1, on final", Controller.TOWER) == ""
+    assert not pilot.cleared_landing
+
+    # A downwind request before the airborne report still stays in the
+    # circuit; it is not treated as a fresh arrival from Entry West.
+    sc.say("Tower, Colt 1, downwind right runway 25", Controller.TOWER)
     reply = sc.say("Tower, Colt 1, request landing", Controller.TOWER)
     assert "continue circuit" in reply.lower()
     assert "report on final" in reply.lower()
-    assert "control zone entry" not in reply.lower()
+    assert "entry" not in reply.lower()
     assert not pilot.cleared_landing
+    assert pilot.touch_and_go_pending
 
+    # The pilot's on-the-go report completes the T&G phase. The next circuit
+    # can now receive an ordinary landing clearance.
+    sc.say("Tower, Colt 1, airborne", Controller.TOWER)
+    sc.say("Tower, Colt 1, downwind right runway 25", Controller.TOWER)
+    sc.on_final("25", nm=2.0)
     clearance = sc.say("Tower, Colt 1, on final", Controller.TOWER)
     assert "cleared to land" in clearance.lower()
     assert pilot.cleared_landing
-    assert not pilot.go_around_circuit
+    assert not pilot.touch_and_go_pending
+
+
+def test_can_request_another_touch_and_go_from_downwind(airfield, brain):
+    sc = _scenario(airfield, brain).on_final("25").set_alt(2000)
+    pilot = brain._pilot("Colt 1")
+    pilot.phase = Phase.LANDING
+    pilot.break_cleared = True
+    pilot.cleared_landing = True
+
+    # First touch-and-go.
+    approved = sc.say("Tower, Colt 1, request touch and go",
+                      Controller.TOWER)
+    assert "approved touch and go" in approved.lower()
+    assert pilot.touch_and_go_pending
+    sc.say("Tower, Colt 1, airborne", Controller.TOWER)
+
+    # On the following downwind, the pilot may request another T&G for
+    # training. It must start a fresh pending T&G authorization.
+    sc.say("Tower, Colt 1, downwind right runway 25", Controller.TOWER)
+    approved = sc.say("Tower, Colt 1, request touch and go",
+                      Controller.TOWER)
+    assert "approved touch and go" in approved.lower()
+    assert pilot.touch_and_go_pending
+    assert not pilot.cleared_landing
+
+    # Complete the second T&G and request a full-stop landing on a later
+    # circuit.
+    sc.say("Tower, Colt 1, airborne", Controller.TOWER)
+    sc.say("Tower, Colt 1, downwind right runway 25", Controller.TOWER)
+    reply = sc.say("Tower, Colt 1, request landing", Controller.TOWER)
+    assert "continue circuit" in reply.lower()
+    assert "entry" not in reply.lower()
+    sc.on_final("25", nm=2.0)
+    clearance = sc.say("Tower, Colt 1, on final", Controller.TOWER)
+    assert "cleared to land" in clearance.lower()
+    assert pilot.cleared_landing
 
 
 def test_debrief_runway_seven_taxi_readback_is_correct(airfield, brain):

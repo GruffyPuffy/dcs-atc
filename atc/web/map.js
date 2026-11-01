@@ -450,9 +450,21 @@ function spokenFigure(phrase) {
 
 function normalizePictureSpeech(text) {
   // Repair common Whisper variants only when this is a BRA/marking call.
-  if (!/\b(bull'?s?eye|marking)\b/i.test(text || '')) return text || '';
+  if (!/\b(bull'?s?eye|bulls?|marking)\b/i.test(text || '')) return text || '';
   let normalized = (text || '').replace(/\b(marking\s+)balls?\b/i,
     '$1bulls');
+  // Mirror the constrained named-point repair in brain.py:
+  // "marking, Kutaisi, one, three, five, four, eight miles".
+  const namedPoint = new RegExp(
+    `\\bmarking\\s*,\\s*([a-z']+)\\s*,\\s*`
+    + `((?:${FIGURE_WORD}\\s*,\\s*){2}${FIGURE_WORD})`
+    + `\\s*,\\s*((?:${FIGURE_WORD}\\s*,\\s*){0,2}${FIGURE_WORD})`
+    + `(?=\\s+(?:miles?|nm)\\b)`, 'i');
+  normalized = normalized.replace(namedPoint, (_all, point, bearing, range) =>
+    `marking ${point} ${spokenFigure(bearing.replace(/,/g, ' '))} for `
+      + `${spokenFigure(range.replace(/,/g, ' '))}`);
+  normalized = normalized.replace(/\bf\s*[-–—]\s*(\d{1,3})\b/ig,
+    'for $1');
   const inJust = new RegExp(`\\bin just(?=\\s+(?:\\d|${FIGURE_WORD})\\b)`,
     'i');
   normalized = normalized.replace(inJust, 'angels');
@@ -463,9 +475,9 @@ function foldPictureFigures(text) {
   // Fold the bearing/range of a bullseye or marking call, mirroring the brain's
   // `_fold_bullseye_figures`. Only runs on a bullseye/marking call — the range
   // separator ("for"/"at"/",") is far too common to fold globally.
-  if (!/\b(bull'?s?eye|marking)\b/i.test(text || '')) return text || '';
+  if (!/\b(bull'?s?eye|bulls?|marking)\b/i.test(text || '')) return text || '';
   const re = new RegExp(
-    `\\b(bull'?s?eye|marking)((?:\\s+(?!(?:${FIGURE_WORD})\\b)[a-z]+)?)`
+    `\\b(bull'?s?eye|bulls?|marking)((?:\\s+(?!(?:${FIGURE_WORD})\\b)[a-z]+)?)`
     + `([\\s,]+)((?:(?:${FIGURE_WORD})\\s*){1,4})`
     + `(?:(for|at|,)([\\s,]*)((?:(?:${FIGURE_WORD})\\s*){1,4}))?`, 'i');
   // A figure group carries the whitespace the regex allowed after it; keep that
@@ -497,40 +509,76 @@ function foldAngels(text) {
   });
 }
 
-function parsePictureCall(text, af) {
+function parsePictureCall(text, af, lat = null, lon = null) {
   // "bullseye 065 for 40, angels 15" or "marking Kutaisi 200 for 20" ->
   // {point, lat, lon, bearing, range, angels}. Mirrors the brain's parsers so
-  // the drawn arrow can never disagree with what was checked. Returns null when
-  // the call names a point we cannot resolve (the brain acknowledges those
-  // without a check, so there is nothing to draw).
+  // the drawn arrow can never disagree with what was checked. Unknown point
+  // names are associated with a supported reference only when position fits;
+  // otherwise the nearest candidate is labelled as uncertain.
   const t = foldAngels(foldPictureFigures(normalizePictureSpeech(text)));
-  const m = /\bmarking\s+([a-z']+)\s*,?\s*(\d{2,3})\s*(?:for|at|,)\s*(\d{1,3})\b/i
+  const m = /\bmarking\s*,?\s*([a-z']+)\s*,?\s*(\d{2,3})\s*,?\s*(?:for|at|,)\s*(\d{1,3})\b/i
     .exec(t)
-    || /\bbull'?s?eye\b\s*,?\s*(\d{2,3})\s*(?:for|at|,)\s*(\d{1,3})/i.exec(t);
+    || /\b(?:bull'?s?eye|bulls?)\b\s*,?\s*(\d{2,3})\s*,?\s*(?:for|at|,)\s*(\d{1,3})/i.exec(t);
   if (!m) return null;
-  let point, lat, lon;
+  let point, refLat, refLon, referenceCertain = true;
   if (m.length === 4) {
     const name = m[1].toLowerCase();
     if (['bull', 'bulls', 'bullseye', "bull's"].includes(name)) {
       if (!af.bullseye || af.bullseye.length !== 2) return null;
       point = 'bullseye';
-      [lat, lon] = af.bullseye;
+      [refLat, refLon] = af.bullseye;
     } else if (af.name && (name === af.name.toLowerCase()
         || (af.name.toLowerCase() === 'kutaisi' && name === 'kutasi'))) {
       point = af.name;
-      [lat, lon] = af.center;
+      [refLat, refLon] = af.center;
     } else {
-      return null;  // unknown point: the brain does not verify it either
+      // Unknown point names in debriefs are still useful: the brain checks
+      // the actual position against these same supported references and only
+      // accepts one when exactly one fits. The viewer shows the nearest
+      // candidate when the evidence is inconclusive, clearly labelled below.
+      const refs = [];
+      if (af.bullseye && af.bullseye.length === 2)
+        refs.push({ point: 'Bulls', lat: af.bullseye[0], lon: af.bullseye[1] });
+      if (af.center && af.center.length === 2)
+        refs.push({ point: af.name || 'airfield', lat: af.center[0], lon: af.center[1] });
+      if (!refs.length) return null;
+      const bearing = Number(m[2]);
+      const range = Number(m[3]);
+      const cbOff = af.cockpit_bearing_offset_deg || 0;
+      const withoutJoinedFour = (value) => value >= 400 && value < 500
+        ? value % 100 : value >= 40 && value < 50 ? value % 10 : null;
+      const bearings = [bearing];
+      const ranges = [range];
+      const bearingRepair = withoutJoinedFour(bearing);
+      const rangeRepair = withoutJoinedFour(range);
+      if (bearingRepair != null) bearings.push(bearingRepair);
+      if (rangeRepair != null) ranges.push(rangeRepair);
+      const scores = refs.map((ref) => {
+        if (lat == null || lon == null) return { ref, score: Infinity };
+        const actual = bearingRange(ref.lat, ref.lon, lat, lon);
+        const actualInstrument = (actual[0] + cbOff + 360) % 360;
+        const score = Math.min(...bearings.flatMap((b) => ranges.map((r) => {
+          const bearingError = Math.abs((b - actualInstrument + 180) % 360 - 180);
+          const rangeError = Math.abs(r - actual[1]);
+          return Math.max(bearingError / BULLSEYE_TOL_DEG,
+            rangeError / BULLSEYE_TOL_NM);
+        })));
+        return { ref, score };
+      }).sort((a, b) => a.score - b.score);
+      const fits = scores.filter(({ score }) => score <= 1);
+      const chosen = fits.length === 1 ? fits[0] : scores[0];
+      ({ point, lat: refLat, lon: refLon } = chosen.ref);
+      referenceCertain = fits.length === 1;
     }
   } else {
     if (!af.bullseye || af.bullseye.length !== 2) return null;
     point = 'bullseye';
-    [lat, lon] = af.bullseye;
+    [refLat, refLon] = af.bullseye;
   }
   const bearing = Number(m[m.length - 2]);
   const range = Number(m[m.length - 1]);
   const a = /\bangels\s*,?\s*(\d{1,3})\b/i.exec(t);
-  return { point, lat, lon, bearing, range,
+  return { point, lat: refLat, lon: refLon, referenceCertain, bearing, range,
            angels: a ? Number(a[1]) : null };
 }
 
@@ -557,7 +605,7 @@ function drawBullseyeCalls(aircraft, af) {
   bullseyeLayer.clearLayers();
   for (const ac of aircraft) {
     for (const c of (ac.comms || [])) {
-      const call = parsePictureCall(c.text, af);
+      const call = parsePictureCall(c.text, af, c.lat, c.lon);
       if (!call) continue;
       const bearings = [call.bearing];
       const ranges = [call.range];
@@ -605,7 +653,8 @@ function drawBullseyeCalls(aircraft, af) {
         const tip = destMeters(
           call.lat, call.lon, bearing, range * 1852);
         const bearingText = String(spoken).padStart(3, '0');
-        let label = `${repaired ? 'Possible STT repair' : 'STT reading'}: `
+        let label = `${call.referenceCertain ? '' : 'Possible reference · '}`
+          + `${repaired ? 'Possible STT repair' : 'STT reading'}: `
           + `${call.point} ${bearingText} for ${range}${angels}`;
         if (cbOff) label += ` (instrument; true `
           + `${String(Math.round(bearing) % 360).padStart(3, '0')})`;
@@ -659,7 +708,8 @@ function drawBullseyeCalls(aircraft, af) {
         const altitude = actualAngelsAt(ac, c);
         const angels = altitude == null ? ''
           : `, Angels ${Math.round(altitude / 1000)}`;
-        const popupText = `Actual ${call.point}: ${actualBearing} for `
+        const popupText = `${call.referenceCertain ? '' : 'Possible reference · '}`
+          + `Actual ${call.point}: ${actualBearing} for `
           + `${actualRange}${angels}`
           + (cbOff ? ` · ${fmtInst(actualBRA[0])} instrument` : '');
         const popupKey = `${ac.callsign}|${c.t || ''}|${c.lat},${c.lon}|`

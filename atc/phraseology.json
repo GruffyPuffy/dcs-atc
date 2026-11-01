@@ -119,6 +119,7 @@
     "stingray_rtb_copy": "{callsign}, {stingray}, copy, RTB.",
     "stingray_contact_control": "{callsign}, {stingray}, contact {control} on channel {channel}.",
     "stingray_bullseye_challenge": "{callsign}, {stingray}, negative. I show you {point} {bearing} for {range}, angels {actual_angels}. Confirm your position.",
+    "stingray_marking_unclear": "{callsign}, {stingray}, say the reference again: Bulls or {airfield}. Include bearing and range.",
     "stingray_angels_rounding": "{callsign}, {stingray}, negative. State angels as a whole thousand — angels {angels}.",
     "stingray_angels_and_position": "{callsign}, {stingray}, negative. State angels as a whole thousand — angels {angels} — and I show you {point} {bearing} for {range}. Confirm your position.",
     "authentication_not_implemented": "{callsign}, {agency}, authentication is not implemented in this trainer. Continue as fragged.",
