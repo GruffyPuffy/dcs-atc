@@ -194,6 +194,14 @@ def test_ground_hold_short_hands_off_to_tower(brain):
     assert brain.pilots["Colt 1"].phase == Phase.HOLDING
 
 
+def test_ground_hold_in_short_stt_variant_hands_off_to_tower(brain):
+    brain.handle("Ground, Colt 1, requesting taxi", controller=Controller.GROUND)
+    reply = brain.handle("Colt 1, hold in short runway 25",
+                         controller=Controller.GROUND)
+    assert "Tower" in reply
+    assert brain.pilots["Colt 1"].phase == Phase.HOLDING
+
+
 # ---------- Tower ----------
 
 def test_tower_takeoff(brain):
@@ -1546,14 +1554,11 @@ def test_trainer_echo_on_off_toggles_per_pilot(brain):
     assert brain.mission_radio_log_enabled("Colt 1") is False
     reply = brain.handle("Trainer, Colt 1, echo on", controller=Controller.GROUND)
     assert reply and "echo on" in reply
-    assert brain.mirror_enabled("Colt 1") is True
     assert brain.mission_radio_log_enabled("Colt 1") is True
     # A different pilot is unaffected (per-pilot state).
-    assert brain.mirror_enabled("Ford 2") is False
     assert brain.mission_radio_log_enabled("Ford 2") is False
     reply = brain.handle("Trainer, Colt 1, echo off", controller=Controller.TOWER)
     assert reply and "echo off" in reply
-    assert brain.mirror_enabled("Colt 1") is False
     assert brain.mission_radio_log_enabled("Colt 1") is False
 
 
@@ -1563,7 +1568,7 @@ def test_trainer_echo_without_callsign_uses_speaker(brain):
     reply = brain.handle("Trainer, echo on", controller=Controller.TOWER,
                          speaker="Caveman")
     assert reply and "echo on" in reply
-    assert brain.mirror_enabled("Colt 1") is True
+    assert brain.mission_radio_log_enabled("Colt 1") is True
 
 
 def test_trainer_works_on_every_agency_and_phase(brain):
@@ -1574,13 +1579,13 @@ def test_trainer_works_on_every_agency_and_phase(brain):
             brain.pilots["Colt 1"] = PilotState(callsign="Colt 1", phase=phase)
             reply = brain.handle("Trainer, Colt 1, echo on", controller=controller)
             assert reply and "echo on" in reply, (controller, phase)
-            assert brain.mirror_enabled("Colt 1") is True, (controller, phase)
+            assert brain.mission_radio_log_enabled("Colt 1") is True, (controller, phase)
 
 
 def test_trainer_unknown_command_hints(brain):
     reply = brain.handle("Trainer, Colt 1, do something", controller=Controller.TOWER)
     assert reply and "trainer commands" in reply
-    assert brain.mirror_enabled("Colt 1") is False
+    assert brain.mission_radio_log_enabled("Colt 1") is False
 
 
 def test_trainer_volume_sets_and_clamps(brain):

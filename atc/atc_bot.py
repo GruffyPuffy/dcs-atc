@@ -236,9 +236,8 @@ def main() -> None:
                         help="skip the one-time 'ATC online' announcement")
     parser.add_argument("--debug", action="store_true",
                         help="log routing/state detail for every transmission, "
-                             "and force the in-game comms mirror on for all "
-                             "pilots (pilots can also toggle it themselves "
-                             "with 'trainer, echo on')")
+                             "and enable the legacy in-game chat mirror for "
+                             "all radio traffic")
     args = parser.parse_args()
 
     from faster_whisper import WhisperModel
@@ -703,29 +702,19 @@ def main() -> None:
             else:
                 agency = controller or ""
             map_service.log_chatter(kind, freq_hz / 1e6, who, text, agency)
-        # In-game comms mirror: echo the exchange into the pilot's DCS message
-        # feed, so a trainer can read what was heard (RX) and answered (TX)
-        # without the map. Per-pilot: enabled by the pilot saying "trainer, logs
-        # on" (any frequency), or forced on for everyone with --debug. Read-only
-        # side channel: it never feeds the brain.
+        # Legacy in-game chat mirror is a debug aid only. Normal pilot echo is
+        # written separately to the DCS mission log when enabled with echo on.
+        # This chat side channel never feeds the brain.
         if state is not None:
             if kind == "rx":
                 _debug_reply_to[0] = who
-                if args.debug or _mirror_for(who):
+                if args.debug:
                     _mirror(f"RX {who}: {text}", who)
-            elif args.debug or _mirror_for(_debug_reply_to[0]):
+            elif args.debug:
                 _mirror(f"TX {who}: {text}", _debug_reply_to[0])
             pilot = who if kind == "rx" else _debug_reply_to[0]
             if kind in {"rx", "tx"} and _mission_log_for(pilot):
                 _mission_radio_line(kind, freq_hz, controller, text, pilot)
-
-    def _mirror_for(who: str) -> bool:
-        """True if this speaker asked for the in-game comms mirror."""
-        if not who:
-            return False
-        with lock:
-            callsign = brain.callsign_for_speaker(who)
-            return brain.mirror_enabled(callsign)
 
     def _mission_log_for(who: str) -> bool:
         if not who:
@@ -876,6 +865,7 @@ def main() -> None:
                     log(f"PLAYER LEFT: {name}")
                     seen_players.discard(name)
                     seen_units.pop(name, None)
+                    greeted.discard(name)
                     if map_service is not None:
                         map_service.end_spawn(name)
                 for ac in players:
@@ -913,7 +903,8 @@ def main() -> None:
                     if ac.player and ac.player not in greeted:
                         try:
                             if state.message("\n".join(radio_setup_lines()),
-                                             player=ac.player, mission=True):
+                                             player=ac.player, duration=20.0,
+                                             mission=True):
                                 greeted.add(ac.player)
                         except (OSError, RuntimeError):
                             pass  # bridge down; retry next tick

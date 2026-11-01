@@ -32,10 +32,12 @@ def test_mission_message_is_an_opt_in_targeted_variant(monkeypatch):
 
     monkeypatch.setattr(client, "exchange", fake_exchange)
     assert client.message("19:32:22 - YOU (Ch 7): \"hello\"",
-                         player="stefan", mission=True) is True
+                         player="stefan", duration=20.0,
+                         mission=True) is True
     assert seen["op"] == "message"
     assert seen["mission"] is True
     assert seen["player"] == "stefan"
+    assert seen["duration"] == 20.0
 
     # It must not treat a chat/broadcast fallback as a mission delivery.
     monkeypatch.setattr(client, "exchange", lambda op, **fields: {

@@ -588,11 +588,8 @@ class PilotState:
     rtb_control_handoff_not_before: float = 0.0
     tower_handoff_announced: bool = False
     formation: int = 0  # flight size (2+ = multi-ship), learned from calls
-    # Trainer aid: this pilot asked for the in-game comms mirror ("trainer,
-    # echo on"). Per-pilot, so each pilot controls their own feed.
-    mirror_logs: bool = False
-    # Internal second destination for echo text; toggled with echo on/off.
-    # Kept separate so its delivery can be selected independently later.
+    # Internal DCS mission-log destination for radio echo; toggled by the
+    # existing per-pilot echo on/off command.
     mission_radio_log: bool = False
     # Ground has issued the taxi-to-parking clearance. Guards against the
     # readback ("cleared taxi to ramp north") re-matching the parking request
@@ -1525,6 +1522,9 @@ class AtcBrain:
         # formation/check-in handling above, which need the word forms.
         # Frequent STT rendering of "marking bulls" from the sortie log.
         low = re.sub(r"\bmocking\s+(bulls?|bullseye)\b", r"marking \1", low)
+        # Live STT once rendered "hold in short" for "holding short". Fold
+        # that narrow phrase into the established hold-short intent.
+        low = re.sub(r"\bhold\s+in\s+short\b", "holding short", low)
         low = _normalize_picture_transcription(low)
         low = _fold_spoken_figures(low)
         low = _fold_bullseye_figures(low)
@@ -1971,8 +1971,8 @@ class AtcBrain:
                  track: AircraftTrack | None = None) -> str:
         """Handle a "trainer, ..." command (trainer aid, any frequency).
 
-        Currently: "trainer, echo on|off" toggles the in-game comms mirror for
-        THIS pilot; "trainer, volume X" sets the GLOBAL TTS volume;
+        Currently: "trainer, echo on|off" toggles this pilot's DCS mission-log
+        transcript; "trainer, volume X" sets the GLOBAL TTS volume;
         "trainer, coach mode|casual mode" sets the GLOBAL trainer mode.
         Unknown trainer commands get a short usage hint.
         """
@@ -1981,11 +1981,9 @@ class AtcBrain:
             return self._help(callsign, pilot, controller, track)
         if re.search(r"\becho\b", low):
             if re.search(r"\b(off|stop|disable|no)\b", low):
-                pilot.mirror_logs = False
                 pilot.mission_radio_log = False
                 return self._say("trainer_echo_off", callsign, agency=agency)
             if re.search(r"\b(on|start|enable|yes)\b", low):
-                pilot.mirror_logs = True
                 pilot.mission_radio_log = True
                 return self._say("trainer_echo_on", callsign, agency=agency)
         if re.search(r"\bvolume\b", low):
@@ -2001,11 +1999,6 @@ class AtcBrain:
             self.mode = "casual"
             return self._say("trainer_mode_casual", callsign, agency=agency)
         return self._say("trainer_unknown", callsign, agency=agency)
-
-    def mirror_enabled(self, callsign: str) -> bool:
-        """True if this pilot asked for the in-game comms mirror."""
-        pilot = self.pilots.get(callsign)
-        return bool(pilot and pilot.mirror_logs)
 
     def mission_radio_log_enabled(self, callsign: str) -> bool:
         """Internal mission-log destination toggled by the existing echo aid."""
