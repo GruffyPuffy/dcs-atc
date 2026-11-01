@@ -1405,7 +1405,8 @@ def test_touch_and_go_request_is_cleared_and_rearms_next_circuit(brain):
     pilot.landing_handoff_announced = True
     reply = brain.handle("Tower, Colt 1, request touch and go",
                          controller=Controller.TOWER)
-    assert "approved touch and go" in reply.lower()
+    assert "cleared touch and go" in reply.lower()
+    assert "left-hand circuit" in reply.lower()
     assert pilot.phase == Phase.LANDING
     assert not pilot.cleared_landing
     assert not pilot.pattern_flown
@@ -1430,7 +1431,7 @@ def test_touch_and_go_blocks_radar_and_voice_landing_until_airborne(
     pilot.cleared_landing = True
     reply = brain.handle("Tower, Colt 1, request touch and go",
                          controller=Controller.TOWER)
-    assert "approved touch and go" in reply.lower()
+    assert "cleared touch and go" in reply.lower()
     assert pilot.touch_and_go_pending
     assert not pilot.cleared_landing
 
@@ -1453,6 +1454,48 @@ def test_touch_and_go_blocks_radar_and_voice_landing_until_airborne(
     assert brain.check_landing_clearance("Colt 1", turn) is None
     clearance = brain.check_landing_clearance("Colt 1", final)
     assert clearance and "cleared to land" in clearance.lower()
+    assert pilot.cleared_landing
+
+
+def test_touch_and_go_dialog_clears_before_touchdown_then_lands_next_circuit(
+        brain):
+    pilot = _airborne(brain, phase=Phase.INBOUND)
+
+    # The touch-and-go clearance is issued before the pilot touches down and
+    # includes the pattern to fly after takeoff.
+    reply = brain.handle(
+        "Kutaisi Tower, Colt 1, request touch and go runway 25",
+        controller=Controller.TOWER)
+    assert "cleared touch and go runway 25" in reply.lower()
+    assert "left-hand circuit" in reply.lower()
+    assert pilot.touch_and_go_pending
+    assert not pilot.cleared_landing
+
+    # The readback is silent. Once the pilot reports airborne, Tower continues
+    # the climb and rejoins them to the circuit; no new landing clearance is
+    # implied by the original touch-and-go clearance.
+    reply = brain.handle(
+        "Colt 1, cleared touch and go runway 25, left-hand circuit",
+        controller=Controller.TOWER)
+    assert reply == ""
+    reply = brain.handle("Kutaisi Tower, Colt 1, airborne",
+                         controller=Controller.TOWER)
+    assert "continue climbing" in reply.lower()
+    assert "left downwind" in reply.lower()
+    assert not pilot.touch_and_go_pending
+    assert not pilot.cleared_landing
+
+    assert brain.handle("Kutaisi Tower, Colt 1, downwind left, runway 25",
+                        controller=Controller.TOWER) == ""
+    reply = brain.handle("Kutaisi Tower, Colt 1, request landing",
+                         controller=Controller.TOWER)
+    assert "continue circuit" in reply.lower()
+    assert "report on final" in reply.lower()
+    assert not pilot.cleared_landing
+
+    reply = brain.handle("Kutaisi Tower, Colt 1, on final, runway 25",
+                         controller=Controller.TOWER)
+    assert "cleared to land" in reply.lower()
     assert pilot.cleared_landing
 
 

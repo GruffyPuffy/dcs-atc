@@ -1580,7 +1580,7 @@ def test_touch_and_go_then_full_stop_landing_in_next_circuit(
 
     approved = sc.say("Tower, Colt 1, request touch and go",
                       Controller.TOWER)
-    assert "approved touch and go" in approved.lower()
+    assert "cleared touch and go" in approved.lower()
     assert pilot.go_around_circuit
     assert pilot.touch_and_go_pending
     assert not pilot.cleared_landing
@@ -1624,7 +1624,7 @@ def test_can_request_another_touch_and_go_from_downwind(airfield, brain):
     # First touch-and-go.
     approved = sc.say("Tower, Colt 1, request touch and go",
                       Controller.TOWER)
-    assert "approved touch and go" in approved.lower()
+    assert "cleared touch and go" in approved.lower()
     assert pilot.touch_and_go_pending
     sc.say("Tower, Colt 1, airborne", Controller.TOWER)
 
@@ -1633,7 +1633,7 @@ def test_can_request_another_touch_and_go_from_downwind(airfield, brain):
     sc.say("Tower, Colt 1, downwind right runway 25", Controller.TOWER)
     approved = sc.say("Tower, Colt 1, request touch and go",
                       Controller.TOWER)
-    assert "approved touch and go" in approved.lower()
+    assert "cleared touch and go" in approved.lower()
     assert pilot.touch_and_go_pending
     assert not pilot.cleared_landing
 
