@@ -17,7 +17,7 @@ Usage: ./scripts/dcs.sh <command>
   stop      Stop the container without deleting its data
   status    Show container status
   health    Read-only health summary (containers, bot mode, map, bridge)
-  debriefs  List debrief files saved in the bot container
+  debriefs  List debrief and DEBUG marker files saved in the bot container
   debrief   Download a debrief (name, or 'all') to atc/debrief/ on the host
   logs      Follow recent container logs (Ctrl+C to exit)
 srs-autoconnect  Install the SRS auto-connect announcer hook (port-only by default)
@@ -212,8 +212,61 @@ prepare() {
 }
 
 deploy_state_bridge() {
-  deploy_hook "$repo_dir/bridge/dcs_state_hook.lua" "dcs_state_hook.lua"
-  deploy_hook "$repo_dir/bridge/dcs_state_body.lua" "dcs_state_body.lua"
+  deploy_bridge_from "$repo_dir/bridge"
+}
+
+deploy_bridge_from() {
+  local source_dir="$1"
+  BRIDGE_HOOK_CHANGED=0
+  python3 - "$source_dir/dcs_state_hook.lua" "$source_dir/dcs_state_body.lua" <<'PY'
+from pathlib import Path
+import sys
+
+hook = Path(sys.argv[1]).read_text()
+body = Path(sys.argv[2]).read_text().strip()
+start_marker = "local MISSION_BODY = [==["
+start = hook.index(start_marker) + len(start_marker)
+end = hook.index("]==]", start)
+if hook[start:end].strip() != body:
+    raise SystemExit("DCS bridge hook fallback does not match dcs_state_body.lua")
+PY
+  deploy_hook "$source_dir/dcs_state_hook.lua" "dcs_state_hook.lua" restart
+  deploy_hook "$source_dir/dcs_state_body.lua" "dcs_state_body.lua" hot
+}
+
+# For bot start/update, deploy the bridge files from the exact same remote
+# commit that the entrypoint will check out. Keep the scratch checkout private
+# to this invocation and never use a moving branch twice.
+fetch_bridge_for_ref() {
+  local ref="$1"
+  local remote="${ATC_REPO:-https://github.com/GruffyPuffy/dcs-atc.git}"
+  BRIDGE_TMP="$(mktemp -d)"
+  git -C "$BRIDGE_TMP" init -q
+  git -C "$BRIDGE_TMP" remote add origin "$remote"
+  if ! git -C "$BRIDGE_TMP" fetch --quiet --depth 1 origin "$ref"; then
+    echo "Could not fetch ATC ref '$ref' from $remote; bridge files were not changed." >&2
+    rm -rf "$BRIDGE_TMP"
+    BRIDGE_TMP=""
+    return 1
+  fi
+  ATC_RESOLVED_SHA="$(git -C "$BRIDGE_TMP" rev-parse FETCH_HEAD)"
+  mkdir -p "$BRIDGE_TMP/checkout"
+  git -C "$BRIDGE_TMP" archive FETCH_HEAD bridge/dcs_state_hook.lua bridge/dcs_state_body.lua \
+    | tar -x -C "$BRIDGE_TMP/checkout"
+  deploy_bridge_from "$BRIDGE_TMP/checkout/bridge"
+}
+
+cleanup_bridge_tmp() {
+  if [[ -n "${BRIDGE_TMP:-}" && -d "$BRIDGE_TMP" ]]; then
+    rm -rf "$BRIDGE_TMP"
+  fi
+}
+trap cleanup_bridge_tmp EXIT
+
+# DCS reads the hook file only when its process starts. The body is re-read on
+# every bridge request. Never restart DCS here; report the exact consequence.
+is_dcs_running() {
+  [[ "$(docker inspect -f '{{.State.Running}}' dcs-atc-server 2>/dev/null || true)" == "true" ]]
 }
 
 deploy_srs_autoconnect() {
@@ -240,6 +293,7 @@ deploy_hook() {
   local hooks="$saved_games/Scripts/Hooks"
   local source="$1"
   local filename="${2:-srs_autoconnect.lua}"
+  local reload_kind="${3:-restart}"
   local destination="$hooks/$filename"
   mkdir -p "$hooks"
   if [[ ! -w "$hooks" ]]; then
@@ -247,12 +301,27 @@ deploy_hook() {
     exit 1
   fi
   if [[ -f "$destination" ]] && cmp -s "$source" "$destination"; then
-    echo "Already current: $filename"
+    return
   else
     install -m 644 "$source" "$destination"
     echo "Deployed: $destination"
   fi
-  echo "Restart the DCS process to load a newly installed hook."
+  if [[ "$filename" == "dcs_state_hook.lua" ]]; then
+    BRIDGE_HOOK_CHANGED=1
+  fi
+  if [[ "$reload_kind" == "hot" ]]; then
+    if is_dcs_running && [[ "${BRIDGE_HOOK_CHANGED:-0}" == "1" ]]; then
+      echo "$filename updated; it will be read after the changed hook is loaded by restarting DCS."
+    elif is_dcs_running; then
+      echo "$filename updated; DCS will use it on the next bridge request."
+    else
+      echo "$filename updated; it will be read on the next DCS bridge request."
+    fi
+  elif is_dcs_running; then
+    echo "$filename changed; restart the DCS process to load it."
+  else
+    echo "$filename changed; it will load the next time DCS starts."
+  fi
 }
 
 command="${1:-help}"
@@ -274,6 +343,21 @@ case "$command" in
     ;;
   install|start)
     prepare
+    require_docker
+    # If a bot checkout exists, deploy the bridge from that installed version;
+    # otherwise use this checkout for the first DCS start.
+    bridge_source="$repo_dir/bridge"
+    bridge_tmp="$(mktemp -d)"
+    if docker inspect dcs-atc-bot >/dev/null 2>&1; then
+      if ! docker cp dcs-atc-bot:/data/atc/src/bridge "$bridge_tmp/bridge" >/dev/null 2>&1; then
+        echo "Could not read bridge files from the existing ATC bot container; refusing to deploy a possibly mismatched local copy." >&2
+        rm -rf "$bridge_tmp"
+        exit 1
+      fi
+      bridge_source="$bridge_tmp/bridge"
+    fi
+    deploy_bridge_from "$bridge_source"
+    rm -rf "$bridge_tmp"
     compose up -d
     echo "Container running. Follow progress with: ./scripts/dcs.sh logs"
     ;;
@@ -288,8 +372,10 @@ case "$command" in
       exit 1
     fi
     ref="${2:-$(latest_atc_tag)}"
-    ATC_REF="$ref" compose_atc up -d --build atc-bot
-    echo "ATC bot starting at $ref. Follow it with: ./scripts/dcs.sh atc-logs"
+    fetch_bridge_for_ref "$ref"
+    ATC_REF="$ATC_RESOLVED_SHA" compose_atc up -d --build atc-bot
+    cleanup_bridge_tmp
+    echo "ATC bot starting at $ref ($ATC_RESOLVED_SHA). Follow it with: ./scripts/dcs.sh atc-logs"
     ;;
   atc-up-gpu)
     require_docker
@@ -300,8 +386,10 @@ case "$command" in
     fi
     # Needs the NVIDIA Container Toolkit on the host (see INSTALL.md).
     ref="${2:-$(latest_atc_tag)}"
-    ATC_REF="$ref" compose_atc_gpu up -d --build atc-bot
-    echo "ATC bot (GPU) starting at $ref. Follow it with: ./scripts/dcs.sh atc-logs"
+    fetch_bridge_for_ref "$ref"
+    ATC_REF="$ATC_RESOLVED_SHA" compose_atc_gpu up -d --build atc-bot
+    cleanup_bridge_tmp
+    echo "ATC bot (GPU) starting at $ref ($ATC_RESOLVED_SHA). Follow it with: ./scripts/dcs.sh atc-logs"
     ;;
   atc-down)
     require_docker
@@ -318,15 +406,18 @@ case "$command" in
       echo "Could not read the running bot version; pass a tag or SHA explicitly." >&2
       exit 1
     fi
+    fetch_bridge_for_ref "$ref"
     # The entrypoint pulls on start, so a recreate is an update. Preserve GPU
     # mode if the running container was started with the GPU override.
     if atc_gpu_running; then
       require_gpu
-      ATC_REF="$ref" compose_atc_gpu up -d --force-recreate atc-bot
-      echo "ATC bot (GPU) restarting at $ref."
+      ATC_REF="$ATC_RESOLVED_SHA" compose_atc_gpu up -d --force-recreate atc-bot
+      cleanup_bridge_tmp
+      echo "ATC bot (GPU) restarting at $ref ($ATC_RESOLVED_SHA)."
     else
-      ATC_REF="$ref" compose_atc up -d --force-recreate atc-bot
-      echo "ATC bot restarting at $ref."
+      ATC_REF="$ATC_RESOLVED_SHA" compose_atc up -d --force-recreate atc-bot
+      cleanup_bridge_tmp
+      echo "ATC bot restarting at $ref ($ATC_RESOLVED_SHA)."
     fi
     ;;
   bridge)
@@ -346,7 +437,7 @@ case "$command" in
   debriefs)
     require_docker
     docker exec dcs-atc-bot sh -c \
-      'ls -1 /data/atc/src/atc/debrief/*.json 2>/dev/null' \
+      'find /data/atc/src/atc/debrief -maxdepth 1 -type f \( -name "*.json" -o -name "debug_marks_*.jsonl" \) -printf "%f\n" 2>/dev/null | sort' \
       | sed 's#.*/##' || true
     ;;
   debrief)

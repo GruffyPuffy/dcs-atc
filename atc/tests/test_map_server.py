@@ -179,6 +179,43 @@ def test_spawn_debrief_is_one_file_per_pilot_spawn(brain, airfield, tmp_path):
     assert any("adder-2" in n for n in names)
 
 
+def test_debug_marker_guid_is_saved_to_each_active_debrief(brain, airfield,
+                                                           tmp_path,
+                                                           monkeypatch):
+    monkeypatch.setattr(map_server, "DEBRIEF_DIR", tmp_path)
+    brain.sync_speakers([("Caveman", "Colt 1"), ("Bandit", "Colt 2")])
+    service = MapService(airfield, brain, FakeState([]), debrief_dir=tmp_path)
+    service.begin_spawn("Caveman", "Colt 1")
+    service.begin_spawn("Bandit", "Colt 2")
+    service.tracks.update("Colt 1", 42.18, 42.50, 1.0, 1200)
+    service.tracks.update("Colt 2", 42.20, 42.52, 1.0, 2400)
+
+    service.record_debug_marker({
+        "guid": "1A2B3C4D",
+        "label": "DEBUG 1A2B3C4D",
+        "t": "19:23:23",
+        "note": "hold short",
+        "positions": {
+            "Colt 1": {"lat": 42.18, "lon": 42.50},
+            "Colt 2": {"lat": 42.20, "lon": 42.52},
+        },
+    })
+
+    payloads = [json.loads(path.read_text())
+                for path in tmp_path.glob("tracks_*.json")]
+    assert len(payloads) == 2
+    saved = {payload["callsign"]: payload["debug_markers"][0]
+             for payload in payloads}
+    assert saved["Colt 1"]["guid"] == "1A2B3C4D"
+    assert saved["Colt 1"]["label"] == "DEBUG 1A2B3C4D"
+    assert saved["Colt 1"]["lat"] == 42.18
+    assert saved["Colt 2"]["guid"] == "1A2B3C4D"
+    assert saved["Colt 2"]["lat"] == 42.20
+    visible = service.snapshot()["debug_markers"]
+    assert {m["callsign"] for m in visible} == {"Colt 1", "Colt 2"}
+    assert {m["guid"] for m in visible} == {"1A2B3C4D"}
+
+
 def test_replay_loads_and_freezes(brain, airfield, tmp_path):
     """A tracks_file that already exists is loaded read-only (a replay)."""
     tracks_file = tmp_path / "tracks.json"
@@ -663,6 +700,36 @@ def test_debrief_endpoints_http(brain, airfield, tmp_path, monkeypatch):
             assert False, "expected HTTP 400"
         except urllib.error.HTTPError as e:
             assert e.code == 400
+    finally:
+        server.shutdown()
+
+
+def test_live_debug_mark_endpoint_and_replay_gate(brain, airfield):
+    service = MapService(airfield, brain, None)
+    calls = []
+    service.debug_marker_callback = lambda: calls.append("marked")
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(service))
+    port = server.server_address[1]
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        snap = json.load(urllib.request.urlopen(f"http://127.0.0.1:{port}/api/atc"))
+        assert snap["debug_mark_enabled"] is True
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/debug/mark", data=b"{}",
+            headers={"Content-Type": "application/json"}, method="POST")
+        assert json.loads(urllib.request.urlopen(req).read())["marked"] is True
+        assert calls == ["marked"]
+
+        service.replay = True
+        service._replay_tracks = service.tracks
+        snap = json.load(urllib.request.urlopen(f"http://127.0.0.1:{port}/api/atc"))
+        assert snap["debug_mark_enabled"] is False
+        try:
+            urllib.request.urlopen(req)
+            assert False, "expected HTTP 400 in replay mode"
+        except urllib.error.HTTPError as e:
+            assert e.code == 400
+        assert calls == ["marked"]
     finally:
         server.shutdown()
 

@@ -26,6 +26,10 @@ html, body { margin: 0; width: 100%; height: 100%; overflow: hidden;
 #debrief-select { background: var(--panel); color: var(--muted);
   border: 1px solid var(--line); border-radius: 4px; padding: 3px 6px;
   font: inherit; max-width: 260px; }
+#debug-mark-btn { background: var(--panel); color: var(--text);
+  border: 1px solid var(--line); border-radius: 4px; padding: 3px 10px;
+  font: inherit; cursor: pointer; }
+#debug-mark-btn:hover { border-color: var(--control); color: var(--control); }
 
 /* Web-driven restart / airfield switch (only shown when run via run_server.sh). */
 .control { display: flex; align-items: center; gap: 6px; }
@@ -50,6 +54,11 @@ html, body { margin: 0; width: 100%; height: 100%; overflow: hidden;
 
 /* A busy cluster's tooltip can list many calls: cap the height and scroll. */
 .comm-tip { max-height: 260px; overflow-y: auto; }
+.debug-mark-icon { background: none; border: none; }
+.debug-mark { display: flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; border-radius: 50%; background: #f0883e;
+  border: 2px solid #fff; color: #111; font-weight: 800; font-size: 13px;
+  box-shadow: 0 1px 4px #000; }
 .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; margin-left: 10px; }
 .dot.ground { background: var(--ground); }
 .dot.tower { background: var(--tower); }

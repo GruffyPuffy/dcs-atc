@@ -62,8 +62,9 @@ fi
 git -C "$ATC_DIR" fetch --quiet --depth 1 origin '+refs/tags/*:refs/tags/*'
 ATC_VERSION="$(git -C "$ATC_DIR" describe --tags --exact-match HEAD 2>/dev/null \
     || git -C "$ATC_DIR" rev-parse --short=12 HEAD)"
-export ATC_REF ATC_VERSION
-log "Running version $ATC_VERSION ($(git -C "$ATC_DIR" rev-parse --short=12 HEAD))"
+ATC_GIT_SHA="$(git -C "$ATC_DIR" rev-parse HEAD)"
+export ATC_REF ATC_VERSION ATC_GIT_SHA
+log "Running version $ATC_VERSION (${ATC_GIT_SHA:0:12})"
 
 cd "$ATC_DIR/atc"
 

@@ -360,6 +360,16 @@ class TrackHistory:
         return [c for c in (data.get("chatter") or []) if isinstance(c, dict)]
 
     @staticmethod
+    def read_debug_markers(path: Path) -> list[dict]:
+        """Saved DEBUG points (empty for older debriefs)."""
+        try:
+            data = json.loads(path.read_text())
+        except (OSError, ValueError):
+            return []
+        return [m for m in (data.get("debug_markers") or [])
+                if isinstance(m, dict)]
+
+    @staticmethod
     def read_bullseye(path: Path) -> list[float] | None:
         """The saved coalition bullseye from a debrief file, or None.
 
@@ -585,6 +595,8 @@ class MapService:
         self.basemap = basemap  # base-map layer name override (else config)
         # Web-driven restart/airfield selection (None when running standalone).
         self.control = control
+        # Optional explicit point-in-time DEBUG capture, installed by atc_bot.
+        self.debug_marker_callback: Callable[[], None] | None = None
         # The bot's own log() callable, used to report save failures (with a
         # traceback) instead of swallowing them. Defaults to a no-op so the
         # standalone map server / tests need no logger.
@@ -607,6 +619,9 @@ class MapService:
         # player name -> current spawn file / callsign (one debrief per spawn)
         self._spawn_files: dict[str, Path] = {}
         self._spawn_callsigns: dict[str, str] = {}
+        self._spawn_debug_markers: dict[str, list[dict]] = {}
+        self._debug_markers: list[dict] = []
+        self._replay_debug_markers: list[dict] = []
         self._last_saved = 0.0
         existed = self.tracks_file is not None and self.tracks_file.is_file()
         if existed:
@@ -614,6 +629,7 @@ class MapService:
             # Restore the saved radio log too, so the chatter window mirrors a
             # replayed sortie (older files simply have none).
             self._chatter.extend(TrackHistory.read_chatter(self.tracks_file))
+            self._debug_markers = TrackHistory.read_debug_markers(self.tracks_file)
         # `replay` true forces read-only startup review; an existing tracks_file
         # also defaults to replay (don't clobber a saved sortie).
         self.replay = bool(replay or existed)
@@ -624,6 +640,7 @@ class MapService:
         if self.replay:
             self._replay_tracks = self.tracks
             self._replay_chatter = self.chatter()
+            self._replay_debug_markers = list(self._debug_markers)
         # Last seen phase per callsign, to record phase transitions on the path.
         self._last_phase: dict[str, str] = {}
         # Live DCS tower/dispatcher lat/lon (TopGun uses the same bridge op).
@@ -655,6 +672,7 @@ class MapService:
                     data["chatter"] = list(self._chatter)
                 if self.brain.bullseye:
                     data["bullseye"] = list(self.brain.bullseye)
+                data["debug_markers"] = list(self._debug_markers)
                 self.tracks.save_json(data, self.tracks_file)
             # Debriefs are saved every session now; keep the newest few only.
             prune_debriefs()
@@ -681,11 +699,13 @@ class MapService:
     def _write_spawn(self, player: str, path: Path) -> None:
         keys = self._spawn_track_keys(player)
         data = self.tracks.to_json(keys)
-        if not data.get("tracks"):
+        debug_markers = self._spawn_debug_markers.get(player, [])
+        if not data.get("tracks") and not debug_markers:
             return
         callsign = self._spawn_callsigns.get(player) or ""
         data["player"] = player
         data["callsign"] = callsign
+        data["debug_markers"] = list(debug_markers)
         with self._chatter_lock:
             data["chatter"] = self._filter_chatter(player, callsign)
         if self.brain.bullseye:
@@ -714,6 +734,7 @@ class MapService:
                 self._end_spawn_locked(player)
             self._spawn_files[player] = path
             self._spawn_callsigns[player] = cs
+            self._spawn_debug_markers[player] = []
         self.log(f"[*] Debrief spawn: {path.name}  player={player}"
                  f"  callsign={cs or '-'}{extra}")
 
@@ -733,6 +754,43 @@ class MapService:
                 self.tracks.forget(key)
                 self._last_phase.pop(key, None)
         self._spawn_callsigns.pop(player, None)
+        self._spawn_debug_markers.pop(player, None)
+
+    def record_debug_marker(self, marker: dict) -> None:
+        """Attach one GUID marker to every currently active pilot debrief."""
+        with self.lock:
+            self._debug_markers.append(dict(marker))
+            positions = marker.get("positions") or {}
+            for player, path in list(self._spawn_files.items()):
+                callsign = self._spawn_callsigns.get(player) or ""
+                position = positions.get(callsign) or positions.get(player)
+                per_pilot = {key: value for key, value in marker.items()
+                             if key != "positions"}
+                per_pilot["callsign"] = callsign
+                if position:
+                    per_pilot.update(position)
+                else:
+                    per_pilot.update({"lat": None, "lon": None})
+                self._spawn_debug_markers.setdefault(player, []).append(per_pilot)
+                self._write_spawn(player, path)
+            if not self._spawn_files and self.tracks_file is not None:
+                self.save_tracks()
+
+    def _visible_debug_markers(self) -> list[dict]:
+        """Flatten session/replay marker positions for the map overlay."""
+        source = self._replay_debug_markers if self.replay else self._debug_markers
+        out = []
+        for marker in source:
+            if isinstance(marker.get("positions"), dict):
+                for callsign, position in marker["positions"].items():
+                    if not isinstance(position, dict):
+                        continue
+                    out.append({**{k: v for k, v in marker.items()
+                                  if k != "positions"},
+                                "callsign": callsign, **position})
+            elif marker.get("lat") is not None and marker.get("lon") is not None:
+                out.append(marker)
+        return out
 
     def _maybe_save_tracks(self) -> None:
         """Autosave the trails at most every `TRACKS_SAVE_INTERVAL` seconds."""
@@ -935,9 +993,11 @@ class MapService:
         # Restore the saved radio log too, so the chatter window mirrors the
         # replayed sortie (falls back to empty for older files without it).
         chatter = TrackHistory.read_chatter(path)
+        debug_markers = TrackHistory.read_debug_markers(path)
         with self.lock:
             self._replay_tracks = loaded
             self._replay_chatter = chatter
+            self._replay_debug_markers = debug_markers
             self._replay_path = path
             self.replay = True
         return {"ok": True, "name": base}
@@ -947,6 +1007,7 @@ class MapService:
         with self.lock:
             self._replay_tracks = None
             self._replay_chatter = []
+            self._replay_debug_markers = []
             self._replay_path = None
             self.replay = False
         return {"ok": True}
@@ -1120,8 +1181,11 @@ class MapService:
             "ai_air": ai_air,
             "chatter": (self._replay_chatter if self.replay
                         else self.chatter()),
+            "debug_markers": self._visible_debug_markers(),
             "error": error,
             "replay": self.replay,
+            "debug_mark_enabled": (not self.replay
+                                   and self.debug_marker_callback is not None),
             "replay_name": (self._replay_path.name
                             if self.replay and self._replay_path else ""),
             # Web-driven restart/airfield selection (None when not wired).
@@ -1196,6 +1260,16 @@ def make_handler(service: MapService):
                 service.control.stop()
                 result = {"ok": True, "stopping": True}
                 restart = True  # exit now; the wrapper stops on the sentinel
+            elif path == "/api/debug/mark":
+                if service.replay or service.debug_marker_callback is None:
+                    result = {"ok": False, "error": "DEBUG marking is unavailable in replay mode"}
+                else:
+                    try:
+                        service.debug_marker_callback()
+                        result = {"ok": True, "marked": True}
+                    except Exception as error:  # keep the map server alive
+                        service.log(f"DEBUG mark request failed: {error}")
+                        result = {"ok": False, "error": "DEBUG mark failed; see bot log"}
             else:
                 self.send_error(404)
                 return

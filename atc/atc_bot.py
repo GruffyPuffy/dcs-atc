@@ -23,6 +23,7 @@ import os
 import re
 import threading
 import time
+import uuid
 import wave
 from pathlib import Path
 
@@ -35,6 +36,8 @@ from brain import (AtcBrain, Controller, Phraseology, RADIO_ANSWER_POLICY,
                    RADIO_EMERGENCY_POLICY, RADIO_NORMAL_POLICY)
 from callsigns import CallsignRegistry
 from ctr import CtrEvent, CtrTracker
+from debug_marks import (DebugMarkWriter, aircraft_snapshot,
+                         parse_debug_mark, pilot_state_snapshot)
 from phonetics import stt_hint
 from srs_client import SrsClient
 from speech import is_probably_non_speech, spell_atc_numbers
@@ -332,6 +335,11 @@ def main() -> None:
         with log_path.open("a", encoding="utf-8") as fh:
             fh.write(text + "\n")
 
+    debug_marks = DebugMarkWriter(
+        Path(__file__).with_name("debrief"), airfield.name,
+        os.environ.get("ATC_VERSION") or "dev",
+        os.environ.get("ATC_GIT_SHA") or "unknown")
+
     def debug(line: str) -> None:
         """Extra routing/state detail, only when --debug is set."""
         if args.debug:
@@ -556,6 +564,12 @@ def main() -> None:
             text = ""
         latency = (time.monotonic() - started) * 1000
         wav_note = f", wav {wav_path.name}" if wav_path else ""
+        if text:
+            marker_note = parse_debug_mark(text)
+            if marker_note is not None:
+                capture_debug_mark(who, marker_note, controller, duration,
+                                   latency, source="radio")
+                return ""  # save the marker without replying over SRS
         if not text:
             log(f"[{controller.value}] {who}: <unclear>  "
                 f"({duration:.1f} s, peak {peak:.0f} dBFS{wav_note})")
@@ -764,6 +778,129 @@ def main() -> None:
             state.message(line, player=aircraft.player, mission=True)
         except (OSError, RuntimeError):
             pass  # optional destination; do not affect the existing echo/logs
+
+    def capture_debug_mark(who: str, note: str,
+                           controller: Controller | None,
+                           duration: float = 0.0,
+                           stt_latency_ms: float = 0.0,
+                           source: str = "radio") -> None:
+        """Save a point-in-time state record and notify this pilot privately."""
+        units = []
+        snapshot_error = ""
+        if state is not None:
+            try:
+                units = state.all_units()
+            except Exception as error:
+                snapshot_error = str(error)
+        else:
+            snapshot_error = "DCS state bridge disabled"
+
+        players = [unit for unit in units if unit.player]
+        srs_position = None
+        if client is not None:
+            try:
+                candidate = client.client_position(who)
+                if candidate and (abs(candidate[0]) > 1e-6
+                                  or abs(candidate[1]) > 1e-6):
+                    srs_position = candidate
+            except Exception:
+                pass
+        with lock:
+            learned = brain.callsign_for_speaker(who)
+            if learned == who:
+                learned = ""
+            aircraft = resolve_player_unit(
+                players, who, learned, solo=(len(players) == 1),
+                speaker_pos=srs_position)
+            callsign = learned
+            if not callsign and aircraft is not None:
+                callsign = slot_callsign(aircraft.callsign) or aircraft.callsign
+            pilot_states = pilot_state_snapshot(brain)
+            atc_state = {
+                "runway": brain.runway,
+                "wind": brain.wind,
+                "wind_direction_deg": brain.wind_dir,
+                "wind_speed_mps": brain.wind_speed,
+                "qnh": brain.qnh,
+                "weather": brain.weather,
+                "bullseye": list(brain.bullseye) if brain.bullseye else None,
+                "pilots": pilot_states,
+            }
+            marker_positions = {}
+            for unit in players:
+                callsign = brain.callsign_for_speaker(unit.player)
+                if callsign == unit.player:
+                    callsign = slot_callsign(unit.callsign) or unit.callsign
+                point = {"lat": unit.lat, "lon": unit.lon}
+                marker_positions[callsign] = point
+                marker_positions[unit.callsign] = point
+
+        local_stamp = datetime.datetime.now().astimezone().strftime("%H:%M:%S")
+        marker_guid = uuid.uuid4().hex[:8].upper()
+        event = {
+            "guid": marker_guid,
+            "note": note,
+            "transcription": "DEBUG" + (f" {note}" if note else ""),
+            "requester": {
+                "source": source,
+                "srs_name": who if source == "radio" else "",
+                "callsign": callsign or "",
+                "dcs_player": aircraft.player if aircraft else "",
+                "unit": aircraft.callsign if aircraft else "",
+                "unit_type": aircraft.type if aircraft else "",
+            },
+            "radio": {
+                "agency": controller.value if controller else "",
+                "frequency_mhz": freq_for(controller) / 1e6 if controller else None,
+                "transmission_duration_s": duration,
+                "stt_latency_ms": round(stt_latency_ms),
+            },
+            "aircraft_picture": aircraft_snapshot(units),
+            "map_positions": marker_positions,
+            "atc_state": atc_state,
+        }
+        if snapshot_error:
+            event["snapshot_error"] = snapshot_error
+        try:
+            sequence = debug_marks.append(event)
+        except (OSError, TypeError, ValueError) as error:
+            log(f"DEBUG MARK save failed for {who!r}: {error}")
+            return
+
+        if map_service is not None:
+            try:
+                map_service.record_debug_marker({
+                    "guid": marker_guid,
+                    "label": f"DEBUG {marker_guid}",
+                    "t": local_stamp,
+                    "note": note,
+                    "positions": marker_positions,
+                })
+            except Exception as error:
+                log(f"DEBUG MARK {marker_guid} debrief/map attach failed: {error}")
+
+        log(f"DEBUG MARK #{sequence} {marker_guid} {who} "
+            f"({callsign or 'callsign unknown'}) "
+            f"saved to {debug_marks.path.name} "
+            f"version={debug_marks.version} sha={debug_marks.git_sha}")
+        if (source == "radio" and state is not None
+                and aircraft is not None and aircraft.player):
+            display = f"{local_stamp} - DEBUG {marker_guid}"
+            if note:
+                display += f": {note[:240]}"
+            try:
+                if not state.message(display, player=aircraft.player,
+                                     duration=8.0, mission=True):
+                    log(f"DEBUG MARK DCS notice not delivered to {aircraft.player}")
+            except Exception as error:
+                log(f"DEBUG MARK DCS notice failed: {error}")
+        elif source == "radio" and state is not None:
+            log(f"DEBUG MARK could not resolve {who!r} to a DCS player; "
+                "snapshot was saved without an in-game notice")
+
+    if map_service is not None:
+        map_service.debug_marker_callback = lambda: capture_debug_mark(
+            "map", "", None, source="map")
 
     # Wording coach (coach mode): a coaching note is a direct in-game message
     # to the pilot who made the call — never spoken on the radio, so the

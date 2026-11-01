@@ -9,7 +9,7 @@ const PHASE_COLOR = {
 };
 
 let map, ctrLayer, staticLayer, arrivalHandoffLayer, aircraftLayer, aiLayer;
-let chartLayer, pathLayer, commLayer;
+let chartLayer, pathLayer, commLayer, debugLayer;
 let bullseyeLayer;  // STT readings, candidate repairs, and actual-position rings
 let bullseyeCompassLayer;  // shown only while inspecting an actual-position popup
 let baseLayer;  // the base-map tile layer (OSM or DCS); swapped on config change
@@ -23,6 +23,7 @@ const markers = new Map();  // callsign -> L.marker
 const aiMarkers = new Map();
 const paths = new Map();    // callsign -> L.layerGroup of path segments
 const commMarkers = new Map();  // callsign -> L.layerGroup
+const debugMarkers = new Map(); // GUID + callsign -> DEBUG map marker
 // Which comm popup the user wants open (null = none). The map redraws every
 // 2 s, so we reopen only the popup the user actually opened, and a map click
 // clears this so a dismissed popup stays dismissed.
@@ -82,6 +83,7 @@ function initMap(center) {
   arrivalHandoffLayer = L.layerGroup().addTo(map);
   pathLayer = L.layerGroup().addTo(map);
   commLayer = L.layerGroup().addTo(map);
+  debugLayer = L.layerGroup().addTo(map);
   bullseyeLayer = L.layerGroup().addTo(map);
   bullseyeCompassLayer = L.layerGroup().addTo(map);
   aiLayer = L.layerGroup().addTo(map);
@@ -1141,6 +1143,46 @@ function drawComms(ac) {
   }
 }
 
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, (ch) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  })[ch]);
+}
+
+function drawDebugMarkers(list) {
+  const seen = new Set();
+  for (const item of list || []) {
+    const lat = Number(item.lat), lon = Number(item.lon);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+    const guid = String(item.guid || '');
+    if (!guid) continue;
+    const callsign = String(item.callsign || '');
+    const key = `${guid}:${callsign}:${lat.toFixed(5)},${lon.toFixed(5)}`;
+    seen.add(key);
+    const details = [
+      `<b>${escapeHtml(item.label || `DEBUG ${guid}`)}</b>`,
+      escapeHtml(item.t || ''),
+      callsign ? escapeHtml(callsign) : '',
+      item.note ? escapeHtml(item.note) : '',
+    ].filter(Boolean).join('<br>');
+    let marker = debugMarkers.get(key);
+    if (marker) {
+      marker.setLatLng([lat, lon]).setTooltipContent(details);
+    } else {
+      marker = L.marker([lat, lon], {
+        icon: L.divIcon({ className: 'debug-mark-icon',
+          html: '<div class="debug-mark">D</div>',
+          iconSize: [22, 22], iconAnchor: [11, 11] }),
+        title: `DEBUG ${guid}`,
+      }).bindTooltip(details, { direction: 'top' }).addTo(debugLayer);
+      debugMarkers.set(key, marker);
+    }
+  }
+  for (const [key, marker] of debugMarkers) {
+    if (!seen.has(key)) { debugLayer.removeLayer(marker); debugMarkers.delete(key); }
+  }
+}
+
 function aiIcon(ac) {
   const color = ac.coalition === 2 ? '#8b949e' : '#f85149';
   return L.divIcon({
@@ -1270,7 +1312,9 @@ async function tick() {
     drawBullseyeCalls(data.aircraft, data.airfield);
     drawTable(data.aircraft);
     drawChatter(data.chatter || [], data.airfield.agencies || []);
+    drawDebugMarkers(data.debug_markers || []);
     drawControl(data.control);
+    drawDebugMarker(Boolean(data.debug_mark_enabled));
     const err = document.getElementById('error');
     if (data.error) { err.hidden = false; err.textContent = `DCS: ${data.error}`; }
     else { err.hidden = true; }
@@ -1318,6 +1362,33 @@ function drawControl(control) {
   }
   if (control.current) sel.value = control.current;
 }
+
+function drawDebugMarker(enabled) {
+  const button = document.getElementById('debug-mark-btn');
+  if (button) button.hidden = !enabled;
+}
+
+async function markDebugPoint() {
+  const button = document.getElementById('debug-mark-btn');
+  if (button) button.disabled = true;
+  try {
+    const res = await fetch('/api/debug/mark', { method: 'POST' });
+    const result = await res.json().catch(() => ({}));
+    if (!res.ok || !result.ok) alert(`DEBUG mark failed: ${result.error || 'unknown error'}`);
+    else if (button) button.textContent = 'MARKED';
+  } catch (e) {
+    alert('DEBUG mark failed: map server is unavailable');
+  } finally {
+    setTimeout(() => {
+      if (button) { button.disabled = false; button.textContent = 'DEBUG'; }
+    }, 1500);
+  }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const button = document.getElementById('debug-mark-btn');
+  if (button) button.addEventListener('click', markDebugPoint);
+});
 
 async function postControl(path, body) {
   const status = document.getElementById('status');

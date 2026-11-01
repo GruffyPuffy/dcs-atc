@@ -50,6 +50,16 @@ fi
 # the SRS service name. An explicit --host on the command line still wins.
 srs_host="${ATC_SRS_HOST:-127.0.0.1}"
 
+# Keep DEBUG marks attributable when running from a host checkout as well as
+# from the Docker entrypoint (which already exports these values).
+if command -v git >/dev/null 2>&1; then
+  ATC_GIT_SHA="${ATC_GIT_SHA:-$(git -C "$repo_dir" rev-parse HEAD 2>/dev/null || true)}"
+  ATC_VERSION="${ATC_VERSION:-$(git -C "$repo_dir" describe --tags --exact-match HEAD 2>/dev/null \
+    || git -C "$repo_dir" rev-parse --short=12 HEAD 2>/dev/null || true)}"
+fi
+export ATC_GIT_SHA="${ATC_GIT_SHA:-unknown}"
+export ATC_VERSION="${ATC_VERSION:-dev}"
+
 # Whisper STT: by default the bot auto-selects (large-v3 on a GPU,
 # medium.en on CPU). Override with ATC_STT_MODEL / ATC_STT_DEVICE /
 # ATC_STT_COMPUTE (e.g. ATC_STT_MODEL=small.en on a low-power host). An explicit
@@ -65,6 +75,6 @@ if [[ " $* " != *" --stt-compute "* && -n "${ATC_STT_COMPUTE:-}" ]]; then
   stt_args+=(--stt-compute "$ATC_STT_COMPUTE")
 fi
 
-echo "Starting ATC bot (log: /tmp/atc_log.txt) — Ctrl+C to stop."
+echo "Starting ATC bot ($ATC_VERSION, ${ATC_GIT_SHA:0:12}; log: /tmp/atc_log.txt) — Ctrl+C to stop."
 exec "$uv_bin" run atc_bot.py --host "$srs_host" --eam atc --log /tmp/atc_log.txt \
   "${map_args[@]}" "${stt_args[@]}" "$@"
