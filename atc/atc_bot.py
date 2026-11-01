@@ -1202,6 +1202,18 @@ def main() -> None:
                               controller=Controller.CONTROL, callsign=callsign,
                               radio_policy=RADIO_ANSWER_POLICY[0],
                               radio_wait=RADIO_ANSWER_POLICY[1])
+                    # Optional Stingray training task: monitor the assigned
+                    # Bullseye cylinder independently for each player.
+                    with lock:
+                        training_complete = brain.check_stingray_training_task(
+                            callsign, tr)
+                    if training_complete:
+                        log(f"STINGRAY TASK COMPLETE: {callsign} ({ac.player})")
+                        speak(training_complete,
+                              freq=freq_for(Controller.STINGRAY),
+                              controller=Controller.STINGRAY, callsign=callsign,
+                              radio_policy=RADIO_NORMAL_POLICY[0],
+                              radio_wait=RADIO_NORMAL_POLICY[1])
                     # After an RTB call, AWACS makes one distance-based push
                     # back to Control. A pilot who misses it can still check in
                     # directly on Control; no repeated push is needed.

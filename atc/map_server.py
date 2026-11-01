@@ -384,6 +384,16 @@ class TrackHistory:
             return [float(bullseye[0]), float(bullseye[1])]
         return None
 
+    @staticmethod
+    def read_stingray_training(path: Path) -> dict:
+        """Saved Stingray task circles, or empty for older files."""
+        try:
+            data = json.loads(path.read_text())
+        except (OSError, ValueError):
+            return {}
+        tasks = data.get("stingray_training_tasks") or {}
+        return tasks if isinstance(tasks, dict) else {}
+
 
 # Keep at most this many debrief files (one file per pilot spawn, so a
 # multi-ship session writes several). Oldest are pruned after a save.
@@ -610,6 +620,7 @@ class MapService:
         # record and save in these separate histories while it is selected.
         self._replay_tracks: TrackHistory | None = None
         self._replay_chatter: list[dict] = []
+        self._replay_stingray_training_tasks: dict = {}
         # Optional debrief file: restore saved trails on startup and autosave
         # them periodically, so a sortie survives a bot/map restart. When set
         # and the file already exists it is a startup *replay*: it is restored
@@ -619,6 +630,7 @@ class MapService:
         # player name -> current spawn file / callsign (one debrief per spawn)
         self._spawn_files: dict[str, Path] = {}
         self._spawn_callsigns: dict[str, str] = {}
+        self._spawn_started_at: dict[str, float] = {}
         self._spawn_debug_markers: dict[str, list[dict]] = {}
         self._debug_markers: list[dict] = []
         # Live view only shows markers recorded since its most recent return
@@ -633,6 +645,8 @@ class MapService:
             # replayed sortie (older files simply have none).
             self._chatter.extend(TrackHistory.read_chatter(self.tracks_file))
             self._debug_markers = TrackHistory.read_debug_markers(self.tracks_file)
+            self._replay_stingray_training_tasks = (
+                TrackHistory.read_stingray_training(self.tracks_file))
         # `replay` true forces read-only startup review; an existing tracks_file
         # also defaults to replay (don't clobber a saved sortie).
         self.replay = bool(replay or existed)
@@ -676,6 +690,8 @@ class MapService:
                 if self.brain.bullseye:
                     data["bullseye"] = list(self.brain.bullseye)
                 data["debug_markers"] = list(self._debug_markers)
+                data["stingray_training_tasks"] = (
+                    self._stingray_training_tasks(include_inactive=True))
                 self.tracks.save_json(data, self.tracks_file)
             # Debriefs are saved every session now; keep the newest few only.
             prune_debriefs()
@@ -699,16 +715,39 @@ class MapService:
                 if (e.get("who") or "").lower() in names
                 or (e.get("callsign") or "").lower() in names]
 
+    def _stingray_training_tasks(
+            self, callsigns: set[str] | None = None,
+            since: float | None = None,
+            include_inactive: bool = False) -> dict[str, list[dict]]:
+        """Copy active tasks for live view, or full task history for debriefs."""
+        result = {}
+        with self.lock:
+            for callsign, pilot in self.brain.pilots.items():
+                if callsigns is not None and callsign not in callsigns:
+                    continue
+                tasks = [dict(task) for task in pilot.stingray_training_tasks
+                         if (include_inactive or
+                             (not task["completed"] and not task["abandoned"]))
+                         and (since is None
+                              or task.get("assigned_at", 0) >= since)]
+                if tasks:
+                    result[callsign] = tasks
+        return result
+
     def _write_spawn(self, player: str, path: Path) -> None:
         keys = self._spawn_track_keys(player)
         data = self.tracks.to_json(keys)
         debug_markers = self._spawn_debug_markers.get(player, [])
-        if not data.get("tracks") and not debug_markers:
-            return
         callsign = self._spawn_callsigns.get(player) or ""
+        training_tasks = self._stingray_training_tasks(
+            {callsign}, since=self._spawn_started_at.get(player),
+            include_inactive=True)
+        if not data.get("tracks") and not debug_markers and not training_tasks:
+            return
         data["player"] = player
         data["callsign"] = callsign
         data["debug_markers"] = list(debug_markers)
+        data["stingray_training_tasks"] = training_tasks
         with self._chatter_lock:
             data["chatter"] = self._filter_chatter(player, callsign)
         if self.brain.bullseye:
@@ -737,6 +776,7 @@ class MapService:
                 self._end_spawn_locked(player)
             self._spawn_files[player] = path
             self._spawn_callsigns[player] = cs
+            self._spawn_started_at[player] = time.time()
             self._spawn_debug_markers[player] = []
         self.log(f"[*] Debrief spawn: {path.name}  player={player}"
                  f"  callsign={cs or '-'}{extra}")
@@ -757,6 +797,7 @@ class MapService:
                 self.tracks.forget(key)
                 self._last_phase.pop(key, None)
         self._spawn_callsigns.pop(player, None)
+        self._spawn_started_at.pop(player, None)
         self._spawn_debug_markers.pop(player, None)
 
     def record_debug_marker(self, marker: dict) -> None:
@@ -998,10 +1039,12 @@ class MapService:
         # replayed sortie (falls back to empty for older files without it).
         chatter = TrackHistory.read_chatter(path)
         debug_markers = TrackHistory.read_debug_markers(path)
+        training_tasks = TrackHistory.read_stingray_training(path)
         with self.lock:
             self._replay_tracks = loaded
             self._replay_chatter = chatter
             self._replay_debug_markers = debug_markers
+            self._replay_stingray_training_tasks = training_tasks
             self._replay_path = path
             self.replay = True
         return {"ok": True, "name": base}
@@ -1015,6 +1058,7 @@ class MapService:
             self._replay_tracks = None
             self._replay_chatter = []
             self._replay_debug_markers = []
+            self._replay_stingray_training_tasks = {}
             self._replay_path = None
             self.replay = False
         return {"ok": True}
@@ -1189,6 +1233,9 @@ class MapService:
             "chatter": (self._replay_chatter if self.replay
                         else self.chatter()),
             "debug_markers": self._visible_debug_markers(),
+            "stingray_training_tasks": (
+                self._replay_stingray_training_tasks if self.replay
+                else self._stingray_training_tasks()),
             "error": error,
             "replay": self.replay,
             "debug_mark_enabled": (not self.replay

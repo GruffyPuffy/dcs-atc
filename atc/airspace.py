@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import math
+import random
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -68,6 +69,20 @@ def bearing_distance(lat1: float, lon1: float, lat2: float,
                      lon2: float) -> tuple[float, float]:
     """Bearing (degrees true) and distance (NM) from point 1 to point 2."""
     return _bearing(lat1, lon1, lat2, lon2), _haversine_nm(lat1, lon1, lat2, lon2)
+
+
+def _destination(lat: float, lon: float, bearing_deg: float,
+                  distance_nm: float) -> tuple[float, float]:
+    """WGS84 destination point for a true bearing and great-circle distance."""
+    angular = distance_nm * M_PER_NM / EARTH_RADIUS_M
+    bearing = math.radians(bearing_deg)
+    lat1, lon1 = math.radians(lat), math.radians(lon)
+    lat2 = math.asin(math.sin(lat1) * math.cos(angular)
+                     + math.cos(lat1) * math.sin(angular) * math.cos(bearing))
+    lon2 = lon1 + math.atan2(
+        math.sin(bearing) * math.sin(angular) * math.cos(lat1),
+        math.cos(angular) - math.sin(lat1) * math.sin(lat2))
+    return math.degrees(lat2), (math.degrees(lon2) + 540) % 360 - 180
 
 
 GATE_ARC_HALF_ANGLE_DEG = 18.0
@@ -204,9 +219,37 @@ class Airfield:
     # callsign (e.g. Adder 1-1), even when the flight reports as one-ship.
     # False keeps the legacy formation-sensitive rule (solo uses Adder 1).
     address_lead_by_individual_callsign: bool = False
+    # Optional Stingray training annulus centered on the airfield reference.
+    # Spoken task points are converted to Bullseye BRA from the mission bullseye.
+    stingray_training_inner_range_nm: float = 0.0
+    stingray_training_outer_range_nm: float = 0.0
+    stingray_training_target_radius_nm: float = 2.0
+    stingray_training_altitude_tolerance_ft: float = 500.0
     # Base-map config for the live map: {base: "dcs"|"osm", layers: {...}}.
     # Global (not per-airfield) but carried on the airfield for convenience.
     map_config: dict = field(default_factory=dict)
+
+    def random_stingray_training_target(self, rng=None
+                                        ) -> tuple[float, float] | None:
+        """Choose a uniform-area WGS84 point in the configured annulus."""
+        inner = self.stingray_training_inner_range_nm
+        outer = self.stingray_training_outer_range_nm
+        if inner < 0 or outer <= inner or outer <= 0:
+            return None
+        chooser = rng or random
+        # Square-root sampling makes targets uniform by area rather than
+        # clustering around the inner edge of the ring.
+        radius = math.sqrt(inner ** 2 + chooser.random() *
+                           (outer ** 2 - inner ** 2))
+        bearing = chooser.uniform(0.0, 360.0)
+        return _destination(self.ctr.center_lat, self.ctr.center_lon,
+                            bearing, radius)
+
+    @property
+    def has_stingray_training_zone(self) -> bool:
+        return (self.stingray_training_inner_range_nm >= 0
+                and self.stingray_training_outer_range_nm
+                > self.stingray_training_inner_range_nm)
 
     def taxi_route(self, lat: float | None, lon: float | None,
                    runway: str | None = None) -> str | None:
@@ -1113,6 +1156,26 @@ def _build_airfield(name: str, spec: dict, defaults: dict,
                      for p, v in spec.get("parking_areas", {}).items()}
     holding_points = {h: (float(v[0]), float(v[1]))
                       for h, v in spec.get("holding_points", {}).items()}
+    stingray_training_spec = spec.get("stingray_training_zone") or {}
+    stingray_training_inner_range_nm = float(
+        stingray_training_spec.get("inner_range_nm", 0.0))
+    stingray_training_outer_range_nm = float(
+        stingray_training_spec.get("outer_range_nm", 0.0))
+    stingray_training_target_radius_nm = float(
+        stingray_training_spec.get("target_radius_nm", 2.0))
+    stingray_training_altitude_tolerance_ft = float(
+        stingray_training_spec.get("altitude_tolerance_ft", 500.0))
+    if (stingray_training_inner_range_nm < 0
+            or stingray_training_outer_range_nm < 0
+            or (stingray_training_inner_range_nm > 0
+                and stingray_training_outer_range_nm == 0)
+            or (stingray_training_outer_range_nm > 0
+                and stingray_training_outer_range_nm
+                <= stingray_training_inner_range_nm)
+            or stingray_training_target_radius_nm <= 0
+            or stingray_training_altitude_tolerance_ft < 0):
+        raise ValueError(
+            f"airfield {name!r} has invalid Stingray training tolerances")
     tower_raw = spec.get("tower_pos")
     tower_pos = (float(tower_raw[0]), float(tower_raw[1])) if tower_raw else None
 
@@ -1167,5 +1230,12 @@ def _build_airfield(name: str, spec: dict, defaults: dict,
         channels={k: str(v) for k, v in spec.get("channels", {}).items()},
         address_lead_by_individual_callsign=bool(
             spec.get("address_lead_by_individual_callsign", False)),
+        stingray_training_inner_range_nm=(
+            stingray_training_inner_range_nm),
+        stingray_training_outer_range_nm=(
+            stingray_training_outer_range_nm),
+        stingray_training_target_radius_nm=stingray_training_target_radius_nm,
+        stingray_training_altitude_tolerance_ft=(
+            stingray_training_altitude_tolerance_ft),
         map_config=map_config or {},
     )

@@ -3455,6 +3455,33 @@ def test_stingray_checkin_is_acknowledged(brain):
     assert "say again" not in reply.lower()
 
 
+def test_cockpit_bearing_formatter_wraps_rounded_360_to_000(brain):
+    # A true bearing of 12.6° converts to 359.6° instrument at Kutaisi;
+    # rounding must wrap 360 back to the valid three-digit 000 bearing.
+    assert brain._format_cockpit_bearing(12.6) == "000"
+    assert brain._format_cockpit_bearing(12.0) == "359"
+
+
+def test_stingray_training_task_uses_instrument_bulls_once(brain, airfield,
+                                                           monkeypatch):
+    from airspace import _destination
+
+    pilot = _stingray(brain)
+    pilot.stingray_radar_contact_confirmed = True
+    bull_lat, bull_lon = brain.bullseye
+    track = _track(airfield, bull_lat, bull_lon, alt_ft=15000.0)
+
+    # True 70° becomes instrument 057° (−13° exactly once). A value that
+    # rounds through 360° must be spoken as 000°.
+    for true_bearing, expected in ((70.0, "057"), (12.6, "000")):
+        target = _destination(bull_lat, bull_lon, true_bearing, 30.0)
+        monkeypatch.setattr(
+            airfield, "random_stingray_training_target", lambda: target)
+        pilot.stingray_training_tasks.clear()
+        reply = brain._request_stingray_training_task("Colt 1", pilot, track)
+        assert f"Bulls {expected} for 30" in reply, reply
+
+
 def test_stingray_bullseye_call_acknowledged_without_a_bullseye(brain):
     # No mission bullseye (bare brain): acknowledge, never invent a position.
     _stingray(brain)

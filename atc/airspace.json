@@ -44,6 +44,13 @@
       "address_lead_by_individual_callsign": true,
       "magnetic_variation_deg": 7.0,
       "map_rotation_deg": 6.0,
+      "stingray_training_zone": {
+        "_comment": "Random training targets in a 20–40 NM annulus around the Kutaisi CTR center. Task calls use the mission Bullseye reference.",
+        "inner_range_nm": 20.0,
+        "outer_range_nm": 40.0,
+        "target_radius_nm": 2.0,
+        "altitude_tolerance_ft": 500.0
+      },
       "elevation_ft": 148,
       "tower_pos": [
         42.1797,

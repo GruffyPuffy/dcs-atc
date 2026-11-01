@@ -22,7 +22,7 @@ import json
 import random
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 
@@ -125,6 +125,7 @@ DEPARTURE_CLIMB_ANGELS_MIN = 12
 DEPARTURE_CLIMB_ANGELS_MAX = 18
 DEFAULT_DEPARTURE_CLIMB_ANGELS = 15
 ANGELS_HANDOFF_SLOP_FT = 500
+STINGRAY_TRAINING_INSIDE_SAMPLES = 3
 # Master Arms describes the RTB handoff as usually occurring 25–80 NM from
 # base. Use a single midpoint trigger; a pilot can still request Control early.
 RTB_CONTROL_HANDOFF_NM = 50.0
@@ -590,6 +591,9 @@ class PilotState:
     # Control has pushed the departure to Stingray (AWACS). Fires once; we do
     # not simulate channel 3, but the SOP call still goes out on Control.
     stingray_handoff_announced: bool = False
+    stingray_radar_contact_confirmed: bool = False
+    # Per-flight, persistent task history for the live map and saved debrief.
+    stingray_training_tasks: list[dict] = field(default_factory=list)
     altitude_warned: bool = False  # warned about busting the CTR ceiling
     incursion_warned: bool = False  # warned about being on the runway uncleared
     incursion_streak: int = 0  # consecutive on-runway polls (debounce)
@@ -1450,7 +1454,7 @@ class AtcBrain:
                                turn: str = "") -> None:
         """Remember the assigned join values for its later pilot readback."""
         pilot.arrival_join_heading = (
-            f"{self._cockpit_bearing(heading):03.0f}"
+            self._format_cockpit_bearing(heading)
             if heading is not None else "")
         pilot.arrival_join_turn = turn or ""
         pilot.arrival_join_readback_complete = False
@@ -2170,6 +2174,8 @@ class AtcBrain:
         pilot.departure_climb_angels = None
         pilot.control_checkin_received = False
         pilot.stingray_handoff_announced = False
+        pilot.stingray_radar_contact_confirmed = False
+        self._abandon_stingray_training_task(pilot)
         pilot.exit_gate = ""
         pilot.entry_gate = ""
         pilot.arrival_join_issued = False
@@ -2952,7 +2958,7 @@ class AtcBrain:
                    else "control_join_requested_straight")
             pilot.arrival_join_issued = True
             return self._say(key, callsign, gate=requested,
-                             heading=f"{self._cockpit_bearing(heading):03.0f}",
+                             heading=self._format_cockpit_bearing(heading),
                              turn=turn)
         # Stingray has already established that this flight is returning when
         # it requests RTB. If its first Control call is only a position report
@@ -2985,7 +2991,7 @@ class AtcBrain:
             key = "control_join" if turn else "control_join_straight"
             pilot.arrival_join_issued = True
             return self._say(key, callsign, gate=gate,
-                             heading=f"{self._cockpit_bearing(heading):03.0f}",
+                             heading=self._format_cockpit_bearing(heading),
                              turn=turn)
         # Readback of the join clearance ("150 to join via Entry East") ->
         # Control issues the descent to 1500 ft (once). Tower handoff is
@@ -3083,7 +3089,7 @@ class AtcBrain:
             key = "control_join" if turn else "control_join_straight"
             pilot.arrival_join_issued = True
             return self._say(key, callsign, gate=gate,
-                             heading=f"{self._cockpit_bearing(heading):03.0f}",
+                             heading=self._format_cockpit_bearing(heading),
                              turn=turn)
         # Departure check-in ("airborne, 5 miles east climbing" / "at 1500 ft"):
         # radar contact and a climb clearance. Only the *first* check-in gets the
@@ -3213,6 +3219,7 @@ class AtcBrain:
                      r"request(?:ing)?\s+(?:to\s+)?(?:rtb|return)|"
                      r"recover(?:ing|y))\b", low):
             repeated = pilot.rtb_requested
+            self._abandon_stingray_training_task(pilot)
             pilot.phase = Phase.STINGRAY
             pilot.rtb_requested = True
             if not repeated:
@@ -3234,7 +3241,19 @@ class AtcBrain:
             # map shows the right phase without a full departure first.
             if pilot.phase in (Phase.IDLE, Phase.AIRBORNE):
                 pilot.phase = Phase.STINGRAY
-            return self._bullseye_reply(callsign, pilot, low, track)
+            reply = self._bullseye_reply(callsign, pilot, low, track)
+            if "radar contact" in reply.lower():
+                pilot.stingray_radar_contact_confirmed = True
+            return reply
+
+        # Optional trainer-only tasking. The ordinary MA "as fragged" flow is
+        # unchanged; a flight opts in after Stingray has positively answered
+        # its Bullseye picture with radar contact.
+        if re.search(r"\brequest(?:ing)?\s+(?:(?:a\s+)?"
+                     r"(?:training\s+)?task(?:ing)?|another\s+task|"
+                     r"new\s+task)\b", low):
+            return self._request_stingray_training_task(
+                callsign, pilot, track)
 
         # Handoff back to Control ("request Control", "requesting channel 8",
         # "request landing", "inbound"). Stingray does not control the field, so
@@ -3245,6 +3264,7 @@ class AtcBrain:
         if re.search(r"\b(control|channel\s*8|channel eight|inbound|"
                      r"request(?:ing)?\s+(?:to\s+)?(?:land|landing|approach)|"
                      r"approach)\b", low):
+            self._abandon_stingray_training_task(pilot)
             return self._say("stingray_contact_control", callsign)
 
         # Package-channel reports that need no answer from AWACS: the flight
@@ -3286,6 +3306,11 @@ class AtcBrain:
         convention (true − magnetic variation − DCS map rotation; see
         airspace.py Airfield.magnetic_variation_deg/map_rotation_deg)."""
         return (bearing + self.cockpit_bearing_offset_deg) % 360
+
+    def _format_cockpit_bearing(self, bearing: float) -> str:
+        """Format a cockpit bearing as three digits in the 000–359 range."""
+        rounded = int(round(self._cockpit_bearing(bearing))) % 360
+        return f"{rounded:03d}"
 
     def _bullseye_reply(self, callsign: str, pilot: PilotState, low: str,
                         track: AircraftTrack | None) -> str:
@@ -3569,6 +3594,8 @@ class AtcBrain:
         pilot.climb_issued = False
         pilot.departure_climb_angels = None
         pilot.stingray_handoff_announced = False
+        pilot.stingray_radar_contact_confirmed = False
+        self._abandon_stingray_training_task(pilot)
         pilot.arrival_join_issued = False
         self._remember_arrival_join(pilot, None)
         pilot.parking_cleared = False
@@ -3838,6 +3865,94 @@ class AtcBrain:
         pilot.pending_handoff_to = Controller.STINGRAY.value
         return self._say("contact_stingray", callsign)
 
+    def _request_stingray_training_task(
+            self, callsign: str, pilot: PilotState,
+            track: AircraftTrack | None) -> str:
+        """Assign an opt-in training point in the configured annulus."""
+        if (pilot.phase != Phase.STINGRAY or not
+                pilot.stingray_radar_contact_confirmed
+                or pilot.rtb_requested
+                or pilot.pending_handoff_to == Controller.CONTROL.value):
+            return self._say("stingray_training_not_ready", callsign)
+        if (track is None or self.airfield is None or self.bullseye is None
+                or not self.airfield.has_stingray_training_zone):
+            return self._say("stingray_training_unavailable", callsign)
+        active = next((task for task in reversed(pilot.stingray_training_tasks)
+                       if not task["completed"] and not task["abandoned"]),
+                      None)
+        if active is not None:
+            bearing, distance = bearing_distance(
+                self.bullseye[0], self.bullseye[1],
+                active["target_lat"], active["target_lon"])
+            return self._say(
+                "stingray_training_active", callsign,
+                bearing=self._format_cockpit_bearing(bearing),
+                range=f"{distance:.0f}", angels=active["angels"])
+        target = self.airfield.random_stingray_training_target()
+        if target is None:
+            return self._say("stingray_training_unavailable", callsign)
+        angels = (pilot.departure_climb_angels
+                  or DEFAULT_DEPARTURE_CLIMB_ANGELS)
+        bearing, distance = bearing_distance(
+            self.bullseye[0], self.bullseye[1], target[0], target[1])
+        task = {
+            "task_id": len(pilot.stingray_training_tasks) + 1,
+            "target_lat": target[0],
+            "target_lon": target[1],
+            "angels": angels,
+            "radius_nm": self.airfield.stingray_training_target_radius_nm,
+            "altitude_tolerance_ft":
+                self.airfield.stingray_training_altitude_tolerance_ft,
+            "assigned_at": time.time(),
+            "completed": False,
+            "completed_at": None,
+            "abandoned": False,
+            "inside_samples": 0,
+        }
+        pilot.stingray_training_tasks.append(task)
+        return self._say(
+            "stingray_training_task", callsign,
+            bearing=self._format_cockpit_bearing(bearing),
+            range=f"{distance:.0f}", angels=angels)
+
+    @staticmethod
+    def _abandon_stingray_training_task(pilot: PilotState) -> None:
+        """Stop monitoring an unfinished task while keeping its debrief mark."""
+        task = next((item for item in reversed(pilot.stingray_training_tasks)
+                     if not item["completed"] and not item["abandoned"]),
+                    None)
+        if task is not None:
+            task["abandoned"] = True
+            task["abandoned_at"] = time.time()
+
+    def check_stingray_training_task(self, callsign: str,
+                                    track: AircraftTrack | None
+                                    ) -> str | None:
+        """Complete an assigned task after stable entry into its 3D cylinder."""
+        pilot = self._pilot(callsign)
+        if (pilot.phase != Phase.STINGRAY or pilot.rtb_requested
+                or track is None):
+            return None
+        task = next((item for item in reversed(pilot.stingray_training_tasks)
+                     if not item["completed"] and not item["abandoned"]),
+                    None)
+        if task is None:
+            return None
+        _, distance = bearing_distance(
+            task["target_lat"], task["target_lon"], track.lat, track.lon)
+        inside = (distance <= task["radius_nm"]
+                  and abs(track.alt_ft - task["angels"] * 1000)
+                  <= task["altitude_tolerance_ft"])
+        if not inside:
+            task["inside_samples"] = 0
+            return None
+        task["inside_samples"] += 1
+        if task["inside_samples"] < STINGRAY_TRAINING_INSIDE_SAMPLES:
+            return None
+        task["completed"] = True
+        task["completed_at"] = time.time()
+        return self._say("stingray_training_complete", callsign)
+
     def check_stingray_rtb_handoff(self, callsign: str,
                                    track: AircraftTrack | None) -> str | None:
         """One delayed Stingray-to-Control push after an RTB call.
@@ -4046,7 +4161,7 @@ class AtcBrain:
             return ""
         bearing, distance = bearing_distance(
             self.bullseye[0], self.bullseye[1], track.lat, track.lon)
-        return (f"bullseye {self._cockpit_bearing(bearing):03.0f} for "
+        return (f"bullseye {self._format_cockpit_bearing(bearing)} for "
                 f"{distance:.0f}, "
                 f"angels {track.alt_ft / 1000.0:.0f}")
 
@@ -4105,7 +4220,7 @@ class AtcBrain:
         if heading is None:
             return self._say("directions_unknown", callsign, agency=agency)
         pilot = self._pilot(callsign)
-        pilot.vector_heading = f"{self._cockpit_bearing(heading):03.0f}"
+        pilot.vector_heading = self._format_cockpit_bearing(heading)
         pilot.vector_runway = runway
         return self._say("vectors", callsign, agency=agency,
                           heading=pilot.vector_heading,

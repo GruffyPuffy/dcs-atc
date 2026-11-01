@@ -1131,6 +1131,18 @@ the package channel:
   not repeated; a pilot can request Control at any time or check in directly if
   the push was missed. Control accepts that check-in and continues the inbound
   flow.
+- **Optional training task**: after Stingray confirms radar contact, a pilot may
+  say *"request training tasking"*. Kutaisi assigns a random point in the
+  configured 20–40 NM annulus around the field, spoken as **Bulls bearing for
+  range** from the mission Bullseye. The task uses that flight's already
+  assigned Angels level. The monitor completes it after three consecutive
+  two-second samples inside a 2 NM / ±500 ft cylinder. Stingray then says the
+  task is complete; its circle disappears from the live map, and the pilot may
+  continue free flying, request another task, or report RTB. Only active task
+  circles appear live; task history is saved with the pilot's debrief and shown
+  on replay. The configured annulus itself is not drawn. Targets are selected
+  independently per flight; pilots remain responsible for visual SA around
+  nearby traffic.
 
 **Not implemented yet:** RAMROD authentication (the two-letter challenge with
 the in-between answer). The SOP has it, but it needs a prebriefed key, which is

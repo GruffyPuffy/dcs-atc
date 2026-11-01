@@ -9,7 +9,7 @@ const PHASE_COLOR = {
 };
 
 let map, ctrLayer, staticLayer, arrivalHandoffLayer, aircraftLayer, aiLayer;
-let chartLayer, pathLayer, commLayer, debugLayer;
+let chartLayer, pathLayer, commLayer, debugLayer, trainingTaskLayer;
 let bullseyeLayer;  // STT readings, candidate repairs, and actual-position rings
 let bullseyeCompassLayer;  // shown only while inspecting an actual-position popup
 let baseLayer;  // the base-map tile layer (OSM or DCS); swapped on config change
@@ -84,6 +84,7 @@ function initMap(center) {
   pathLayer = L.layerGroup().addTo(map);
   commLayer = L.layerGroup().addTo(map);
   debugLayer = L.layerGroup().addTo(map);
+  trainingTaskLayer = L.layerGroup().addTo(map);
   bullseyeLayer = L.layerGroup().addTo(map);
   bullseyeCompassLayer = L.layerGroup().addTo(map);
   aiLayer = L.layerGroup().addTo(map);
@@ -961,6 +962,29 @@ function drawArrivalHandoffZones(list, af, replay = false) {
   }
 }
 
+function drawStingrayTrainingTasks(tasksByCallsign) {
+  trainingTaskLayer.clearLayers();
+  for (const [callsign, tasks] of Object.entries(tasksByCallsign || {})) {
+    for (const task of tasks || []) {
+      if (!Number.isFinite(task.target_lat)
+          || !Number.isFinite(task.target_lon)
+          || !Number.isFinite(task.radius_nm)) continue;
+      const status = task.completed ? 'complete'
+        : task.abandoned ? 'abandoned' : 'assigned';
+      const color = task.completed ? '#3fb950'
+        : task.abandoned ? '#8b949e' : '#bc8cff';
+      L.circle([task.target_lat, task.target_lon], {
+        radius: task.radius_nm * 1852,
+        color, weight: 2, opacity: 0.95,
+        dashArray: task.completed ? '4 4' : undefined,
+        fillColor: color, fillOpacity: status === 'assigned' ? 0.12 : 0.06,
+      }).bindTooltip(`Stingray task ${task.task_id} · ${callsign} · `
+        + `Angels ${task.angels} ±${task.altitude_tolerance_ft} ft · ${status}`)
+        .addTo(trainingTaskLayer);
+    }
+  }
+}
+
 function drawAircraft(list) {
   const seen = new Set();
   for (const ac of list) {
@@ -1353,6 +1377,7 @@ async function tick() {
     drawAirspace(data.airfield);
     drawAiAir(data.ai_air || []);
     drawArrivalHandoffZones(data.aircraft, data.airfield, Boolean(data.replay));
+    drawStingrayTrainingTasks(data.stingray_training_tasks || {});
     drawAircraft(data.aircraft);
     const replayName = data.replay ? (data.replay_name || '') : '';
     if (replayName && replayName !== displayedReplayName) {
