@@ -591,6 +591,9 @@ class PilotState:
     # Trainer aid: this pilot asked for the in-game comms mirror ("trainer,
     # echo on"). Per-pilot, so each pilot controls their own feed.
     mirror_logs: bool = False
+    # Internal second destination for echo text; toggled with echo on/off.
+    # Kept separate so its delivery can be selected independently later.
+    mission_radio_log: bool = False
     # Ground has issued the taxi-to-parking clearance. Guards against the
     # readback ("cleared taxi to ramp north") re-matching the parking request
     # (it contains "to ramp") and re-issuing the clearance forever.
@@ -1979,9 +1982,11 @@ class AtcBrain:
         if re.search(r"\becho\b", low):
             if re.search(r"\b(off|stop|disable|no)\b", low):
                 pilot.mirror_logs = False
+                pilot.mission_radio_log = False
                 return self._say("trainer_echo_off", callsign, agency=agency)
             if re.search(r"\b(on|start|enable|yes)\b", low):
                 pilot.mirror_logs = True
+                pilot.mission_radio_log = True
                 return self._say("trainer_echo_on", callsign, agency=agency)
         if re.search(r"\bvolume\b", low):
             match = re.search(r"\bvolume\b\s*(?:to\s*)?(\d+(?:\.\d+)?)", low)
@@ -2001,6 +2006,11 @@ class AtcBrain:
         """True if this pilot asked for the in-game comms mirror."""
         pilot = self.pilots.get(callsign)
         return bool(pilot and pilot.mirror_logs)
+
+    def mission_radio_log_enabled(self, callsign: str) -> bool:
+        """Internal mission-log destination toggled by the existing echo aid."""
+        pilot = self.pilots.get(callsign)
+        return bool(pilot and pilot.mission_radio_log)
 
     def take_coach(self, callsign: str) -> str:
         """Take and clear the pending wording-coach note (one-shot).

@@ -21,6 +21,28 @@ def test_message_sends_text_and_player(monkeypatch):
     assert seen["player"] == "stefan"
 
 
+def test_mission_message_is_an_opt_in_targeted_variant(monkeypatch):
+    client = StateClient()
+    seen = {}
+
+    def fake_exchange(op, **fields):
+        seen["op"] = op
+        seen.update(fields)
+        return {"ok": True, "result": {"sent": "mission"}}
+
+    monkeypatch.setattr(client, "exchange", fake_exchange)
+    assert client.message("19:32:22 - YOU (Ch 7): \"hello\"",
+                         player="stefan", mission=True) is True
+    assert seen["op"] == "message"
+    assert seen["mission"] is True
+    assert seen["player"] == "stefan"
+
+    # It must not treat a chat/broadcast fallback as a mission delivery.
+    monkeypatch.setattr(client, "exchange", lambda op, **fields: {
+        "ok": True, "result": {"sent": "all"}})
+    assert client.message("private", player="stefan", mission=True) is False
+
+
 def test_message_returns_false_on_bridge_error(monkeypatch):
     client = StateClient()
     monkeypatch.setattr(client, "exchange",

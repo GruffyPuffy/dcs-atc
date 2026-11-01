@@ -252,20 +252,25 @@ class StateClient:
         return reply["result"]
 
     def message(self, text: str, player: str = "",
-                duration: float = 8.0) -> bool:
-        """Post text to the in-game chat/message log. To `player` by name when
-        given (else the whole mission). Used by --debug to mirror the ATC radio
-        exchange back to the pilot.
+                duration: float = 8.0, mission: bool = False) -> bool:
+        """Post text to chat, or to a named unit's mission message log.
+
+        The default chat path is unchanged. `mission=True` selects the
+        separately targeted DCS mission-message path and never broadcasts.
 
         Returns True only when the message was delivered to the *named* player
         (or when no player was requested). A named send that falls back to a
         mission-wide broadcast returns False, so a caller can retry until the
         player is actually in the mission (e.g. the join greeting).
         """
-        reply = self.exchange("message", text=text, player=player,
-                              duration=duration)
+        fields = {"text": text, "player": player, "duration": duration}
+        if mission:
+            fields["mission"] = True
+        reply = self.exchange("message", **fields)
         if not reply.get("ok"):
             return False
+        if mission:
+            return (reply.get("result") or {}).get("sent") == "mission"
         if player and (reply.get("result") or {}).get("sent") != "player":
             return False
         return True

@@ -715,6 +715,9 @@ def main() -> None:
                     _mirror(f"RX {who}: {text}", who)
             elif args.debug or _mirror_for(_debug_reply_to[0]):
                 _mirror(f"TX {who}: {text}", _debug_reply_to[0])
+            pilot = who if kind == "rx" else _debug_reply_to[0]
+            if kind in {"rx", "tx"} and _mission_log_for(pilot):
+                _mission_radio_line(kind, freq_hz, controller, text, pilot)
 
     def _mirror_for(who: str) -> bool:
         """True if this speaker asked for the in-game comms mirror."""
@@ -723,6 +726,13 @@ def main() -> None:
         with lock:
             callsign = brain.callsign_for_speaker(who)
             return brain.mirror_enabled(callsign)
+
+    def _mission_log_for(who: str) -> bool:
+        if not who:
+            return False
+        with lock:
+            callsign = brain.callsign_for_speaker(who)
+            return brain.mission_radio_log_enabled(callsign)
 
     def _mirror(line: str, player: str) -> None:
         # The bridge targets a player by their DCS player name, but `player` here
@@ -738,6 +748,33 @@ def main() -> None:
             state.message(line, player=name)
         except (OSError, RuntimeError):
             pass  # bridge down / no message API; the debug log is best-effort
+
+    def _mission_radio_line(kind: str, freq_hz: float,
+                            controller: Controller | str | None,
+                            text: str, pilot: str) -> None:
+        """Write the opt-in transcript in the pilot's DCS mission log."""
+        if state is None or not pilot:
+            return
+        agency = (controller.value if isinstance(controller, Controller)
+                  else str(controller or "").lower())
+        labels = {
+            "ground": "GROUND", "tower": "TOWER", "control": "CONTROL",
+            "stingray": "STINGRAY", "atis": "ATIS",
+        }
+        label = labels.get(agency)
+        channel = airfield.channels.get(agency)
+        if not label or not channel:
+            return
+        aircraft = unit_for_speaker(pilot)
+        if aircraft is None or not aircraft.player:
+            return
+        speaker = "YOU" if kind == "rx" else label
+        line = (f'{time.strftime("%H:%M:%S")} - {speaker.ljust(8)} '
+                f'(Ch {channel}): "{text}"')
+        try:
+            state.message(line, player=aircraft.player, mission=True)
+        except (OSError, RuntimeError):
+            pass  # optional destination; do not affect the existing echo/logs
 
     # Wording coach (coach mode): a coaching note is a direct in-game message
     # to the pilot who made the call — never spoken on the radio, so the
@@ -869,16 +906,14 @@ def main() -> None:
                         map_service.begin_spawn(
                             ac.player, callsign, unit=ac.callsign)
                 # Greet each newly-seen pilot with the radio setup, so they can
-                # tune in without reading the docs. Sent once per player (by
-                # DCS name) via the in-game message feed. Retry until the bridge
-                # confirms delivery: a pilot who joins while the mission is
-                # still loading is not yet in net.get_player_list, so the first
-                # attempt can silently fall back to a broadcast (or nothing).
+                # tune in without reading the docs. Use the targeted mission
+                # message path; it never falls back to a mission-wide broadcast.
+                # Retry until the bridge confirms delivery.
                 for ac in players:
                     if ac.player and ac.player not in greeted:
                         try:
                             if state.message("\n".join(radio_setup_lines()),
-                                             player=ac.player):
+                                             player=ac.player, mission=True):
                                 greeted.add(ac.player)
                         except (OSError, RuntimeError):
                             pass  # bridge down; retry next tick
@@ -1234,7 +1269,8 @@ def main() -> None:
 
     def radio_setup_lines() -> list[str]:
         """The radio-setup summary (also sent to pilots who join)."""
-        lines = [f"ATC trainer online at {airfield.name} — radio setup:"]
+        version = os.environ.get("ATC_VERSION") or "dev"
+        lines = [f"DCS-ATC {version} | {airfield.name}"]
         # Order by channel number (Ground 6, Tower 7, Control 8), not by
         # frequency, so the list reads in the order a pilot tunes them.
         def channel_of(controller) -> int:
@@ -1244,13 +1280,14 @@ def main() -> None:
         for hz, controller in sorted(controller_by_freq.items(),
                                      key=lambda item: channel_of(item[1])):
             ch = channels.get(controller.value, "")
-            ch_note = f"Ch {ch}  " if ch else ""
-            lines.append(f"  {controller.value.capitalize():8s} {ch_note}"
-                         f"{hz / 1e6:.3f} MHz AM")
+            label = controller.value.upper().ljust(8)
+            channel_text = f"(Ch {ch})" if ch else ""
+            lines.append(f"{label} {channel_text}: {hz / 1e6:.3f} MHz AM")
         if atis_hz:
             ch = channels.get("atis", "")
-            ch_note = f"Ch {ch}  " if ch else ""
-            lines.append(f"  {'Atis':8s} {ch_note}{atis_mhz:.3f} MHz AM  "
+            label = "ATIS".ljust(8)
+            channel_text = f"(Ch {ch})" if ch else ""
+            lines.append(f"{label} {channel_text}: {atis_mhz:.3f} MHz AM  "
                          f"(every {args.atis_interval:.0f}s)")
         lines.append('  Say "Trainer, <callsign>, help" on any frequency for a hint.')
         return lines

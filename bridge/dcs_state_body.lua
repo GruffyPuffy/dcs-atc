@@ -249,12 +249,46 @@ elseif op == 'set_task' then
     g:getController():setTask(req.task_data)
     return envelope(true, { tasked = req.group_name })
 elseif op == 'message' then
+    local text = tostring(req.text or '')
+    if req.mission then
+        -- Separate, targeted mission-message destination for the optional
+        -- pilot transcript. Keep the existing chat path below unchanged.
+        local target = tostring(req.player or '')
+        if target == '' or text == '' then
+            return envelope(false, 'MISSING_PLAYER_OR_TEXT')
+        end
+        if not trigger or not trigger.action or not trigger.action.outTextForUnit then
+            return envelope(false, 'NO_UNIT_MESSAGE_API')
+        end
+        for _, coa in ipairs({0, 1, 2}) do
+            local ok, groups = pcall(coalition.getGroups, coa)
+            if ok and groups then
+                for _, group in ipairs(groups) do
+                    for _, unit in ipairs(group:getUnits() or {}) do
+                        local ok_player, player = pcall(unit.getPlayerName, unit)
+                        if ok_player and player == target then
+                            local ok_id, unit_id = pcall(unit.getID, unit)
+                            if ok_id and unit_id then
+                                local ok_send = pcall(
+                                    trigger.action.outTextForUnit,
+                                    unit_id, text, tonumber(req.duration) or 8, false)
+                                if ok_send then
+                                    return envelope(true, { sent = 'mission', to = target })
+                                end
+                            end
+                            return envelope(false, 'UNIT_MESSAGE_FAILED')
+                        end
+                    end
+                end
+            end
+        end
+        return envelope(false, 'PLAYER_NOT_FOUND')
+    end
     -- Post text to a player's in-game chat/message log (no .miz edit). Used by
     -- the bot's --debug "comms log": it echoes every radio exchange (the pilot's
     -- STT transcript and the ATC reply) back to the asking player, so a trainer
     -- can read what was heard and answered. Targets one player by name when known
     -- (net.send_chat_to), else the whole mission (trigger.action.outText).
-    local text = tostring(req.text or '')
     if req.player and req.player ~= '' and net.get_player_list then
         for _, pid in ipairs(net.get_player_list()) do
             local info = net.get_player_info and net.get_player_info(pid) or {}

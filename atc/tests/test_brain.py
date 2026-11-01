@@ -1543,14 +1543,18 @@ def test_help_requires_callsign(brain):
 # ---------- Trainer commands (per-pilot, any frequency) ----------
 
 def test_trainer_echo_on_off_toggles_per_pilot(brain):
+    assert brain.mission_radio_log_enabled("Colt 1") is False
     reply = brain.handle("Trainer, Colt 1, echo on", controller=Controller.GROUND)
     assert reply and "echo on" in reply
     assert brain.mirror_enabled("Colt 1") is True
+    assert brain.mission_radio_log_enabled("Colt 1") is True
     # A different pilot is unaffected (per-pilot state).
     assert brain.mirror_enabled("Ford 2") is False
+    assert brain.mission_radio_log_enabled("Ford 2") is False
     reply = brain.handle("Trainer, Colt 1, echo off", controller=Controller.TOWER)
     assert reply and "echo off" in reply
     assert brain.mirror_enabled("Colt 1") is False
+    assert brain.mission_radio_log_enabled("Colt 1") is False
 
 
 def test_trainer_echo_without_callsign_uses_speaker(brain):
