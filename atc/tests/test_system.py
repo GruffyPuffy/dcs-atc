@@ -309,9 +309,9 @@ def test_full_arrival_two_ship(airfield, brain):
 
 
 def test_parking_readback_is_checked_against_the_parking_clearance(airfield, brain):
-    # A parking readback that names only the ramp ("Ramp North, Alpha November")
-    # must be confirmed — not checked against the earlier departure taxi
-    # clearance (which named a runway and made it look incomplete).
+    # The parking readback must include the route from the runway exit, and is
+    # checked against this parking clearance rather than the earlier departure
+    # taxi clearance.
     sc = _scenario(airfield, brain).park("Ramp South")
     sc.say("Ground, Colt 1, requesting taxi", Controller.GROUND)
     sc.say("Cleared taxi Sierra Echo and hold short runway 25, Colt 1",
@@ -322,7 +322,7 @@ def test_parking_readback_is_checked_against_the_parking_clearance(airfield, bra
     sc.say("Tower, Colt 1, runway vacated", Controller.TOWER)
     r = sc.say("Ground, Colt 1, requesting taxi to parking", Controller.GROUND)
     assert "cleared taxi" in r.lower()
-    r = sc.say("Ramp North, Alpha November, Colt 1", Controller.GROUND)
+    r = sc.say("Ramp South via Sierra Whiskey, Colt 1", Controller.GROUND)
     assert r == ""  # correct readback, nothing follows -> silent
 
 
@@ -1656,7 +1656,8 @@ def test_debrief_runway_seven_taxi_readback_is_correct(airfield, brain):
     sc = _scenario(airfield, brain).park("Ramp South")
     brain.set_runway("07")
     sc.say("Ground, Colt 1, requesting taxi", Controller.GROUND)
-    r = sc.say("runway 7, Colt 1", Controller.GROUND)
+    r = sc.say("taxi Whiskey, hold short runway 7, Colt 1",
+               Controller.GROUND)
     assert "say again" not in (r or "").lower()
     assert "did not get" not in (r or "").lower()
 

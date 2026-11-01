@@ -51,7 +51,9 @@ def test_radio_policy_classifies_ma_readbacks_and_prompted_answers():
         "ground_info", "ground_info_weather", "hold_short_traffic",
     }
     prompted_answers = {
-        "inbound_inside", "ground_info_readback", "readback_incomplete",
+        "inbound_inside", "ground_info_readback",
+        "ground_info_readback_prompt", "ground_info_runway_correction",
+        "ground_info_final_continue", "readback_incomplete",
         "say_again", "say_again_no_callsign", "tower_report_position",
         "speed_position_unknown", "stingray_bullseye_challenge",
         "stingray_angels_rounding", "stingray_angels_and_position",
@@ -341,6 +343,181 @@ def test_ground_acknowledges_with_information(brain):
     assert "QNH" in reply
 
 
+def test_ground_reads_weather_before_clearance_after_bare_checkin(brain):
+    # A bare frequency check-in is not evidence the pilot has ATIS. If the
+    # pilot asks for departure clearance without an information letter,
+    # provide weather/runway/QNH first, then continue the pending request after
+    # the pilot reads the information back.
+    assert brain.handle("Kutaisi Ground, Colt 1, stand by",
+                        controller=Controller.GROUND) == "Colt 1-1, Ground."
+    reply = brain.handle("Ground, Colt 1, ready to copy departure clearance",
+                         controller=Controller.GROUND)
+    assert "weather is" in reply.lower()
+    assert "after departure" not in reply.lower()
+    assert brain.pilots["Colt 1"].phase == Phase.IDLE
+
+    reply = brain.handle("Runway 25 in use, QNH 2992, Colt 1",
+                         controller=Controller.GROUND)
+    assert "after departure" in reply.lower()
+
+
+def test_ground_checks_runway_in_no_atis_readback(brain):
+    brain.set_runway("07")
+    brain.handle("Kutaisi Ground, Colt 1, stand by",
+                 controller=Controller.GROUND)
+    brain.handle("Ground, Colt 1, ready to copy clearance",
+                 controller=Controller.GROUND)
+
+    wrong = brain.handle("Runway 25 in use, QNH 2992, Colt 1",
+                         controller=Controller.GROUND)
+    assert "negative" in wrong.lower()
+    assert "runway 07 in use" in wrong.lower()
+    assert brain.pilots["Colt 1"].phase == Phase.IDLE
+
+    corrected = brain.handle("Runway 07 in use, QNH 2992, Colt 1",
+                             controller=Controller.GROUND)
+    assert "after departure" in corrected.lower()
+
+
+def test_ground_waits_for_info_readback_before_clearance(brain):
+    # Even when Ground provided weather during the initial check-in, an early
+    # clearance request waits for the runway readback and is then honored.
+    brain.handle("Ground, Colt 1, one ship Hornet on Ramp South",
+                 controller=Controller.GROUND)
+    prompt = brain.handle("Ground, Colt 1, ready to copy clearance",
+                          controller=Controller.GROUND)
+    assert "read back runway 25 and qnh 2992 first" in prompt.lower()
+    assert "after departure" not in prompt.lower()
+
+    clearance = brain.handle("Runway 25 in use, QNH 2992, Colt 1",
+                             controller=Controller.GROUND)
+    assert "after departure" in clearance.lower()
+
+
+def test_ground_final_continue_breaks_repeated_wrong_runway_loop(brain):
+    brain.set_runway("07")
+    brain.handle("Ground, Colt 1, one ship Hornet on Ramp South",
+                 controller=Controller.GROUND)
+
+    first = brain.handle("Runway 25 in use, QNH 2992, Colt 1",
+                         controller=Controller.GROUND)
+    assert "negative" in first.lower()
+    second = brain.handle("Runway 25 in use, QNH 2992, Colt 1",
+                          controller=Controller.GROUND)
+    assert "runway 07 in use" in second.lower()
+    assert "continue" in second.lower()
+    assert "readback correct" not in second.lower()
+    assert not brain.pilots["Colt 1"].info_issued
+
+    clearance = brain.handle("Ground, Colt 1, ready to copy clearance",
+                             controller=Controller.GROUND)
+    assert "after departure" in clearance.lower()
+
+
+def test_ground_pending_clearance_survives_final_continue(brain):
+    brain.set_runway("07")
+    brain.handle("Kutaisi Ground, Colt 1, stand by",
+                 controller=Controller.GROUND)
+    weather = brain.handle("Ground, Colt 1, ready to copy clearance",
+                           controller=Controller.GROUND)
+    assert "weather is" in weather.lower()
+
+    brain.handle("Runway 25 in use, QNH 2992, Colt 1",
+                 controller=Controller.GROUND)
+    final = brain.handle("Runway 25 in use, QNH 2992, Colt 1",
+                         controller=Controller.GROUND)
+    assert "continue" in final.lower()
+    assert "after departure" in final.lower()
+    assert brain.pilots["Colt 1"].phase == Phase.CLEARANCE
+
+
+def test_ground_documented_ma_atis_sequence_remains_unchanged(brain):
+    # This is the documented MA sequence: report the ATIS letter, read back
+    # runway/QNH, receive the ready prompt, then request clearance once.
+    info = brain.handle(
+        "Ground, Colt 1, two-ship Hornets on Ramp South with information Kilo",
+        controller=Controller.GROUND)
+    assert "weather is" not in info.lower()
+    assert "runway 25 in use" in info.lower()
+
+    readback = brain.handle("Runway 25 in use, QNH 2992, Colt 1",
+                            controller=Controller.GROUND)
+    assert "readback correct, advise when ready for clearance" in readback.lower()
+
+    clearance = brain.handle("Ground, Colt 1, ready to copy clearance",
+                             controller=Controller.GROUND)
+    assert "after departure" in clearance.lower()
+
+
+def test_ground_ma_atis_sample_can_request_clearance_without_repeat(brain):
+    # The complete ATC.md departure sample proceeds from the ATIS check-in
+    # directly to the clearance request; keep that documented variant valid.
+    brain.handle(
+        "Ground, Colt 1, two-ship Hornets on Ramp South with information Charlie",
+        controller=Controller.GROUND)
+    clearance = brain.handle("Ground, Colt 1, ready to copy clearance",
+                             controller=Controller.GROUND)
+    assert "after departure" in clearance.lower()
+
+
+def test_ground_prompts_for_omitted_runway_then_accepts_spoken_digits(brain):
+    brain.set_runway("07")
+    brain.handle("Ground, Colt 1, one ship Hornet on Ramp South",
+                 controller=Controller.GROUND)
+
+    missing = brain.handle("QNH 2992, Colt 1", controller=Controller.GROUND)
+    assert "readback incomplete" in missing.lower()
+    assert "runway" in missing.lower()
+    assert brain.pilots["Colt 1"].info_issued
+
+    corrected = brain.handle(
+        "Runway zero seven in use, QNH two niner niner two, Colt 1",
+        controller=Controller.GROUND)
+    assert "readback correct" in corrected.lower()
+    assert "advise when ready for clearance" in corrected.lower()
+
+
+def test_ground_ma_sop_no_atis_checkin_then_clearance_request(brain):
+    # MA's suggested sequence is check-in/position (Ground supplies weather),
+    # read that back, then make one departure-clearance request.
+    reply = brain.handle("Ground, Colt 1, one ship Hornet on Ramp South",
+                         controller=Controller.GROUND)
+    assert "weather is" in reply.lower()
+    reply = brain.handle("Runway 25 in use, QNH 2992, Colt 1",
+                         controller=Controller.GROUND)
+    assert "advise when ready for clearance" in reply.lower()
+    reply = brain.handle("Ground, Colt 1, ready to copy clearance",
+                         controller=Controller.GROUND)
+    assert "after departure" in reply.lower()
+
+
+def test_taxi_clearance_readback_checks_route(brain):
+    clearance = brain.handle("Ground, Colt 1, requesting taxi",
+                             controller=Controller.GROUND)
+    assert "Sierra Echo" in clearance
+
+    missing_route = brain.handle(
+        "Taxi, hold short runway 25, Colt 1", controller=Controller.GROUND)
+    assert "readback incomplete" in missing_route.lower()
+    assert "taxi route" in missing_route.lower()
+
+    corrected = brain.handle(
+        "Cleared taxi Sierra Echo, hold short runway 25, Colt 1",
+        controller=Controller.GROUND)
+    assert "readback correct" in corrected.lower()
+
+
+def test_taxi_readback_accepts_mags_whiskey_route(airfield, brain):
+    brain.set_runway("07")
+    clearance = brain.handle("Ground, Colt 1, requesting taxi",
+                             controller=Controller.GROUND)
+    assert "cleared taxi Whiskey" in clearance
+    reply = brain.handle(
+        "Cleared taxi Whiskey, hold short runway 07, Colt 1",
+        controller=Controller.GROUND)
+    assert reply == ""
+
+
 def test_ground_runway_qnh_readback(brain):
     # The kneeboard line "25 in use, QNH 2992, Adder11" must be answered with
     # "readback correct, advise when ready for clearance" — not "say again".
@@ -424,9 +601,10 @@ def test_ground_taxi_readback_correct(brain):
 
 
 def test_taxi_readback_tolerates_stt_clear(brain):
-    # Common STT slip: "clear taxi" / "clear taxi, solo, hold short runway 25".
+    # Common STT slip: "clear taxi" instead of "cleared taxi". The route is
+    # still part of the readback requirement.
     brain.handle("Ground, Colt 1, requesting taxi", controller=Controller.GROUND)
-    reply = brain.handle("Clear taxi, and hold short runway 25, Colt 1",
+    reply = brain.handle("Clear taxi Sierra Echo, and hold short runway 25, Colt 1",
                          controller=Controller.GROUND)
     assert reply == ""
 
@@ -566,7 +744,7 @@ def test_readback_ignores_the_callsign_number(brain):
 
 def test_taxi_readback_ignores_the_callsign_number(brain):
     brain.handle("Ground, Colt 1-1, requesting taxi", controller=Controller.GROUND)
-    reply = brain.handle("Cleared taxi whiskey, hold short runway 25, Colt 11",
+    reply = brain.handle("Cleared taxi Sierra Echo, hold short runway 25, Colt 11",
                          controller=Controller.GROUND)
     assert reply == ""
 
@@ -651,7 +829,8 @@ def test_departure_exit_rotates_between_flights(brain):
     seen = []
     for _ in range(3):
         brain.pilots.clear()
-        brain.handle("Ground, Colt 1, one-ship Hornet on Ramp South",
+        brain.handle("Ground, Colt 1, one-ship Hornet on Ramp South "
+                     "with information Charlie",
                      controller=Controller.GROUND)
         reply = brain.handle("Ground, Colt 1, ready to copy clearance",
                              controller=Controller.GROUND)

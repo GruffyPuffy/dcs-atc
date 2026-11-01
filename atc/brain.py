@@ -61,6 +61,8 @@ RADIO_ANSWER_KEYS = frozenset({
     "contact_control", "contact_stingray", "contact_agency",
     "control_handoff_repeat", "stingray_contact_control",
     "ground_info", "ground_info_weather", "ground_info_readback",
+    "ground_info_runway_correction", "ground_info_readback_prompt",
+    "ground_info_final_continue",
     "readback_incomplete", "say_again", "say_again_no_callsign",
     "speed_position_unknown", "speed_restriction_ctr",
     "stingray_bullseye_challenge", "stingray_marking_unclear",
@@ -653,6 +655,22 @@ class PilotState:
     # naming "in use"/QNH is a readback of it. Without this, any transmission
     # that merely mentions "in use" was answered "readback correct".
     info_issued: bool = False
+    # Ground has completed the departure ATIS/weather exchange. A bare Ground
+    # check-in followed by a clearance request must first get the weather when
+    # the pilot did not report an information letter.
+    ground_checkin_seen: bool = False
+    ground_information_complete: bool = False
+    # The trainer requires a runway readback when Ground supplied weather
+    # because the pilot did not report ATIS. ATIS-equipped MA samples may
+    # proceed directly to the requested clearance after the info reply.
+    ground_info_readback_required: bool = False
+    # The pilot requested departure clearance before Ground had supplied
+    # missing ATIS/weather information. Continue with that request after its
+    # runway/QNH readback instead of asking them to request clearance again.
+    pending_ground_clearance: bool = False
+    # One correction is allowed for the runway readback. On a second miss,
+    # restate the runway/QNH and let training continue rather than looping.
+    ground_runway_readback_fails: int = 0
     # Wording-coach note for the LAST transmission (coach mode only), to be
     # delivered as a direct in-game message (not spoken on the radio). Set by
     # AtcBrain.handle; the controller worker takes and clears it after the
@@ -1331,6 +1349,21 @@ class AtcBrain:
                  if re.search(rf"\b(?:exit|entry)\s+{re.escape(g)}\b",
                               clearance, re.IGNORECASE)]
         missing_gate = [g for g in gates if g.lower() not in low]
+        # Taxi clearances include a route as well as runway/hold-short values.
+        # Check that route explicitly; a readback containing only the runway
+        # used to pass even when the pilot omitted the taxiway instruction.
+        taxi_route = re.search(
+            r"\bcleared taxi\s+(.+?)\s+and hold short runway\b",
+            clearance, re.IGNORECASE)
+        if taxi_route is None:
+            taxi_route = re.search(r"\bvia\s+(.+?)(?:[.,]|$)",
+                                   clearance, re.IGNORECASE)
+        if taxi_route:
+            route_words = re.findall(r"[a-z]+", taxi_route.group(1).lower())
+            if route_words and not re.search(
+                    r"\b" + r"\s+".join(map(re.escape, route_words))
+                    + r"\b", low, re.IGNORECASE):
+                return "taxi route"
         if not missing_num and not missing_gate:
             return None
         # A gate WAS named, just a different one ("after departure, turn right,
@@ -2145,6 +2178,12 @@ class AtcBrain:
         pilot.arrival_previous_gate_range_nm = None
         pilot.readback_fails = 0
         pilot.parking_cleared = False
+        pilot.ground_checkin_seen = False
+        pilot.ground_information_complete = False
+        pilot.ground_info_readback_required = False
+        pilot.pending_ground_clearance = False
+        pilot.ground_runway_readback_fails = 0
+        pilot.info_issued = False
         pilot.awaiting_takeoff = False
         pilot.awaiting_landing = False
         pilot.takeoff_ready_announced = False
@@ -2199,6 +2238,27 @@ class AtcBrain:
 
     # ---------- Ground ----------
 
+    def _issue_ground_departure_clearance(
+            self, callsign: str, pilot: PilotState,
+            traffic: list | None) -> str:
+        """Issue the queued or newly requested Ground departure clearance."""
+        pilot.phase = Phase.CLEARANCE
+        pilot.info_issued = False
+        pilot.ground_info_readback_required = False
+        gate = self._pick_exit_gate(traffic)
+        pilot.exit_gate = gate
+        turn = "right"
+        if self.airfield is not None:
+            turn = self.airfield.exit_turn(gate, self.runway)
+        key = "departure_exit" if turn else "departure_exit_straight"
+        reply = self._say(key, callsign, gate=self._exit_label(gate),
+                          turn=turn)
+        # A new clearance starts a fresh readback check: a miss flagged on the
+        # previous clearance must not affect this one.
+        pilot.readback_fails = 0
+        pilot.last_clearance = reply
+        return reply
+
     def _handle_ground(self, callsign: str, pilot: PilotState,
                        low: str, track: AircraftTrack | None,
                        traffic: list | None = None) -> str | None:
@@ -2214,8 +2274,38 @@ class AtcBrain:
         # line has no trigger (none of {information, taxi, clearance}) and the
         # pilot gets "say again", stalling the flow at the very first exchange.
         if pilot.phase == Phase.IDLE and pilot.info_issued and re.search(
-                r"\b(in use|qnh|q\.?n\.?h\.?)\b", low):
+                r"\b(runway|in use|qnh|q\.?n\.?h\.?)\b", low):
+            spoken = self._numbers(self.callsigns.strip(low))
+            if not self._number_read_back(self.runway, spoken):
+                pilot.ground_runway_readback_fails += 1
+                if pilot.ground_runway_readback_fails >= 2:
+                    # Do not trap training in an endless readback loop. State
+                    # the correct information once more, then release the
+                    # information step without claiming the readback was right.
+                    pilot.info_issued = False
+                    pilot.ground_info_readback_required = False
+                    pilot.ground_runway_readback_fails = 0
+                    final = self._say("ground_info_final_continue", callsign)
+                    if pilot.pending_ground_clearance:
+                        pilot.pending_ground_clearance = False
+                        clearance = self._issue_ground_departure_clearance(
+                            callsign, pilot, traffic)
+                        return f"{final} {clearance}"
+                    return final
+                # First wrong/missing runway: correct it and allow one retry.
+                if (re.search(r"\b(?:runway|in use)\b", low)
+                        and spoken):
+                    return self._say("ground_info_runway_correction",
+                                     callsign)
+                return self._say("readback_incomplete", callsign,
+                                 agency=self.ground_short, item="runway")
             pilot.info_issued = False
+            pilot.ground_info_readback_required = False
+            pilot.ground_runway_readback_fails = 0
+            if pilot.pending_ground_clearance:
+                pilot.pending_ground_clearance = False
+                return self._issue_ground_departure_clearance(
+                    callsign, pilot, traffic)
             return self._say("ground_info_readback", callsign)
         # Readback of the departure clearance ("after departure turn right Exit
         # North, 1500 ft or below") -> "readback correct". The pilot may read
@@ -2241,21 +2331,32 @@ class AtcBrain:
                      r"ready for|like|need|want|copy)\b[^.]*\b"
                      r"(clearance|ifr|clearance delivery)\b", low) \
                 and not re.search(r"\btaxi", low):
-            pilot.phase = Phase.CLEARANCE
-            gate = self._pick_exit_gate(traffic)
-            pilot.exit_gate = gate
-            turn = "right"
-            if self.airfield is not None:
-                turn = self.airfield.exit_turn(gate, self.runway)
-            key = "departure_exit" if turn else "departure_exit_straight"
-            reply = self._say(key, callsign, gate=self._exit_label(gate),
-                              turn=turn)
-            # A new clearance starts a fresh readback check: a miss
-            # flagged on the *previous* clearance must not make the first
-            # correct readback of this one look like a correction.
-            pilot.readback_fails = 0
-            pilot.last_clearance = reply
-            return reply
+            if re.search(r"\b(?:information|info)\s+[a-z]\b", low,
+                         re.IGNORECASE):
+                pilot.ground_information_complete = True
+            if (pilot.phase == Phase.IDLE
+                    and pilot.ground_info_readback_required
+                    and pilot.info_issued):
+                # Ground already supplied runway/QNH during check-in, but the
+                # pilot is trying to move on before reading that information.
+                # Hold the clearance request and require one runway readback.
+                pilot.pending_ground_clearance = True
+                return self._say("ground_info_readback_prompt", callsign)
+            if (pilot.phase == Phase.IDLE and pilot.ground_checkin_seen
+                    and not pilot.ground_information_complete):
+                # A bare check-in is not proof that the pilot has the ATIS.
+                # Give the weather, runway and QNH before issuing the
+                # departure clearance. Keep this request pending so the pilot
+                # can read back the information and continue without asking
+                # for the same clearance twice.
+                pilot.pending_ground_clearance = True
+                pilot.info_issued = True
+                pilot.ground_information_complete = True
+                pilot.ground_info_readback_required = True
+                pilot.ground_runway_readback_fails = 0
+                return self._say("ground_info_weather", callsign)
+            return self._issue_ground_departure_clearance(
+                callsign, pilot, traffic)
         # Post-landing: a runway-vacated report is enough to receive a parking
         # taxi clearance. A pilot may name a preferred ramp in the same call;
         # otherwise assign the nearest configured ramp. Also accept a separate
@@ -2376,12 +2477,19 @@ class AtcBrain:
         # 2 knots, Runway 25 in use, QNH 2992."); with the information letter the
         # call is just runway/QNH.
         if re.search(r"\b(ramp|apron|parking|taxiway|ship|hornets?|vipers?|"
-                     r"information)\b", low):
+                     r"information|info)\b", low):
             pilot.info_issued = True
-            if re.search(r"\binformation\b", low):
+            pilot.ground_runway_readback_fails = 0
+            pilot.ground_checkin_seen = True
+            pilot.ground_information_complete = True
+            if re.search(r"\b(?:information|info)\b", low):
+                pilot.ground_info_readback_required = False
                 return self._say("ground_info", callsign)
+            pilot.ground_info_readback_required = True
             return self._say("ground_info_weather", callsign)
         if re.search(r"\bground\b", low):
+            if pilot.phase == Phase.IDLE:
+                pilot.ground_checkin_seen = True
             return self._say("ground_ack", callsign)
         return None
 

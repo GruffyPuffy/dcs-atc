@@ -89,7 +89,7 @@ def test_replay_clear_taxi_slip(springfield):
     assert "cleared taxi" in r.lower()
     assert sc.phase() == Phase.TAXI
 
-    r = sc.say("Clear taxi, and hold short runway 33, Springfield 1-1",
+    r = sc.say("Clear taxi Alpha Echo, and hold short runway 33, Springfield 1-1",
                Controller.GROUND)
     assert r == ""  # correct readback, nothing follows -> silent
 
