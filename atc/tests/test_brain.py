@@ -2,6 +2,7 @@
 
 import dataclasses
 
+import brain as brain_module
 from brain import (AtcBrain, Controller, INCURSION_POLLS, Phase, Phraseology,
                    RADIO_ANSWER_KEYS, RADIO_ANSWER_POLICY,
                    RADIO_EMERGENCY_KEYS, RADIO_EMERGENCY_POLICY,
@@ -145,10 +146,13 @@ def test_ground_clearance_assigns_exit_gate(brain):
 
 
 def test_ground_clearance_exit_matches_runway(brain, airfield):
-    # active runway 25 -> Exit West (the gate matching the departure heading)
+    # The weighted selector may choose any eligible exit; its clearance and
+    # stored assignment must agree.
     reply = brain.handle("Ground, Colt 1, ready to copy clearance",
                          controller=Controller.GROUND)
-    assert "Exit West" in reply
+    gate = brain.pilots["Colt 1"].exit_gate
+    assert gate in airfield.departure_gates("25")
+    assert f"Exit {gate}" in reply
     assert "1500 ft or below" in reply
 
 
@@ -156,7 +160,9 @@ def test_ground_clearance_exit_follows_runway_change(brain, airfield):
     brain.set_runway("07")
     reply = brain.handle("Ground, Colt 1, ready to copy clearance",
                          controller=Controller.GROUND)
-    assert "Exit East" in reply
+    gate = brain.pilots["Colt 1"].exit_gate
+    assert gate in airfield.departure_gates("07")
+    assert f"Exit {gate}" in reply
 
 
 def test_ground_taxi(brain):
@@ -823,49 +829,127 @@ def test_control_departure_checkin_climb(brain):
     assert "climb to Angels" in reply
 
 
-def test_departure_exit_rotates_between_flights(brain):
-    """With no traffic, successive clearances rotate through the exits, so a
-    pilot practises different ones instead of always the straight-out gate."""
-    seen = []
-    for _ in range(3):
-        brain.pilots.clear()
-        brain.handle("Ground, Colt 1, one-ship Hornet on Ramp South "
-                     "with information Charlie",
-                     controller=Controller.GROUND)
-        reply = brain.handle("Ground, Colt 1, ready to copy clearance",
-                             controller=Controller.GROUND)
-        seen.append(brain.pilots["Colt 1"].exit_gate)
-    assert len(set(seen)) == 3  # three distinct exits
+def test_departure_exit_uses_weighted_random_valid_candidates(
+        monkeypatch, brain, airfield):
+    """Weight the runway-heading exit at 50%, splitting the rest evenly."""
+    calls = []
+
+    def choose(population, weights, k):
+        calls.append((population, weights, k))
+        return [population[-1]]
+
+    monkeypatch.setattr(brain_module.random, "choices", choose)
+    candidates = airfield.departure_gates("25")
+    assert len(candidates) == 3
+    assert brain._pick_exit_gate() == candidates[-1]
+    assert calls == [(candidates, [0.5, 0.25, 0.25], 1)]
 
 
-def test_departure_exit_prefers_the_freest_gate(brain, airfield):
-    """With traffic, the exit with the fewest aircraft near it is chosen."""
+def test_departure_exit_variation_is_independent_of_live_traffic(
+        monkeypatch, brain, airfield):
     from tests.scenario import Unit
-    # Park traffic on the straight-out gate (West for runway 25) so it is busy.
+    calls = []
+
+    def choose(population, weights, k):
+        calls.append((population, weights, k))
+        return [population[1]]
+
+    monkeypatch.setattr(brain_module.random, "choices", choose)
+    candidates = airfield.departure_gates("25")
     west = airfield.gates["West"]
     traffic = [Unit("AI-1", west[0], west[1], airfield.elevation_ft + 1000)]
-    brain.handle("Ground, Colt 1, one-ship Hornet on Ramp South",
-                 controller=Controller.GROUND)
-    brain.handle("Ground, Colt 1, ready to copy clearance",
-                 controller=Controller.GROUND, traffic=traffic)
-    assert brain.pilots["Colt 1"].exit_gate != "West"
+    assert brain._pick_exit_gate(traffic) == candidates[1]
+    assert calls == [(candidates, [0.5, 0.25, 0.25], 1)]
 
 
 def test_control_climb_issued_once_then_readback(brain):
     """A second level report is silent, not re-cleared (no loop, no roger).
 
-    MA SOP next step is the Stingray handoff at Angels 15, so the climb
+    The next step is the Stingray handoff at the assigned Angels level, so the climb
     readback has a next instruction and must not get a bare "roger".
     """
     first = brain.handle("Control, Colt 1, airborne 5 miles east climbing",
                          controller=Controller.CONTROL)
     assert "climb to Angels" in first
-    assert brain.pilots["Colt 1"].climb_issued
-    second = brain.handle("Climbing angels 15, Colt 1",
+    pilot = brain.pilots["Colt 1"]
+    assert pilot.climb_issued
+    target = pilot.departure_climb_angels
+    assert target == 12
+    second = brain.handle(f"Climbing angels {target}, Colt 1",
                           controller=Controller.CONTROL)
     assert second == ""
-    third = brain.handle("Colt 1 at angels 16", controller=Controller.CONTROL)
+    third = brain.handle(f"Colt 1 at angels {target + 1}",
+                         controller=Controller.CONTROL)
     assert third == ""
+
+
+def test_departure_climb_target_cycles_angels_12_through_18(brain):
+    targets = []
+    for i in range(8):
+        callsign = f"Flight {i}"
+        pilot = brain._pilot(callsign)
+        reply = brain._issue_departure_climb(callsign, pilot)
+        targets.append(pilot.departure_climb_angels)
+        assert f"climb to Angels {pilot.departure_climb_angels}" in reply
+        # Reissuing for the same pilot reuses its target and does not advance
+        # the global sequence.
+        assert brain._issue_departure_climb(callsign, pilot) == reply
+        assert pilot.departure_climb_angels == targets[-1]
+    assert targets == [12, 13, 14, 15, 16, 17, 18, 12]
+
+
+def test_stingray_handoff_uses_assigned_angels_18(brain, airfield):
+    pilot = brain._pilot("Colt 1")
+    pilot.phase = Phase.AIRBORNE
+    pilot.control_checkin_received = True
+    pilot.climb_issued = True
+    pilot.departure_climb_angels = 18
+    track = _track(airfield, *airfield.gates["West"], alt_ft=17000)
+
+    assert brain.check_stingray_handoff("Colt 1", track) is None
+    track = _track(airfield, *airfield.gates["West"], alt_ft=17500)
+    handoff = brain.check_stingray_handoff("Colt 1", track)
+    assert handoff and "contact Stingray" in handoff
+    assert pilot.stingray_handoff_announced
+
+
+def test_assigned_climb_level_is_retained_through_help_and_reset(brain):
+    pilot = brain._pilot("Colt 1")
+    pilot.phase = Phase.AIRBORNE
+    pilot.departure_climb_angels = 16
+    hint = brain._help("Colt 1", pilot, controller=Controller.CONTROL)
+    assert "at Angels 16" in hint
+
+    pilot.phase = Phase.STINGRAY
+    hint = brain._help("Colt 1", pilot, controller=Controller.STINGRAY)
+    assert "Angels 16" in hint
+
+    brain._reset("Colt 1", pilot, Controller.CONTROL)
+    assert pilot.departure_climb_angels is None
+
+
+def test_new_departure_resets_previous_stingray_handoff(brain, airfield):
+    pilot = brain._pilot("Colt 1")
+    pilot.phase = Phase.AIRBORNE
+    pilot.climb_issued = True
+    pilot.departure_climb_angels = 18
+    pilot.stingray_handoff_announced = True
+
+    brain._takeoff_clearance("Colt 1", pilot)
+    assert pilot.departure_climb_angels is None
+    assert not pilot.climb_issued
+    assert not pilot.stingray_handoff_announced
+
+    # A later departure receives its next target and can hand off once at that
+    # target, even though this pilot already completed a previous sortie.
+    pilot.phase = Phase.AIRBORNE
+    pilot.control_checkin_received = True
+    climb = brain._issue_departure_climb("Colt 1", pilot)
+    assert "climb to Angels 12" in climb
+    pilot_track = _track(
+        airfield, *airfield.gates["West"], alt_ft=11500)
+    handoff = brain.check_stingray_handoff("Colt 1", pilot_track)
+    assert handoff and "contact Stingray" in handoff
 
 
 def test_control_join_readback_descends(brain):

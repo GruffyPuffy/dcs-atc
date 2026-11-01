@@ -19,6 +19,7 @@ control zone", inside the CTR gets a radar-contact + downwind clearance.
 from __future__ import annotations
 
 import json
+import random
 import re
 import time
 from dataclasses import dataclass
@@ -117,10 +118,12 @@ RADAR_CLEAR_NM = 3.0
 # inputs do not provoke a false position challenge; the radar landing-clearance
 # backstop keeps its separate, stricter established-final check.
 ON_FINAL_REPORT_HEADING_TOLERANCE_DEG = 90.0
-# Departure climb target (Angels 15) and slop for the unprompted Stingray
-# handoff. Control does not simulate AWACS, but MA SOP still pushes the flight
-# to Stingray on channel 3 once they are there.
-ANGELS_HANDOFF_FT = 15000
+# Departure climb targets cycle through Angels 12–18. This is a trainer
+# variation for flight-to-flight altitude variety; the assignment is stored on
+# each pilot and drives that flight's Stingray handoff.
+DEPARTURE_CLIMB_ANGELS_MIN = 12
+DEPARTURE_CLIMB_ANGELS_MAX = 18
+DEFAULT_DEPARTURE_CLIMB_ANGELS = 15
 ANGELS_HANDOFF_SLOP_FT = 500
 # Master Arms describes the RTB handoff as usually occurring 25–80 NM from
 # base. Use a single midpoint trigger; a pilot can still request Control early.
@@ -582,6 +585,7 @@ class PilotState:
     descend_issued: bool = False  # Control has issued the descent to 1500 ft
     descend_intermediate: bool = False  # Control issued the far-out step-down
     climb_issued: bool = False  # Control has issued the departure climb
+    departure_climb_angels: int | None = None  # this departure's climb target
     control_checkin_received: bool = False  # pilot checked in after handoff
     # Control has pushed the departure to Stingray (AWACS). Fires once; we do
     # not simulate channel 3, but the SOP call still goes out on Control.
@@ -730,6 +734,7 @@ class AtcBrain:
         # under the shared brain lock, so the worker can take this policy
         # immediately after the reply is produced without changing reply text.
         self._radio_policy = RADIO_NORMAL_POLICY
+        self._next_departure_climb_angels = DEPARTURE_CLIMB_ANGELS_MIN
         self.wind = "calm"  # spoken phrase, updated from live weather
         self.wind_dir = 0.0  # meteorological FROM, degrees
         self.wind_speed = 0.0  # as reported by weather (m/s)
@@ -2162,6 +2167,7 @@ class AtcBrain:
         pilot.descend_issued = False
         pilot.descend_intermediate = False
         pilot.climb_issued = False
+        pilot.departure_climb_angels = None
         pilot.control_checkin_received = False
         pilot.stingray_handoff_announced = False
         pilot.exit_gate = ""
@@ -3106,12 +3112,11 @@ class AtcBrain:
                                  gate=self._departure_gate(pilot))
             if pilot.climb_issued:
                 # Climb readback / level report. MA SOP next step is the
-                # Stingray handoff once they reach Angels 15 (radar, not a
-                # second call) — stay silent, same as any readback that has
-                # a next instruction. Do not "roger".
+                # Stingray handoff once they reach their assigned Angels level
+                # (radar, not a second call) — stay silent, same as any readback
+                # that has a next instruction. Do not "roger".
                 return ""
-            pilot.climb_issued = True
-            return self._say("control_climb", callsign)
+            return self._issue_departure_climb(callsign, pilot)
         # Readback of the "remain below 1500 ft until clear of the control
         # zone" instruction (a departure still inside the CTR), or a report at
         # the exit point -> acknowledge. Without this the readback fell through
@@ -3454,23 +3459,23 @@ class AtcBrain:
         return self._say("inbound_via_gate", callsign, gate=gate)
 
     def _pick_exit_gate(self, traffic: list | None = None) -> str:
-        """Departure exit point.
+        """Choose a runway-valid departure exit, favoring straight-out.
 
-        Candidates are the gates that are not the arrival entry (see
-        `Airfield.departure_gates`). With other traffic, take the one that is
-        most free (fewest aircraft near it); otherwise rotate through them, so a
-        pilot practises different exits instead of always flying the straight-out
-        one. Falls back to the first configured gate.
+        `departure_gates` orders candidates by how closely they match runway
+        heading. Give the first candidate 50% probability and split the rest
+        evenly, so pilots get some gate variation without losing the common
+        straight-out departure. The assigned result is stored on the pilot and
+        reused by Tower. `traffic` remains in the signature for call-site
+        compatibility; gate selection is intentionally independent of it.
         """
         if self.airfield is not None:
             candidates = self.airfield.departure_gates(self.runway)
             if candidates:
-                if traffic:
-                    return min(candidates,
-                               key=lambda g: self._traffic_near_gate(g, traffic))
-                gate = candidates[self._exit_rotation % len(candidates)]
-                self._exit_rotation += 1
-                return gate
+                if len(candidates) == 1:
+                    return candidates[0]
+                weights = [0.5] + [0.5 / (len(candidates) - 1)] * (
+                    len(candidates) - 1)
+                return random.choices(candidates, weights=weights, k=1)[0]
         gate = self.gates[0] if self.gates else "North"
         return gate
 
@@ -3562,6 +3567,8 @@ class AtcBrain:
         pilot.departure_previous_bearing_deg = None
         pilot.control_checkin_received = False
         pilot.climb_issued = False
+        pilot.departure_climb_angels = None
+        pilot.stingray_handoff_announced = False
         pilot.arrival_join_issued = False
         self._remember_arrival_join(pilot, None)
         pilot.parking_cleared = False
@@ -3794,17 +3801,27 @@ class AtcBrain:
             return None
         if self._inside_ctr(track):
             return None
+        return self._issue_departure_climb(callsign, pilot)
+
+    def _issue_departure_climb(self, callsign: str,
+                               pilot: PilotState) -> str:
+        """Assign and issue this departure's one-time climb target."""
+        if pilot.departure_climb_angels is None:
+            pilot.departure_climb_angels = self._next_departure_climb_angels
+            self._next_departure_climb_angels += 1
+            if self._next_departure_climb_angels > DEPARTURE_CLIMB_ANGELS_MAX:
+                self._next_departure_climb_angels = DEPARTURE_CLIMB_ANGELS_MIN
         pilot.climb_issued = True
-        return self._say("control_climb", callsign)
+        return self._say("control_climb", callsign,
+                         angels=pilot.departure_climb_angels)
 
     def check_stingray_handoff(self, callsign: str,
                                track: AircraftTrack | None) -> str | None:
-        """Push a climbed departure to Stingray once they reach Angels 15.
+        """Push a climbed departure to Stingray at its assigned Angels level.
 
-        Master Arms SOP (kneeboard page 1): after the climb to Angels 15,
-        Control hands the flight to Stingray on channel 3. Stingray is now a
-        real controller (check-in, bullseye picture, RTB); Control stays quiet
-        until the inbound call. Fires once.
+        The trainer's round-robin target (12–18) is stored per flight. Keep the
+        handoff threshold tied to that assignment so one flight's climb cannot
+        trigger another flight's push. Fires once.
         """
         pilot = self._pilot(callsign)
         if (pilot.phase != Phase.AIRBORNE or not pilot.control_checkin_received
@@ -3813,7 +3830,9 @@ class AtcBrain:
             return None
         if self._inside_ctr(track):
             return None
-        if track.alt_ft < ANGELS_HANDOFF_FT - ANGELS_HANDOFF_SLOP_FT:
+        target_angels = (pilot.departure_climb_angels
+                         or DEFAULT_DEPARTURE_CLIMB_ANGELS)
+        if track.alt_ft < target_angels * 1000 - ANGELS_HANDOFF_SLOP_FT:
             return None
         pilot.stingray_handoff_announced = True
         pilot.pending_handoff_to = Controller.STINGRAY.value
@@ -3988,15 +4007,19 @@ class AtcBrain:
             Phase.LANDING: "help_landing",
         }.get(pilot.phase, "help_idle")
         if pilot.phase == Phase.AIRBORNE and controller == Controller.CONTROL:
-            # Already with Control: the SOP next step is the Stingray push once
-            # at Angels 15, or the inbound call when they turn back.
+            # Already with Control: the next step is the Stingray push at this
+            # flight's assigned climb level, or the inbound call when returning.
             key = "help_airborne_on_control"
         elif pilot.phase == Phase.IDLE and controller == Controller.STINGRAY:
             # An air-start on Stingray: the idle hint ("contact Ground for
             # clearance and taxi") is actively wrong here, so give the tactical
             # leg instead.
             key = "help_stingray"
-        fields: dict[str, object] = {"gate": pilot.exit_gate or "Exit East"}
+        fields: dict[str, object] = {
+            "gate": pilot.exit_gate or "Exit East",
+            "angels": (pilot.departure_climb_angels
+                       or DEFAULT_DEPARTURE_CLIMB_ANGELS),
+        }
         if key == "help_stingray":
             # State the real bullseye so the pilot can check their numbers
             # before calling them out. Without a bullseye (or a live position)

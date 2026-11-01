@@ -161,8 +161,10 @@ class Scenario:
         correct by construction (use `at_bullseye` first, or pass explicit
         values to make a deliberately wrong call).
         """
+        pilot = self.brain.pilots.get(self.callsign)
+        angels = (pilot.departure_climb_angels if pilot else None) or 15
         return (f"Stingray, {self.callsign}, bullseye {bearing:03.0f} for "
-                f"{range_nm:.0f}, Angels 15, as fragged")
+                f"{range_nm:.0f}, Angels {angels}, as fragged")
 
     def true_bullseye(self) -> tuple[float, float]:
         """The geodesic-true (bearing, range) from the bullseye to the pilot."""

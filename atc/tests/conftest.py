@@ -16,8 +16,20 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from airspace import Airspace  # noqa: E402
+import brain as brain_module  # noqa: E402
 from brain import AtcBrain, Phraseology  # noqa: E402
 from callsigns import CallsignRegistry  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def deterministic_exit_choice(monkeypatch):
+    """Keep ordinary dialogue tests on the straight-out weighted choice.
+
+    Tests for the weighted distribution replace this chooser explicitly.
+    """
+    monkeypatch.setattr(
+        brain_module.random, "choices",
+        lambda population, *, weights, k: [population[0]])
 
 
 @pytest.fixture(scope="session")

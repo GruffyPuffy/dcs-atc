@@ -207,8 +207,8 @@ channel.
 | "Tower, Colt 1, airborne" / "…wheels up" / "…off the ground" | **departure report** (after takeoff) | "Colt 1, Tower, contact Control on channel 8." ("wheels up" is the MA call; "wheels up on the go" is a touch-and-go report and is **not** matched — see §7) |
 | "Tower, Colt 1, ready for departure" (**while an arrival**) | **wrong call** | "Colt 1, Tower, negative, report runway in sight for landing." (never clears a takeoff for a pilot who is inbound/landing) |
 | "Line up and wait 25, Colt 1" | **readback** | *(silent)* — then, once the aircraft is actually **lined up** (at the threshold, pointing down the runway, stationary), the monitor issues "cleared for takeoff runway 25" unprompted. The clearance does **not** follow the readback alone: the pilot has only acknowledged the instruction, they may still be taxiing on. (A right turnout is spoken, a left turnout is the default and is not, and a straight-out departure gets "fly runway heading".) |
-| "Control, Colt 1, at 1500 ft" | **departure check-in** | "Colt 1, Control, radar contact, climb to Angels 15." |
-| "Climbing to Angels 15, Colt 1" | **climb readback** | *(silent)* — then, once at Angels 15, "Colt 1, Control, contact Stingray on channel 3." (Stingray is a real controller — see §11) |
+| "Control, Colt 1, at 1500 ft" | **departure check-in** | "Colt 1, Control, radar contact, climb to the assigned Angels level (12–18)." |
+| "Climbing to Angels [assigned level], Colt 1" | **climb readback** | *(silent)* — then, once at that level, "Colt 1, Control, contact Stingray on channel 3." (Stingray is a real controller — see §11) |
 | "Kutaisi Control, Colt 1, inbound 35 miles north at Angels 12" | **inbound** | "Colt 1, Control, radar contact, turn right heading 150 to join via Entry East." (heading **and turn** computed from the live position; a pilot already pointing at the gate gets "fly heading 150" instead; entry is the best/straight-in gate for runway 25) |
 | "150 to join via Entry East, Colt 1" | **readback** | "Colt 1, Control, descend and maintain 5000 feet." (far out) / "…descend to 1500 feet." (within 15 NM of the entry) — the descent is **stepped by distance** |
 | "Descend to 1500 feet, Colt 1" | **readback** | *(silent)* — Control pushes Tower when the inbound flight enters the assigned entry's lead-in zone while closing on it. Entry arc/CTR are late fallbacks. |
@@ -295,7 +295,7 @@ follows.) The marker is the `help_prefix` variable in `phraseology.json`
 | Line up | "line up and wait runway 25, then report ready for departure." |
 | Departure | "you are cleared for takeoff runway 25. After departure Exit West, 1500 ft or below, then contact Control on channel 8." |
 | Airborne (**on Tower**) | "contact Control on channel 8 and report your position and intentions." |
-| Airborne (**already on Control**) | "report inbound when you turn back, or push Stingray on channel 3 once you are at Angels 15." — the hint is controller-aware, so it never tells a pilot who is *already* on Control to "contact Control" |
+| Airborne (**already on Control**) | "report inbound when you turn back, or push Stingray on channel 3 once you are at your assigned Angels level (12–18)." — the hint is controller-aware, so it never tells a pilot who is *already* on Control to "contact Control" |
 | Stingray (**or an air-start on Stingray**) | "you are with Stingray. Give a bullseye picture — **you are bullseye 008 for 33, angels 15** — then \"as fragged\". To head home, call \"bugout\" (or bingo / Miller Time / requesting RTB). Stingray will push Control between 25 and 80 miles from Kutaisi; if you have not heard the push by 25 miles, request Control. If you miss the push, you can still check in directly." — the hint states the pilot's **actual** bullseye position (computed from the mission bullseye and their live track), so they can check their numbers before calling them out. Without a bullseye or a live position it falls back to the generic example. |
 | Inbound | "report entering the control zone, then report runway in sight." |
 | Landing | "runway 25 is active. Report on final for landing clearance." |
@@ -669,6 +669,11 @@ configured runway even when the wind had shifted.
 
 ### Automatic monitoring (2-second poll)
 
+**Trainer variation from the fixed Angels 15 MA sample:** departure climb targets
+cycle round-robin through Angels 12–18. The target is stored per flight, and
+Control's Stingray handoff uses that same target (with a 500 ft radar tolerance).
+The examples below use Angels 15 as one possible assignment.
+
 A background thread (`atc_bot.monitor_ctr`) polls live positions every 2 seconds
 and issues **unprompted** calls — the things a controller would notice without
 being asked. Each fires **once per event** and re-arms when the condition clears.
@@ -680,8 +685,8 @@ being asked. Each fires **once per event** and re-arms when the condition clears
 | **Altitude bust** | Above the CTR ceiling while still under Tower/Ground control (not handed to Control) | "…you are leaving the control zone, contact Control on channel 8." |
 | **Runway incursion** | On the runway without a takeoff/landing clearance | "…you are on the runway without clearance, vacate immediately." |
 | **Departure handoff** | A departure is past the runway (Tower phase) | "…contact Control on channel 8." (Tower initiates, unprompted — the pilot need not report "airborne") |
-| **Departure climb** | A departure that checked in with Control while still inside the CTR has now left the zone | "…radar contact, climb to Angels 15." (Control watches on radar; no report needed) |
-| **Stingray handoff** | A departure that has been climbed is now at Angels 15 | "…contact Stingray on channel 3." (Stingray is a real controller — see §11) |
+| **Departure climb** | A departure that checked in with Control while still inside the CTR has now left the zone | "…radar contact, climb to Angels {assigned 12–18}." (Control watches on radar; no report needed) |
+| **Stingray handoff** | A departure that has reached its assigned climb target | "…contact Stingray on channel 3." (Stingray is a real controller — see §11) |
 
 The altitude-bust check uses a **horizontal-only** containment test
 (`ControlZone.contains_horizontal`) so an aircraft inside the CTR footprint but
@@ -1023,8 +1028,8 @@ never broadcast their arrival; pilots call them). Disable it with
   1500 feet"*. After the far-out step-down, Control issues the final descent
   unprompted once the aircraft reaches the entry area (`check_arrival_descent`).
   An **inbound** call wins over the departure keywords, so *"inbound 35 miles
-  north at Angels 12"* is routed as an arrival (not answered with "climb to
-  Angels 15").
+  north at Angels 12"* is routed as an arrival (not answered with a departure
+  climb clearance).
 - after Control assigns an entry with the inbound join instruction, entering
   its outward-facing lead-in zone while closing on the gate → automatic handoff
   to Tower: *"contact Tower on channel 7"*. The configurable zone defaults to
@@ -1036,7 +1041,7 @@ never broadcast their arrival; pilots call them). Disable it with
   the pilot checks in on Tower.
 - "airborne" / "climbing" / "at 1500 ft" / "checking in" / "request climb" /
   "ready to climb" (departure check-in) →
-  *"radar contact, climb to Angels 15"*. If the pilot checks in while **still
+  *"radar contact, climb to the assigned Angels level (12–18)"*. If the pilot checks in while **still
   inside the CTR** (below the ceiling), Control does **not** clear them up
   through the zone — Tower owns it up to the ceiling — and instead guides them:
   *"roger, remain below 1500 ft until clear of the control zone via Exit
@@ -1238,8 +1243,8 @@ and the bot's reply. Frequencies (AM): **ATIS 270.500**, **Ground 250.000**,
 | 8 | Tower | "Tower, Colt 1, at runway 25, ready for departure." | "Colt 1, Tower, line up and wait runway 25." |
 | 9 | Tower | "Line up and wait 25, Colt 1." | *(silent)* — then, once you are lined up on the runway, "Colt 1, Tower, cleared for takeoff runway 25." |
 | 10 | Tower | "Tower, Colt 1, airborne." *(or "wheels up")* | "Colt 1, Tower, contact Control on channel 8." |
-| 11 | Control | "Control, Colt 1, at 1500 ft." | "Colt 1, Control, radar contact, climb to Angels 15." |
-| 12 | Control | "Climbing to Angels 15, Colt 1." | *(silent)* — then, once at Angels 15, "Colt 1, Control, contact Stingray on channel 3." |
+| 11 | Control | "Control, Colt 1, at 1500 ft." | "Colt 1, Control, radar contact, climb to the assigned Angels level (12–18)." |
+| 12 | Control | "Climbing to Angels [assigned level], Colt 1." | *(silent)* — then, once at that level, "Colt 1, Control, contact Stingray on channel 3." |
 
 You are now clear of the CTR — the departure is complete. (Steps 2–7 are the
 Ground phase; 8–10 Tower; 11–12 Control; 13+ Stingray (AWACS), where you check
@@ -1317,7 +1322,7 @@ Every reply here is the bot's actual output. Kneeboard card:
 | 1 | Tower | "Tower, Colt 1, ready for departure." | "Colt 1, Tower, line up and wait runway 25." |
 | 2 | Tower | "Line up and wait 25, Colt 1." | *(silent)* — then, once lined up, "Colt 1, Tower, cleared for takeoff runway 25." |
 | 3 | Tower | *(no call needed)* | "Colt 1, Tower, contact Control on channel 8." *(Tower hands off unprompted once you are past the runway; "airborne" also works)* |
-| 4 | Control | "Control, Colt 1, at 1500 ft." | "Colt 1, Control, radar contact, climb to Angels 15." |
+| 4 | Control | "Control, Colt 1, at 1500 ft." | "Colt 1, Control, radar contact, climb to the assigned Angels level (12–18)." |
 
 ### Return & landing (Control → Tower)
 

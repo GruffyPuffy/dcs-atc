@@ -85,7 +85,9 @@ def test_control_checkin_outside_ctr_clears_climb(airfield, brain):
     sc.say("Tower, Colt 1, airborne", Controller.TOWER)
     sc.at_gate("East").set_alt(airfield.elevation_ft + 1500)  # outside the CTR
     r = sc.say("Control, Colt 1, at 1500 ft", Controller.CONTROL)
-    assert "climb to Angels 15" in r
+    target = brain.pilots["Colt 1"].departure_climb_angels
+    assert target == 12
+    assert f"climb to Angels {target}" in r
     assert brain.pilots["Colt 1"].climb_issued
 
 
@@ -126,28 +128,31 @@ def test_control_climbs_departure_on_radar_once_clear_of_ctr(airfield, brain):
     # Now clear of the CTR: Control issues the climb after the check-in.
     sc.at_gate("East").set_alt(airfield.elevation_ft + 1500)
     call = brain.check_departure_climb("Colt 1", sc._track())
-    assert call and "climb to Angels 15" in call
+    target = brain.pilots["Colt 1"].departure_climb_angels
+    assert target == 12
+    assert call and f"climb to Angels {target}" in call
     assert brain.pilots["Colt 1"].climb_issued
     # Fires once.
     assert brain.check_departure_climb("Colt 1", sc._track()) is None
 
 
-def test_stingray_handoff_once_at_angels_15(airfield, brain):
-    # MA SOP: after the climb, Control pushes to Stingray on channel 3 once
-    # the aircraft is at Angels 15. We do not simulate AWACS, but the call
-    # still fires. The climb readback is silent (next instruction is this).
+def test_stingray_handoff_once_at_assigned_angels(airfield, brain):
+    # The handoff threshold follows the departure's stored climb target.
     sc = _scenario(airfield, brain).at_threshold("25")
     sc.say("Tower, Colt 1, ready for departure", Controller.TOWER)
     sc.say("Line up and wait 25, Colt 1", Controller.TOWER)
     sc.say("Tower, Colt 1, airborne", Controller.TOWER)
     sc.at_gate("East").set_alt(airfield.elevation_ft + 1500)
     r = sc.say("Control, Colt 1, at 1500 ft", Controller.CONTROL)
-    assert "climb to Angels 15" in r
-    assert sc.say("Climbing to Angels 15, Colt 1", Controller.CONTROL) == ""
+    target = brain.pilots["Colt 1"].departure_climb_angels
+    assert target == 12
+    assert f"climb to Angels {target}" in r
+    assert sc.say(f"Climbing to Angels {target}, Colt 1",
+                  Controller.CONTROL) == ""
     assert brain.check_stingray_handoff("Colt 1", sc._track()) is None
-    sc.set_alt(12000)
+    sc.set_alt(target * 1000 - 501)
     assert brain.check_stingray_handoff("Colt 1", sc._track()) is None
-    sc.set_alt(15000)
+    sc.set_alt(target * 1000 - 500)
     call = brain.check_stingray_handoff("Colt 1", sc._track())
     assert call and "contact Stingray" in call and "channel 3" in call
     assert brain.pilots["Colt 1"].stingray_handoff_announced
@@ -215,14 +220,17 @@ def test_full_departure_two_ship(airfield, brain):
     assert r and "contact Control" in r
     assert sc.phase() == Phase.AIRBORNE
 
-    # Control: check in, climb, then the radar handoff to Stingray at Angels 15.
+    # Control: check in, climb, then hand off at the assigned Angels level.
     # The pilot must be clear of the CTR for the climb (MA: "remain below 1500
     # ft until clear of the control zone"), so move them out to the exit gate.
     sc.at_gate("East").set_alt(1500)
     r = sc.say("Control, Colt 1, at 1500 ft", Controller.CONTROL)
-    assert "climb to Angels 15" in r
-    assert sc.say("Climbing to Angels 15, Colt 1", Controller.CONTROL) == ""
-    sc.set_alt(15000)  # at Angels 15, still clear of the CTR
+    target = brain.pilots["Colt 1"].departure_climb_angels
+    assert target == 12
+    assert f"climb to Angels {target}" in r
+    assert sc.say(f"Climbing to Angels {target}, Colt 1",
+                  Controller.CONTROL) == ""
+    sc.set_alt(target * 1000)  # assigned level, still clear of the CTR
     r = brain.check_stingray_handoff("Colt 1", sc._track())
     assert r and "contact Stingray" in r and "channel 3" in r
 
@@ -1181,7 +1189,9 @@ def test_full_lifecycle_all_pages(airfield, brain):
     # Control: departure check-in -> climb (clear of the CTR).
     sc.at_gate("East").set_alt(airfield.elevation_ft + 1500)
     r = sc.say("Control, Colt 1, at 1500 ft", Controller.CONTROL)
-    assert "climb to Angels 15" in r
+    target = brain.pilots["Colt 1"].departure_climb_angels
+    assert target == 12
+    assert f"climb to Angels {target}" in r
     assert sc.phase() == Phase.AIRBORNE
 
     # --- Page 3: AIRBORNE (AWACS) — not handled by the ATC bot ---

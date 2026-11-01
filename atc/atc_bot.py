@@ -1191,9 +1191,9 @@ def main() -> None:
                               controller=Controller.CONTROL, callsign=callsign,
                               radio_policy=RADIO_ANSWER_POLICY[0],
                               radio_wait=RADIO_ANSWER_POLICY[1])
-                    # Stingray handoff: once the departure is at Angels 15,
-                    # Control pushes them to AWACS on channel 3 (SOP). We do
-                    # not simulate Stingray, but the call still goes out.
+                    # Stingray handoff: once the departure reaches its stored
+                    # Angels target, Control pushes them to AWACS on channel 3.
+                    # We do not simulate Stingray, but the call still goes out.
                     with lock:
                         stingray = brain.check_stingray_handoff(callsign, tr)
                     if stingray:
