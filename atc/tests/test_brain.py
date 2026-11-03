@@ -524,6 +524,17 @@ def test_taxi_readback_accepts_mags_whiskey_route(airfield, brain):
     assert reply == ""
 
 
+def test_taxi_readback_accepts_whisky_spelling(brain):
+    brain.set_runway("07")
+    clearance = brain.handle("Ground, Colt 1, requesting taxi",
+                             controller=Controller.GROUND)
+    assert "cleared taxi Whiskey" in clearance
+    reply = brain.handle(
+        "Cleared taxi, whisky, and hold short, runway zero seven, Colt one",
+        controller=Controller.GROUND)
+    assert reply == ""
+
+
 def test_ground_runway_qnh_readback(brain):
     # The kneeboard line "25 in use, QNH 2992, Adder11" must be answered with
     # "readback correct, advise when ready for clearance" — not "say again".
@@ -1178,6 +1189,60 @@ def test_parking_readback_does_not_reissue_clearance(brain, airfield):
                          controller=Controller.GROUND)
     assert reply == ""
     assert "cleared taxi to" not in reply.lower()
+
+
+def test_parking_readback_ignores_stt_pause_between_route_words(brain):
+    pilot = brain._pilot("Colt 1")
+    pilot.phase = Phase.TAXI
+    pilot.parking_cleared = True
+    pilot.last_clearance = (
+        "Colt 1, Ground, cleared taxi to Ramp North via Charlie November.")
+    reply = brain.handle(
+        "Cleared taxi to Ramp North via Charlie, November, Colt one",
+        controller=Controller.GROUND)
+    assert reply == ""
+
+
+def test_ground_does_not_recheck_unrelated_comment_as_taxi_readback(brain):
+    pilot = brain._pilot("Colt 1")
+    pilot.phase = Phase.TAXI
+    pilot.parking_cleared = True
+    pilot.readback_fails = 1
+    pilot.last_clearance = (
+        "Colt 1, Ground, cleared taxi to Ramp North via Charlie November.")
+    reply = brain.handle(
+        "Another thing, we should get the taxi more automatic when we land",
+        controller=Controller.GROUND)
+    assert "readback incomplete" not in (reply or "").lower()
+
+
+def test_taxi_route_readback_normalizes_punctuation_spelling_and_length(brain):
+    # Compare the configured route as an ordered sequence of words. Punctuation
+    # and case from STT are irrelevant; the UK spelling of Whiskey is accepted.
+    cases = (
+        ("Whiskey", "WHISKY"),
+        ("Charlie November", "Charlie, November"),
+        ("Alpha November Delta Echo", "Alpha, November delta Echo"),
+    )
+    for expected_route, spoken_route in cases:
+        clearance = (
+            f"Colt 1, Ground, cleared taxi to Ramp North via "
+            f"{expected_route}.")
+        readback = (
+            f"Cleared taxi to Ramp North via {spoken_route}, Colt one")
+        assert brain._readback_item(readback, clearance) is None, readback
+
+
+def test_taxi_route_readback_still_requires_all_words_in_order(brain):
+    clearance = (
+        "Colt 1, Ground, cleared taxi to Ramp North via "
+        "Alpha November Delta Echo.")
+    wrong_order = (
+        "Cleared taxi to Ramp North via Alpha Delta November Echo, Colt one")
+    missing_word = (
+        "Cleared taxi to Ramp North via Alpha November Echo, Colt one")
+    assert brain._readback_item(wrong_order, clearance) == "taxi route"
+    assert brain._readback_item(missing_word, clearance) == "taxi route"
 
 
 # ---------- Control ----------

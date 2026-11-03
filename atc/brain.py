@@ -1369,9 +1369,21 @@ class AtcBrain:
                                    clearance, re.IGNORECASE)
         if taxi_route:
             route_words = re.findall(r"[a-z]+", taxi_route.group(1).lower())
-            if route_words and not re.search(
-                    r"\b" + r"\s+".join(map(re.escape, route_words))
-                    + r"\b", low, re.IGNORECASE):
+            spoken_route_words = re.findall(r"[a-z]+", low.lower())
+            # Whisper may spell the NATO word as either "Whiskey" or
+            # "Whisky", and pauses often become commas ("Charlie, November").
+            # Compare normalized word sequences so those harmless transcript
+            # differences do not turn a correct route readback into a miss.
+            spelling_aliases = {"whisky": "whiskey"}
+            route_words = [spelling_aliases.get(word, word)
+                           for word in route_words]
+            spoken_route_words = [spelling_aliases.get(word, word)
+                                  for word in spoken_route_words]
+            route_size = len(route_words)
+            route_present = (route_size and any(
+                spoken_route_words[index:index + route_size] == route_words
+                for index in range(len(spoken_route_words) - route_size + 1)))
+            if route_words and not route_present:
                 return "taxi route"
         if not missing_num and not missing_gate:
             return None
@@ -2418,12 +2430,13 @@ class AtcBrain:
             pilot.last_clearance = reply
             return reply
         # Readback of the taxi clearance ("cleared taxi Sierra Echo and hold
-        # short runway 25") -> "readback correct". Must come before the taxi
-        # request and the hold-short report (which also say "hold short"). A
-        # parking readback may name only the ramp ("Ramp North, Alpha November")
-        # with no keyword, so a named parking area also counts.
+        # short runway 25") -> "readback correct". Require clearance-like words
+        # rather than the word "taxi" alone, which can appear in an unrelated
+        # comment and otherwise replays a stale readback error. A parking
+        # readback may name only the ramp ("Ramp North, Alpha November") with
+        # no keyword, so a named parking area also counts.
         if pilot.phase == Phase.TAXI and (
-                re.search(r"\b(clear|cleared|copy|roger|via|taxi|"
+                re.search(r"\b(clear|cleared|copy|roger|via|"
                           r"hold short|runway)\b", low)
                 or self._spoken_parking(low)) \
                 and not re.search(r"\bholding\b", low):
