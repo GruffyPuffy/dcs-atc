@@ -200,6 +200,9 @@ class Airfield:
     # Post-landing route by runway exit and destination ramp. Exit keys match
     # holding-point suffixes (C, B, A/N, S/W); route includes the exit taxiway.
     parking_routes_by_exit: dict[str, dict[str, str]] = field(default_factory=dict)
+    # Preferred landing exit side by active runway and departure ramp. This is
+    # training guidance only; the taxi route still follows the exit actually used.
+    landing_exit_sides: dict[str, dict[str, str]] = field(default_factory=dict)
     parking_areas: dict[str, tuple[float, float]] = field(default_factory=dict)
     # Named runway holding positions (P1..P4 on the MA chart), lat/lon.
     holding_points: dict[str, tuple[float, float]] = field(default_factory=dict)
@@ -296,12 +299,26 @@ class Airfield:
             return self.parking_routes[ramp]
         return next(iter(self.parking_routes.values()))
 
-    def nearest_parking_area(self, lat: float, lon: float) -> str | None:
+    def landing_exit_side(self, runway: str | None,
+                          origin_ramp: str | None) -> str | None:
+        """Configured left/right runway exit guidance for a returning flight."""
+        if not runway or not origin_ramp:
+            return None
+        side = self.landing_exit_sides.get(runway, {}).get(origin_ramp)
+        return side if side in ("left", "right") else None
+
+    def nearest_parking_area(self, lat: float, lon: float,
+                             max_distance_nm: float | None = None) -> str | None:
         """Name of the parking area (ramp) nearest a position, or None."""
         if not self.parking_areas:
             return None
-        return min(self.parking_areas, key=lambda p: _haversine_nm(
+        nearest = min(self.parking_areas, key=lambda p: _haversine_nm(
             lat, lon, self.parking_areas[p][0], self.parking_areas[p][1]))
+        if (max_distance_nm is not None and _haversine_nm(
+                lat, lon, self.parking_areas[nearest][0],
+                self.parking_areas[nearest][1]) > max_distance_nm):
+            return None
+        return nearest
 
     def nearest_holding_point(self, lat: float, lon: float) -> str | None:
         """Name of the runway holding position nearest a position, or None."""
@@ -1152,6 +1169,11 @@ def _build_airfield(name: str, spec: dict, defaults: dict,
         str(exit_name): dict(routes)
         for exit_name, routes in spec.get("parking_routes_by_exit", {}).items()
     }
+    landing_exit_sides = {
+        str(runway): {str(ramp): str(side).lower()
+                      for ramp, side in ramps.items()}
+        for runway, ramps in spec.get("landing_exit_sides", {}).items()
+    }
     parking_areas = {p: (float(v[0]), float(v[1]))
                      for p, v in spec.get("parking_areas", {}).items()}
     holding_points = {h: (float(v[0]), float(v[1]))
@@ -1220,6 +1242,7 @@ def _build_airfield(name: str, spec: dict, defaults: dict,
         taxi_routes=taxi_routes,
         parking_routes=parking_routes,
         parking_routes_by_exit=parking_routes_by_exit,
+        landing_exit_sides=landing_exit_sides,
         parking_areas=parking_areas,
         holding_points=holding_points,
         tower_pos=tower_pos,

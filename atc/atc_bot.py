@@ -48,26 +48,26 @@ from workers import ControllerWorker, SharedState
 SAMPLE_RATE = 48000
 STT_RATE = 16000
 MIN_TRANSMISSION_SECONDS = 0.3
-# A landing handoff (Tower -> Ground) waits until the aircraft is on the ground
-# AND slow enough to be a rollout, so a touch-and-go (still fast) is not pushed
-# to Ground mid-runway. 80 kt gives margin above the DCS airspeed gauge floor
-# (~58 kt) while staying well below a touch-and-go speed (~120+ kt).
-LANDING_HANDOFF_MAX_KT = 80.0
+# Tower's exit instruction waits until the aircraft is on the ground and slow
+# enough to be a landing rollout, so a touch-and-go is not mistaken for landing.
+# 80 kt gives margin above the DCS airspeed gauge floor (~58 kt) while staying
+# well below a touch-and-go speed (~120+ kt).
+LANDING_ROLLOUT_MAX_KT = 80.0
 # ...and low enough to actually be on the ground. `runway_occupied` accepts
-# anything below 500 ft AGL, so without this a low, slow aircraft crossing the
-# threshold was pushed to Ground while still airborne.
-LANDING_HANDOFF_MAX_AGL_FT = 50.0
+# anything below 500 ft AGL, so without this a low, slow aircraft could receive
+# the runway-exit instruction while still airborne.
+LANDING_ROLLOUT_MAX_AGL_FT = 50.0
 
 
 def is_landing_rollout(on_runway: bool, speed_kt: float,
                        agl_ft: float = 0.0) -> bool:
     """True if the aircraft is on the runway and slow enough to be a rollout.
 
-    Used to gate the Tower->Ground handoff: a touch-and-go is still fast, so it
-    stays with Tower instead of being pushed to Ground mid-runway.
+    Used to trigger Tower's runway-exit instruction: a touch-and-go is still
+    fast, so it stays in the landing flow instead of being sent to Ground.
     """
-    return (bool(on_runway) and speed_kt <= LANDING_HANDOFF_MAX_KT
-            and agl_ft <= LANDING_HANDOFF_MAX_AGL_FT)
+    return (bool(on_runway) and speed_kt <= LANDING_ROLLOUT_MAX_KT
+            and agl_ft <= LANDING_ROLLOUT_MAX_AGL_FT)
 
 
 def resample_16k(pcm: bytes) -> np.ndarray:
@@ -1017,6 +1017,16 @@ def main() -> None:
                     with lock:
                         known = brain.callsign_for_speaker(ac.player)
                     callsign = "" if known == ac.player else known
+                    spawn_callsign = callsign or slot_callsign(ac.callsign)
+                    spawn_ramp = None
+                    if (airfield is not None
+                            and ac.alt_ft - airfield.elevation_ft <= 50.0
+                            and ac.speed_kt <= LANDING_ROLLOUT_MAX_KT):
+                        spawn_ramp = airfield.nearest_parking_area(
+                            ac.lat, ac.lon, max_distance_nm=0.75)
+                    if spawn_callsign:
+                        with lock:
+                            brain.set_spawn_ramp(spawn_callsign, spawn_ramp)
                     if respawned:
                         log(f"PLAYER RESPAWN: {ac.player}  "
                             f"{prev_unit!r} -> {ac.callsign!r}  "
@@ -1153,22 +1163,21 @@ def main() -> None:
                               callsign=callsign,
                               radio_policy=RADIO_ANSWER_POLICY[0],
                               radio_wait=RADIO_ANSWER_POLICY[1])
-                    # After landing, Tower pushes the flight to Ground at
-                    # touchdown (Master Arms SOP) — the pilot does not have to
-                    # report "vacated" to Tower.
                     on_rwy_self = airfield.runway_occupied(
                         [ac], exclude=None, on_runway=True)
-                    # Only hand off once the aircraft is actually rolling out
-                    # (on the ground and slow): a touch-and-go is still fast, so
-                    # it stays with Tower.
                     landed = is_landing_rollout(
                         on_rwy_self, getattr(ac, "speed_kt", 0.0),
                         ac.alt_ft - airfield.elevation_ft)
                     with lock:
-                        handoff = brain.check_landing_handoff(callsign, landed)
-                    if handoff:
-                        log(f"LANDED: {callsign} ({ac.player}) -> Ground")
-                        speak(handoff, controller=Controller.TOWER,
+                        landing_call = brain.check_landing_handoff(
+                            callsign, on_rwy_self, rollout=landed)
+                    if landing_call:
+                        if "contact Ground" in landing_call:
+                            log(f"RUNWAY VACATED: {callsign} "
+                                f"({ac.player}) -> Ground")
+                        else:
+                            log(f"LANDING EXIT: {callsign} ({ac.player})")
+                        speak(landing_call, controller=Controller.TOWER,
                               callsign=callsign,
                               radio_policy=RADIO_ANSWER_POLICY[0],
                               radio_wait=RADIO_ANSWER_POLICY[1])

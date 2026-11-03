@@ -158,6 +158,20 @@
           "Ramp South": "Sierra Whiskey"
         }
       },
+      "landing_exit_sides": {
+        "07": {
+          "Ramp South": "right",
+          "Ramp East": "right",
+          "Ramp West": "left",
+          "Ramp North": "left"
+        },
+        "25": {
+          "Ramp South": "left",
+          "Ramp East": "left",
+          "Ramp West": "right",
+          "Ramp North": "right"
+        }
+      },
       "parking_areas": {
         "Ramp West": [
           42.18316,

@@ -392,32 +392,53 @@ def test_held_landing_is_recleared_when_runway_clears(airfield, brain):
 # ---------- Post-landing handoff to Ground (MA SOP) ----------
 
 def test_landed_flight_is_pushed_to_ground(airfield, brain):
-    # MA SOP: "after landing, tower will push you to the Ground channel" — the
-    # pilot does not report "vacated" to Tower. The push happens at TOUCHDOWN
-    # (while still rolling out), so the pilot is on Ground before vacating.
+    # Tower gives exit guidance on rollout; Ground handoff waits until the
+    # aircraft leaves the runway zone.
     sc = _scenario(airfield, brain).on_final("25")
     r = sc.say("Tower, Colt 1, on final", Controller.TOWER)
     assert "cleared to land" in r.lower()
     assert sc.phase() == Phase.LANDING
-    # On approach (not yet on the runway): no handoff.
-    assert brain.check_landing_handoff("Colt 1", on_runway=False) is None
-    # Touched down (on the runway, rolling out): Tower pushes to Ground.
-    call = brain.check_landing_handoff("Colt 1", on_runway=True)
+    # Approach: no instruction. Rollout is latched, but the flight stays with
+    # Tower until it is actually outside the runway zone.
+    assert brain.check_landing_handoff(
+        "Colt 1", on_runway=False, rollout=False) is None
+    assert brain.check_landing_handoff(
+        "Colt 1", on_runway=True, rollout=True) is None
+    assert sc.phase() == Phase.LANDING
+    call = brain.check_landing_handoff(
+        "Colt 1", on_runway=False, rollout=False)
     assert call and "contact Ground" in call
     assert sc.phase() == Phase.TAXI
-    # Fires once — an idle pilot is not spammed.
-    assert brain.check_landing_handoff("Colt 1", on_runway=True) is None
+    assert brain.check_landing_handoff(
+        "Colt 1", on_runway=False, rollout=False) is None
 
 
-def test_vacated_report_hands_to_ground_once(airfield, brain):
-    # A pilot who reports "vacated" first still gets the handoff, and the
-    # proactive check must not repeat it.
+def test_runway_vacated_state_hands_to_ground_once(airfield, brain):
     sc = _scenario(airfield, brain).on_final("25")
     sc.say("Tower, Colt 1, on final", Controller.TOWER)
-    r = sc.say("Colt 1, runway 25 vacated", Controller.TOWER)
+    assert brain.check_landing_handoff(
+        "Colt 1", on_runway=True, rollout=True) is None
+    r = brain.check_landing_handoff(
+        "Colt 1", on_runway=False, rollout=False)
     assert "contact Ground" in r
     assert sc.phase() == Phase.TAXI
-    assert brain.check_landing_handoff("Colt 1", on_runway=True) is None
+    assert brain.check_landing_handoff(
+        "Colt 1", on_runway=False, rollout=False) is None
+
+
+def test_exit_readback_is_checked_but_not_required_for_handoff(airfield, brain):
+    sc = _scenario(airfield, brain).on_final("25")
+    brain.set_spawn_ramp("Colt 1", "Ramp South")
+    sc.say("Tower, Colt 1, on final", Controller.TOWER)
+
+    exit_call = brain.check_landing_handoff(
+        "Colt 1", on_runway=True, rollout=True)
+    assert exit_call and "vacate left" in exit_call.lower()
+    # No readback is sent. The live runway transition still completes handoff.
+    handoff = brain.check_landing_handoff(
+        "Colt 1", on_runway=False, rollout=False)
+    assert handoff and "contact Ground" in handoff
+    assert sc.phase() == Phase.TAXI
 
 
 def test_landing_handoff_rearms_on_next_approach(airfield, brain):
@@ -425,11 +446,12 @@ def test_landing_handoff_rearms_on_next_approach(airfield, brain):
     # next landing.
     sc = _scenario(airfield, brain).on_final("25")
     sc.say("Tower, Colt 1, on final", Controller.TOWER)
-    brain.check_landing_handoff("Colt 1", on_runway=True)
-    assert brain.pilots["Colt 1"].landing_handoff_announced is True
+    brain.check_landing_handoff("Colt 1", on_runway=True, rollout=True)
+    assert brain.pilots["Colt 1"].landing_rollout_seen is True
+    assert brain.pilots["Colt 1"].landing_handoff_announced is False
     # Back on approach (go-around): re-arm.
     brain.pilots["Colt 1"].phase = Phase.INBOUND
-    brain.check_landing_handoff("Colt 1", on_runway=False)
+    brain.check_landing_handoff("Colt 1", on_runway=False, rollout=False)
     assert brain.pilots["Colt 1"].landing_handoff_announced is False
 
 
@@ -440,7 +462,8 @@ def test_no_handoff_without_landing_clearance(airfield, brain):
     sc.say("Tower, Colt 1, overhead break", Controller.TOWER)
     assert sc.phase() == Phase.LANDING
     assert brain.pilots["Colt 1"].cleared_landing is False
-    assert brain.check_landing_handoff("Colt 1", on_runway=True) is None
+    assert brain.check_landing_handoff(
+        "Colt 1", on_runway=True, rollout=True) is None
 
 
 def test_landing_rollout_gate_holds_off_a_touch_and_go():
@@ -1265,15 +1288,18 @@ def test_departure_readback_does_not_flip_to_inbound(airfield, brain):
 
 
 def test_touchdown_handoff_is_not_a_runway_incursion(airfield, brain):
-    # The Tower->Ground handoff fires at touchdown (phase becomes Taxi while
-    # still rolling out). That must not be flagged as an uncleared incursion.
+    # The rollout instruction leaves the flight in Landing, so the aircraft
+    # remains cleared while still on the runway.
     sc = _scenario(airfield, brain).on_final("25").set_alt(500)
     sc.say("Tower, Colt 1, on final", Controller.TOWER)
     assert sc.phase() == Phase.LANDING
-    handoff = brain.check_landing_handoff("Colt 1", on_runway=True)
+    brain.check_landing_handoff("Colt 1", on_runway=True, rollout=True)
+    assert sc.phase() == Phase.LANDING
+    assert brain.check_incursion("Colt 1", on_runway=True) is None
+    handoff = brain.check_landing_handoff(
+        "Colt 1", on_runway=False, rollout=False)
     assert handoff is not None and "contact Ground" in handoff
     assert sc.phase() == Phase.TAXI
-    assert brain.check_incursion("Colt 1", on_runway=True) is None
 
 
 def test_bare_runway_vacated_on_ground_gets_nearest_ramp(airfield, brain):
@@ -1281,7 +1307,8 @@ def test_bare_runway_vacated_on_ground_gets_nearest_ramp(airfield, brain):
     # taxi instructions, using the nearest configured ramp.
     sc = _scenario(airfield, brain).on_final("25").set_alt(500)
     sc.say("Tower, Colt 1, on final", Controller.TOWER)
-    brain.check_landing_handoff("Colt 1", on_runway=True)
+    brain.check_landing_handoff("Colt 1", on_runway=True, rollout=True)
+    brain.check_landing_handoff("Colt 1", on_runway=False, rollout=False)
     r = sc.say("Colt 1, runway vacated", Controller.GROUND)
     assert "cleared taxi" in r.lower()
     nearest = airfield.nearest_parking_area(sc.lat, sc.lon)
@@ -1293,7 +1320,8 @@ def test_sop_vacated_request_to_parking_gets_nearest_ramp(airfield, brain):
     # requesting taxi to parking". With no ramp specified, choose nearest.
     sc = _scenario(airfield, brain).on_final("25").set_alt(500)
     sc.say("Tower, Colt 1, on final", Controller.TOWER)
-    brain.check_landing_handoff("Colt 1", on_runway=True)
+    brain.check_landing_handoff("Colt 1", on_runway=True, rollout=True)
+    brain.check_landing_handoff("Colt 1", on_runway=False, rollout=False)
     r = sc.say("Colt 1, runway 25 vacated, requesting taxi to parking",
                Controller.GROUND)
     assert "cleared taxi" in r.lower()
@@ -1306,7 +1334,8 @@ def test_vacated_call_can_request_a_ramp_and_routes_from_exit(airfield, brain):
     # Ramp East is a longer taxi from exit C; use the exit-specific route.
     sc = _scenario(airfield, brain).on_final("25").set_alt(500)
     sc.say("Tower, Colt 1, on final", Controller.TOWER)
-    brain.check_landing_handoff("Colt 1", on_runway=True)
+    brain.check_landing_handoff("Colt 1", on_runway=True, rollout=True)
+    brain.check_landing_handoff("Colt 1", on_runway=False, rollout=False)
     sc.holding("Holding C")
 
     r = sc.say("Colt 1, runway 25 vacated, requesting taxi to Ramp East",
@@ -1321,7 +1350,8 @@ def test_pilot_can_change_ramp_after_automatic_parking_clearance(airfield, brain
     # ramp. The amended route must still start from the aircraft's exit.
     sc = _scenario(airfield, brain).on_final("25").set_alt(500)
     sc.say("Tower, Colt 1, on final", Controller.TOWER)
-    brain.check_landing_handoff("Colt 1", on_runway=True)
+    brain.check_landing_handoff("Colt 1", on_runway=True, rollout=True)
+    brain.check_landing_handoff("Colt 1", on_runway=False, rollout=False)
     sc.holding("Holding C")
     first = sc.say("Colt 1, runway vacated", Controller.GROUND)
     assert "cleared taxi" in first.lower()
@@ -1335,7 +1365,8 @@ def test_pilot_can_change_ramp_after_automatic_parking_clearance(airfield, brain
 def test_readback_of_vacated_parking_clearance_does_not_reissue(airfield, brain):
     sc = _scenario(airfield, brain).on_final("25").set_alt(500)
     sc.say("Tower, Colt 1, on final", Controller.TOWER)
-    brain.check_landing_handoff("Colt 1", on_runway=True)
+    brain.check_landing_handoff("Colt 1", on_runway=True, rollout=True)
+    brain.check_landing_handoff("Colt 1", on_runway=False, rollout=False)
     sc.holding("Holding C")
     clearance = sc.say(
         "Colt 1, runway 25 vacated, requesting taxi to Ramp South",

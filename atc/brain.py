@@ -51,6 +51,7 @@ RADIO_ANSWER_KEYS = frozenset({
     "line_up", "lineup_readback", "lineup_readback_straight",
     "lineup_readback_left", "takeoff",
     "cleared_land", "cleared_overhead", "touch_and_go_approved",
+    "vacate_runway",
     "departure_exit", "departure_exit_straight", "inbound_inside",
     "control_join", "control_join_straight", "control_join_nohdg",
     "control_join_requested", "control_join_requested_straight",
@@ -628,6 +629,14 @@ class PilotState:
     # landing, tower will push you to the Ground channel"). Fires once per
     # landing; re-arms on the next approach (go-around / touch-and-go).
     landing_handoff_announced: bool = False
+    # Landing exit instruction and ground handoff are separate events. The
+    # rollout latch prevents a go-around from looking like runway vacating.
+    landing_exit_instruction_announced: bool = False
+    landing_exit_readback_feedback_sent: bool = False
+    landing_rollout_seen: bool = False
+    landing_runway: str = ""
+    landing_exit_side: str = ""
+    origin_ramp: str = ""
     # Tower has pushed a departure to Control (MA SOP: "expect instructions to
     # switch to control" once airborne). Re-armed by each takeoff clearance.
     departure_handoff_announced: bool = False
@@ -808,6 +817,11 @@ class AtcBrain:
         `_resolve_speaker`).
         """
         self.active_pilots = [c for c in (callsigns or []) if c]
+
+    def set_spawn_ramp(self, callsign: str, ramp: str | None) -> None:
+        """Remember the ramp inferred from a player's first live spawn position."""
+        if callsign:
+            self._pilot(callsign).origin_ramp = ramp or ""
 
     def topgun_armed(self, callsign: str) -> bool:
         """True if `callsign` has asked to bust the tower (easter egg)."""
@@ -2215,6 +2229,11 @@ class AtcBrain:
         pilot.lineup_readback = False
         pilot.descend_readback = False
         pilot.landing_handoff_announced = False
+        pilot.landing_exit_instruction_announced = False
+        pilot.landing_exit_readback_feedback_sent = False
+        pilot.landing_rollout_seen = False
+        pilot.landing_runway = ""
+        pilot.landing_exit_side = ""
         pilot.rtb_requested = False
         pilot.rtb_control_handoff_announced = False
         pilot.rtb_control_handoff_not_before = 0.0
@@ -2257,6 +2276,11 @@ class AtcBrain:
         pilot.lineup_readback = False
         pilot.descend_readback = False
         pilot.landing_handoff_announced = False
+        pilot.landing_exit_instruction_announced = False
+        pilot.landing_exit_readback_feedback_sent = False
+        pilot.landing_rollout_seen = False
+        pilot.landing_runway = ""
+        pilot.landing_exit_side = ""
         return self._say("cancel_ack", callsign,
                          agency=self._agency(controller))
 
@@ -2286,6 +2310,15 @@ class AtcBrain:
     def _handle_ground(self, callsign: str, pilot: PilotState,
                        low: str, track: AircraftTrack | None,
                        traffic: list | None = None) -> str | None:
+        # If the bridge could not identify the ramp on spawn (for example a
+        # dynamic slot), capture it on the first Ground exchange while the
+        # aircraft is still parked. Do not replace it later in the sortie.
+        if (not pilot.origin_ramp and pilot.phase == Phase.IDLE
+                and track is not None and self.airfield is not None):
+            spoken_ramp = self._spoken_parking(low)
+            pilot.origin_ramp = (spoken_ramp or
+                self.airfield.nearest_parking_area(
+                    track.lat, track.lon, max_distance_nm=0.75) or "")
         # A handed-off pilot still on Ground ("Kutaisi Tower, ready to takeoff"
         # landed on Ground's frequency — the pilot dialled the wrong channel).
         # Re-issue the handoff instead of "say again"; any Ground-freq call in
@@ -2409,7 +2442,7 @@ class AtcBrain:
                 or amended_ramp_request):
             pilot.phase = Phase.TAXI
             pilot.parking_cleared = True
-            parking = requested_parking
+            parking = requested_parking or pilot.origin_ramp or None
             if parking is None and track is not None and self.airfield is not None:
                 parking = self.airfield.nearest_parking_area(track.lat, track.lon)
             route = None
@@ -2632,6 +2665,11 @@ class AtcBrain:
             # started; only then may that circuit receive a full-stop clearance.
             pilot.touch_and_go_pending = False
             pilot.landing_handoff_announced = False
+            pilot.landing_exit_instruction_announced = False
+            pilot.landing_exit_readback_feedback_sent = False
+            pilot.landing_rollout_seen = False
+            pilot.landing_runway = ""
+            pilot.landing_exit_side = ""
             if repeated:
                 return ""
             return self._say("go_around_ack", callsign)
@@ -2656,6 +2694,12 @@ class AtcBrain:
                 pilot.touch_and_go_pending = False
                 pilot.awaiting_landing = False
                 pilot.landing_ready_announced = False
+                pilot.landing_handoff_announced = False
+                pilot.landing_exit_instruction_announced = False
+                pilot.landing_exit_readback_feedback_sent = False
+                pilot.landing_rollout_seen = False
+                pilot.landing_runway = ""
+                pilot.landing_exit_side = ""
                 return self._say("go_around_traffic", callsign)
             # Tower retains the aircraft in the pattern; this is not a
             # full-stop landing clearance.
@@ -2667,6 +2711,11 @@ class AtcBrain:
             pilot.awaiting_landing = False
             pilot.landing_ready_announced = False
             pilot.landing_handoff_announced = False
+            pilot.landing_exit_instruction_announced = False
+            pilot.landing_exit_readback_feedback_sent = False
+            pilot.landing_rollout_seen = False
+            pilot.landing_runway = ""
+            pilot.landing_exit_side = ""
             return self._say("touch_and_go_approved", callsign)
         # Accept a spoken exit report while still on Tower. A valid report
         # beyond the matching outbound arc can complete the automatic handoff;
@@ -2838,20 +2887,44 @@ class AtcBrain:
                 r"\b(cleared|takeoff|take off|right turn|left turn|turnout)\b",
                 low):
             return ""
-        # After landing, Tower hands the flight to Ground. Normally the bot
-        # pushes the pilot to Ground *unprompted* once they roll off the runway
-        # (check_landing_handoff); this branch covers a pilot who reports
-        # "vacated" (or MA's "rolling off runway 25") first. Idempotent: if the
-        # handoff was already given, just acknowledge rather than repeating
-        # "contact Ground".
+        # A live state monitor performs the normal handoff once rollout has
+        # left the runway zone. Keep the spoken report as an offline fallback;
+        # with live state, do not hand off early merely because the pilot says
+        # "vacated" while still inside the runway zone.
         if re.search(r"\b(vacated|clear of the runway|off the runway|"
                      r"runway vacated|clear of runway|rolling off|"
                      r"rolling out)\b", low):
             if pilot.landing_handoff_announced:
                 return self._say("roger", callsign, agency=self.tower_short)
+            # With live state, wait for the aircraft to actually leave the
+            # runway zone. Offline/manual operation retains the spoken-report
+            # fallback so the flow can still complete without DCS telemetry.
+            if (track is not None and self.airfield is not None
+                    and self.airfield.runway_occupied(
+                        [track], runway=pilot.landing_runway or self.runway,
+                        on_runway=True)):
+                return ""
             pilot.landing_handoff_announced = True
             pilot.phase = Phase.TAXI
+            pilot.pending_handoff_to = Controller.GROUND.value
             return self._say("contact_ground", callsign)
+        # Check the exit-side readback for coaching, but never make the later
+        # position-triggered Ground handoff depend on it.
+        if (pilot.landing_exit_instruction_announced
+                and pilot.landing_exit_side
+                and re.search(r"\bvacate\b", low)):
+            said_side = re.search(r"\bvacate(?:\s+the)?\s+(left|right)\b",
+                                  low)
+            if (said_side is None
+                    or said_side.group(1) != pilot.landing_exit_side):
+                if not pilot.landing_exit_readback_feedback_sent:
+                    pilot.landing_exit_readback_feedback_sent = True
+                    return self._say("readback_incomplete", callsign,
+                                     agency=self.tower_short,
+                                     item="exit side")
+            else:
+                pilot.readback_fails = 0
+            return ""
         # Readback of the landing clearance ("runway 25, cleared to land") once
         # already cleared. Master Arms (Landing Procedures §Comms): "after the
         # landing clearance (and your readback) there's generally no need for
@@ -4346,6 +4419,12 @@ class AtcBrain:
         pilot.go_around_circuit = False
         pilot.touch_and_go_pending = False
         pilot.cleared_landing = True
+        pilot.landing_runway = self.runway
+        pilot.landing_rollout_seen = False
+        pilot.landing_exit_instruction_announced = False
+        pilot.landing_exit_readback_feedback_sent = False
+        pilot.landing_exit_side = ""
+        pilot.landing_handoff_announced = False
         pilot.awaiting_landing = False
         pilot.landing_ready_announced = False
         for wing in self._flight_members(callsign):
@@ -4376,6 +4455,11 @@ class AtcBrain:
             pilot.go_around_circuit = True
             pilot.touch_and_go_pending = False
             pilot.landing_handoff_announced = False
+            pilot.landing_exit_instruction_announced = False
+            pilot.landing_exit_readback_feedback_sent = False
+            pilot.landing_rollout_seen = False
+            pilot.landing_runway = ""
+            pilot.landing_exit_side = ""
             key = ("go_around_traffic" if self._traffic_on_runway(traffic)
                    else "go_around")
             return self._say(key, callsign)
@@ -4487,6 +4571,12 @@ class AtcBrain:
             pilot.awaiting_landing = False
             pilot.phase = Phase.LANDING
             pilot.cleared_landing = True
+            pilot.landing_runway = self.runway
+            pilot.landing_rollout_seen = False
+            pilot.landing_exit_instruction_announced = False
+            pilot.landing_exit_readback_feedback_sent = False
+            pilot.landing_exit_side = ""
+            pilot.landing_handoff_announced = False
             return self._say("cleared_land", callsign,
                              flight=self._formation_prefix(pilot))
         return None
@@ -4512,29 +4602,45 @@ class AtcBrain:
         pilot.phase = Phase.TAKEOFF
         return self._takeoff_clearance(callsign, pilot)
 
-    def check_landing_handoff(self, callsign: str, on_runway: bool) -> str | None:
-        """Push a landed flight to Ground, unprompted, once it is rolling out.
+    def check_landing_handoff(self, callsign: str, on_runway: bool,
+                              rollout: bool = False) -> str | None:
+        """Give Tower's exit instruction at rollout, then hand off when clear.
 
-        Master Arms SOP (Mission Procedures §9): "after landing, tower will push
-        you to the Ground channel" — the pilot does not report "vacated" to
-        Tower. The handoff happens once the aircraft is **on the ground and
-        rolling out** (the caller passes `on_runway=True` only then, so a
-        touch-and-go still fast on the runway is not pushed), so the pilot is
-        already on Ground by the time they are clear. Fires once per landing;
-        re-arms on the next approach (go-around / touch-and-go).
+        The rollout latch is set only after touchdown and low speed, so a
+        touch-and-go cannot be mistaken for runway vacating. The later handoff
+        depends on runway state, never on whether the pilot read back the exit.
         """
         pilot = self._pilot(callsign)
-        if not on_runway:
-            # On approach again (go-around / touch-and-go): re-arm for the next
-            # landing. After a handoff the phase is Taxi, so this does not
-            # re-arm while the aircraft is still rolling out.
-            if pilot.phase in (Phase.INBOUND, Phase.LANDING):
-                pilot.landing_handoff_announced = False
+        if rollout and on_runway and pilot.phase == Phase.LANDING \
+                and pilot.cleared_landing:
+            pilot.landing_rollout_seen = True
+            if not pilot.landing_exit_instruction_announced:
+                pilot.landing_exit_instruction_announced = True
+                side = (self.airfield.landing_exit_side(
+                    pilot.landing_runway or self.runway, pilot.origin_ramp)
+                    if self.airfield is not None else None)
+                if side:
+                    pilot.landing_exit_side = side
+                    reply = self._say("vacate_runway", callsign, side=side)
+                    pilot.last_clearance = reply
+                    pilot.readback_fails = 0
+                    return reply
             return None
-        if (pilot.phase == Phase.LANDING and pilot.cleared_landing
-                and not pilot.landing_handoff_announced):
+
+        if not on_runway and pilot.landing_rollout_seen \
+                and pilot.phase == Phase.LANDING and pilot.cleared_landing \
+                and not pilot.landing_handoff_announced:
             pilot.landing_handoff_announced = True
             pilot.phase = Phase.TAXI
             pilot.pending_handoff_to = Controller.GROUND.value
             return self._say("contact_ground", callsign)
+
+        # A false runway sample before a low-speed rollout means the aircraft
+        # is still approaching or has gone around; do not carry stale landing
+        # state into the next circuit. Once rollout was seen, the false sample
+        # above is the intended runway-vacated transition.
+        if (not on_runway and not pilot.landing_rollout_seen
+                and pilot.phase in (Phase.INBOUND, Phase.LANDING)):
+            pilot.landing_handoff_announced = False
+            pilot.landing_exit_instruction_announced = False
         return None
