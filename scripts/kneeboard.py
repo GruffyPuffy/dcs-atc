@@ -50,6 +50,7 @@ FOOTER = ("Identify yourself on every line. First call on a frequency addresses 
 ROLE_COLOR = {
     "P": (88, 166, 255),      # pilot (blue)
     "W": (88, 166, 255),
+    "AID": (139, 148, 158),   # trainer response / explanation
     "GND": (63, 185, 80),     # ground (green)
     "TWR": (210, 153, 34),    # tower (amber)
     "CTL": (163, 113, 247),   # control (purple)
@@ -57,7 +58,7 @@ ROLE_COLOR = {
 }
 ROLE_LABEL = {
     "P": "PILOT", "W": "WING", "GND": "GND", "TWR": "TWR",
-    "CTL": "CTL", "AWACS": "AWACS",
+    "CTL": "CTL", "AWACS": "AWACS", "AID": "AID",
 }
 
 FONT_DIRS = [
@@ -373,6 +374,58 @@ PAGES = [
         ],
         "footer": "Brevity is code words that shorten radio calls and reduce "
                   "mishearing. Use them only when both sides know them.",
+    },
+    {
+        "file": "07-training",
+        "title": "TRAINING AIDS",
+        "subtitle": "Trainer controls any channel · tasking on Stingray Ch 3",
+        "note": "These are trainer controls, not replacements for MA radio "
+                "phraseology. Use your callsign with Trainer commands; DEBUG "
+                "must start the transmission.",
+        "sections": [
+            ("Help, echo & trainer settings", [
+                ("P", "Trainer, Adder11, help"),
+                ("AID", "Get a short hint for your current flight phase."),
+                ("P", "Trainer, Adder11, echo on / echo off"),
+                ("AID", "Toggle your radio transcript in the DCS mission "
+                       "message feed. This does not toggle server logs or "
+                       "debrief recording."),
+                ("P", "Trainer, Adder11, coach mode / casual mode"),
+                ("AID", "Coach gives wording tips; casual suppresses them. "
+                       "Mode is global."),
+                ("P", "Trainer, Adder11, volume 0.3"),
+                ("AID", "Set ATC voice volume from 0.0 to 1.0. Global."),
+            ]),
+            ("If you need to recover", [
+                ("P", "Adder1, say again"),
+                ("AID", "Replay the last ATC clearance."),
+                ("P", "Adder1, cancel clearance"),
+                ("AID", "Cancel the current clearance and step back."),
+            ]),
+            ("Optional Stingray task", [
+                ("AID", "After Stingray confirms radar contact on Ch 3:"),
+                ("P", "Adder11, request training tasking"),
+                ("AID", "Also understood: request tasking; request a "
+                       "training task; request another task; request new task."),
+                ("AWACS", "Adder11, Stingray, training task: proceed to "
+                         "Bulls [bearing] for [range], Angels [assigned]. "
+                         "Report on station."),
+                ("AID", "Task completes after 3 consecutive samples (about "
+                       "2 seconds apart) inside the 2 NM circle and ±500 ft "
+                       "altitude band. Then free fly, request another task, "
+                       "or RTB."),
+            ]),
+            ("Mark an unexpected moment", [
+                ("P", "DEBUG — or DEBUG followed by a short note"),
+                ("AID", "Silent over radio. Saves a timestamped state/version "
+                       "mark for investigation and shows a notice in DCS when "
+                       "your aircraft is identified."),
+                ("AID", "The live map also has a DEBUG button. Marks appear in "
+                       "the flight debrief viewer."),
+            ]),
+        ],
+        "footer": "Use trainer aids when needed, then return to the normal "
+                  "frequency and MA SOP flow.",
     },
 ]
 

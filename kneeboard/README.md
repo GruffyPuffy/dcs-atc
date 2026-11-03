@@ -13,6 +13,7 @@ channel plan from https://wiki.masterarms.se/index.php/Comms).
 | `04-light-path.jpg` | **Single-ship light path**: skip Ground (straight to Tower) and the overhead break (report "on final"); Tower → Control → land |
 | `05-comms.jpg` | **Comms board**: the Master Arms UHF channel plan (Ch 1–25), with the channels this trainer uses highlighted |
 | `06-brevity.jpg` | **Brevity**: the Master Arms radio words used on the ATC and package channels |
+| `07-training.jpg` | **Training aids**: help, mission-feed echo, trainer settings, recovery commands, optional Stingray tasking, and DEBUG marks |
 
 Page 4 is a **shortened trainer path**, not a wiki transcript: it uses the ATC
 bot's actual replies to show the fewest calls that get a single-ship airborne and
@@ -21,6 +22,11 @@ back. Stuck at any point? Say *"Trainer, <callsign>, help"* on any frequency.
 Page 5 is the **comms board** — the Master Arms UHF channel plan, verbatim from
 the wiki's Comms page. The channels this trainer uses (Ch 6 Ground, Ch 7 Tower,
 Ch 8 Control, Ch 21 ATIS) are highlighted in orange.
+
+Page 7 is a separate **trainer-aids card**, not an MA SOP page. `echo on/off`
+toggles only that pilot's transcript in the DCS mission message feed; it does
+not toggle server logs or debrief recording. `DEBUG` must begin the radio
+transmission and is silent on the channel; it saves a state mark for review.
 
 Each other line is based on the wiki's "Adder11" two-ship example, colour-coded
 by who is talking (PILOT / GND / TWR / CTL / AWACS).
