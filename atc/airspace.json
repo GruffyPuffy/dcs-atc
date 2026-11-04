@@ -146,16 +146,16 @@
           "Ramp South": "Bravo November Alpha Whiskey"
         },
         "A/N": {
-          "Ramp West": "Alpha",
-          "Ramp North": "Alpha November",
-          "Ramp East": "Alpha November Delta Echo",
-          "Ramp South": "Alpha Whiskey"
+          "Ramp West": "Delta November Alpha",
+          "Ramp North": "Delta November",
+          "Ramp East": "Echo",
+          "Ramp South": "Echo Sierra"
         },
         "S/W": {
-          "Ramp West": "Sierra Whiskey Alpha",
-          "Ramp North": "Sierra Echo Delta November",
-          "Ramp East": "Sierra Echo",
-          "Ramp South": "Sierra Whiskey"
+          "Ramp West": "Alpha",
+          "Ramp North": "Alpha November",
+          "Ramp East": "Whiskey Sierra",
+          "Ramp South": "Whiskey"
         }
       },
       "landing_exit_sides": {
