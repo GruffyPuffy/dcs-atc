@@ -257,15 +257,14 @@ function drawAirspace(af) {
       .bindTooltip(tip).addTo(staticLayer);
   }
 
-  // Runway holding positions (P1..P4 on the MA chart).
-  for (const [name, pos] of Object.entries(af.holding_points || {})) {
-    const exit = name.replace(/^Holding\s+/i, '');
+  // Route-selection points: runway ends and charted taxiway exits.
+  for (const [exit, pos] of Object.entries(af.parking_exit_points || {})) {
     const routes = (af.parking_routes_by_exit || {})[exit] || {};
     const routeLines = Object.entries(routes).map(([ramp, route]) =>
       `to ${ramp}: ${route}`);
     const tip = routeLines.length
       ? [`Runway exit ${exit}`, ...routeLines].join('<br>')
-      : `Holding position: ${name}`;
+      : `Runway exit ${exit}`;
     L.circleMarker(pos, { radius: 5, color: '#f85149', weight: 2,
       fillColor: '#0d1117', fillOpacity: 1 })
       .bindTooltip(tip).addTo(staticLayer);
@@ -276,9 +275,16 @@ function drawAirspace(af) {
   const checks = af.checks || {};
   for (const zone of checks.holding || []) {
     L.circle(zone.center, {
-      radius: zone.radius_nm * 1852, color: '#d29922', weight: 1,
-      dashArray: '4 4', fillColor: '#d29922', fillOpacity: 0.05,
-    }).bindTooltip(`Holding check: ${zone.label}`).addTo(staticLayer);
+      radius: zone.radius_nm * 1852, color: '#58a6ff', weight: 2,
+      dashArray: '4 4', fillColor: '#58a6ff', fillOpacity: 0.08,
+    }).bindTooltip(`Hold-short zone: ${zone.label} · ${zone.radius_nm} NM`)
+      .addTo(staticLayer);
+  }
+  for (const zone of checks.exits || []) {
+    L.circle(zone.center, {
+      radius: zone.radius_nm * 1852, color: '#f85149', weight: 1,
+      dashArray: '3 3', fillColor: '#f85149', fillOpacity: 0.04,
+    }).bindTooltip(`Runway exit check: ${zone.label}`).addTo(staticLayer);
   }
   // Entry and departure gates share radial arcs. The angular window and
   // distance come from the same geometry used by the brain.

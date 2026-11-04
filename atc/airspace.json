@@ -145,13 +145,13 @@
           "Ramp East": "Bravo November Delta Echo",
           "Ramp South": "Bravo November Alpha Whiskey"
         },
-        "A/N": {
+        "25": {
           "Ramp West": "Delta November Alpha",
           "Ramp North": "Delta November",
           "Ramp East": "Echo",
           "Ramp South": "Echo Sierra"
         },
-        "S/W": {
+        "07": {
           "Ramp West": "Alpha",
           "Ramp North": "Alpha November",
           "Ramp East": "Whiskey Sierra",
@@ -190,22 +190,14 @@
           42.47316
         ]
       },
-      "holding_points": {
-        "Holding C": [
+      "runway_exit_points": {
+        "C": [
           42.17912,
           42.48922
         ],
-        "Holding B": [
+        "B": [
           42.17705,
           42.47302
-        ],
-        "Holding A/N": [
-          42.17923,
-          42.46583
-        ],
-        "Holding S/W": [
-          42.17232,
-          42.46738
         ]
       },
       "channels": {

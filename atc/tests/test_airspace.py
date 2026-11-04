@@ -260,34 +260,62 @@ def test_relative_position_plural_miles(airfield):
 # ---------- Holding points + check zones ----------
 
 def test_holding_points_loaded(airfield):
-    # P1..P4 from the MA aerodrome chart
-    assert set(airfield.holding_points) == {
-        "Holding C", "Holding B", "Holding A/N", "Holding S/W"}
+    # Kutaisi uses only the active runway threshold for hold-short checks.
+    assert airfield.holding_points == {}
+    assert set(airfield.runway_exit_points) == {"B", "C"}
 
 
-def test_nearest_holding_point(airfield):
-    p1 = airfield.holding_points["Holding C"]
-    assert airfield.nearest_holding_point(p1[0], p1[1]) == "Holding C"
+def test_kutaisi_exit_points_use_charted_b_c_coordinates(airfield):
+    assert airfield.runway_exit_points["C"] == pytest.approx(
+        (42.17912, 42.48922))  # chart P1 / Holding Position C
+    assert airfield.runway_exit_points["B"] == pytest.approx(
+        (42.17705, 42.47302))  # chart P2 / Holding Position B
 
 
 def test_check_zone_holding(airfield):
     thr = airfield.runway_threshold("25")
     assert airfield.is_holding_short(thr[0], thr[1])
+    assert airfield.is_holding_short(thr[0] + 0.001, thr[1])
+    assert not airfield.is_holding_short(thr[0] + 0.003, thr[1])
+    thr07 = airfield.runway_threshold("07")
+    assert airfield.is_holding_short(*thr07, runway="07")
     # on the ramp, far from the runway -> not holding short
     assert not airfield.is_holding_short(42.183, 42.472)
 
 
 def test_is_holding_short_accepts_named_points(airfield):
-    # P2/P3/P4 are 1-1.5 NM from the threshold; holding there must be accepted
-    for name, (lat, lon) in airfield.holding_points.items():
-        assert airfield.is_holding_short(lat, lon), name
+    # Taxiway exits are not holding-short positions; only the active threshold
+    # circle is accepted at Kutaisi.
+    for name, (lat, lon) in airfield.runway_exit_points.items():
+        assert not airfield.is_holding_short(lat, lon), name
 
 
 def test_holding_zone_geometry_covers_points(airfield):
     zones = airfield.holding_zone_geometry()
-    labels = {z["label"] for z in zones}
-    assert "threshold" in labels
-    assert set(airfield.holding_points) <= labels
+    assert [z["label"] for z in zones] == ["threshold"]
+    assert zones[0]["radius_nm"] == pytest.approx(0.1)
+
+
+@pytest.mark.parametrize("runway,opposite", [("07", "25"), ("25", "07")])
+def test_kutaisi_hold_short_zone_tracks_active_runway(airfield, runway, opposite):
+    airfield.set_active_runway(runway)
+    threshold = airfield.runway_threshold()
+    opposite_threshold = airfield.runway_threshold(opposite)
+
+    zones = airfield.holding_zone_geometry()
+    assert len(zones) == 1
+    assert zones[0]["center"] == list(threshold)
+    assert zones[0]["radius_nm"] == pytest.approx(0.1)
+    assert airfield.is_holding_short(*threshold)
+    assert not airfield.is_holding_short(*opposite_threshold)
+
+
+def test_runway_exit_zones_cover_runway_ends_and_b_c(airfield):
+    zones = airfield.parking_exit_zone_geometry()
+    # Runway 25 is active by default: its threshold is the hold-short point,
+    # and the opposite runway 07 threshold is the runway-end exit.
+    assert {z["label"] for z in zones} == {"07", "B", "C"}
+    assert all(z["radius_nm"] == pytest.approx(0.15) for z in zones)
 
 
 def test_exit_zone_geometry_covers_departure_gates(airfield):
@@ -407,6 +435,46 @@ def test_gudauta_uses_only_south_ramp_and_charted_taxiways():
         pos = af.holding_points[f"Holding {exit_name}"]
         assert af.nearest_holding_point(*pos) == f"Holding {exit_name}"
         assert af.parking_route(*pos, "Ramp South") == route
+
+
+def test_kutaisi_parking_routes_select_b_c_and_runway_ends(airfield):
+    expected = {
+        ("C", "Ramp East"): "Charlie November Delta Echo",
+        ("B", "Ramp East"): "Bravo November Delta Echo",
+        ("07", "Ramp East"): "Whiskey Sierra",
+    }
+    points = airfield.parking_exit_points()
+    assert "25" not in points  # active threshold is for holding short
+    for (exit_name, ramp), route in expected.items():
+        assert airfield.parking_route(*points[exit_name], ramp) == route
+
+
+@pytest.mark.parametrize(
+    "active_runway,far_end,ramp,expected_route,fallback_route",
+    [("07", "25", "Ramp South", "Echo Sierra", "Whiskey"),
+     ("25", "07", "Ramp East", "Whiskey Sierra", "Echo")],
+)
+def test_kutaisi_only_opposite_threshold_is_a_runway_exit(
+        airfield, active_runway, far_end, ramp, expected_route, fallback_route):
+    airfield.set_active_runway(active_runway)
+    points = airfield.parking_exit_points()
+    active_threshold = airfield.runway_threshold(active_runway)
+    assert active_runway not in points
+    assert far_end in points
+    # The active threshold uses the generic route; it is not also an exit zone.
+    assert airfield.parking_route(*active_threshold, ramp) == fallback_route
+    lat, lon = airfield.runway_threshold(far_end)
+
+    # About 0.144 NM from the far threshold, inside the 0.15 NM exit circle.
+    assert airfield.parking_route(lat + 0.0024, lon, ramp) == expected_route
+    # About 0.156 NM away, outside the exit circle; use the generic route.
+    assert airfield.parking_route(lat + 0.0026, lon, ramp) == fallback_route
+
+
+def test_kutaisi_exit_route_uses_small_zone_then_falls_back(airfield):
+    lat, lon = airfield.runway_threshold("25")
+    # Outside the 0.15 NM end zone, Ramp West uses its generic parking route.
+    assert airfield.parking_route(lat + 0.003, lon, "Ramp West") == "Alpha"
 
 
 def test_pattern_zones_geometry_one_per_runway(airfield):

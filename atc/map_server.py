@@ -488,12 +488,16 @@ def _airspace_payload(airfield: Airfield, basemap: str | None = None) -> dict:
         "taxi_routes": airfield.taxi_routes,
         "parking_routes": airfield.parking_routes,
         "parking_routes_by_exit": airfield.parking_routes_by_exit,
+        "parking_exit_points": {
+            name: list(pos) for name, pos in airfield.parking_exit_points().items()
+        },
         "parking_areas": {name: list(pos) for name, pos in airfield.parking_areas.items()},
         "holding_points": {name: list(pos) for name, pos in airfield.holding_points.items()},
         # The areas the bot actually checks, derived from the same parameters
         # the brain uses (so the map can't drift from the logic).
         "checks": {
             "holding": airfield.holding_zone_geometry(),
+            "exits": airfield.parking_exit_zone_geometry(),
             "final": airfield.final_zone_geometry(),
             "runway": airfield.runway_corridor_geometry(),
             "lineup": airfield.lineup_zone_geometry(),

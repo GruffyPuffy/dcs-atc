@@ -505,10 +505,8 @@ def test_holding_short_challenged_on_ramp(airfield, brain):
     assert sc.phase() == Phase.TAXI  # did not advance
 
 
-def test_holding_short_accepted_at_named_point(airfield, brain):
-    # Holding at a named point (B) is accepted (not challenged) and hands the
-    # pilot to Tower, matching the Master Arms kneeboard wording.
-    sc = _scenario(airfield, brain).holding("Holding B")
+def test_holding_short_accepted_at_active_runway_threshold(airfield, brain):
+    sc = _scenario(airfield, brain).at_threshold("25")
     sc.say("Ground, Colt 1, requesting taxi", Controller.GROUND)
     r = sc.say("Colt 1, holding short runway 25", Controller.GROUND)
     assert "contact Tower" in r
@@ -685,11 +683,12 @@ def test_takeoff_waits_until_actually_lined_up(airfield, brain):
     onto the runway. The clearance follows once the monitor sees them lined up
     (at the threshold, pointing down the runway, stationary).
     """
-    sc = _scenario(airfield, brain).holding("Holding C")
+    sc = (_scenario(airfield, brain).at_threshold("25")
+          .set_heading((airfield.runway_heading("25") + 45) % 360))
     sc.say("Tower, Colt 1, ready for departure", Controller.TOWER)
     assert sc.phase() == Phase.LINEUP
 
-    # Readback while still at the holding point: acknowledged, not cleared.
+    # Still at the threshold but not pointed down the runway: acknowledge only.
     r = sc.say("Line up and wait 25, Colt 1", Controller.TOWER)
     assert "cleared for takeoff" not in r.lower()
     assert sc.phase() == Phase.LINEUP
@@ -719,7 +718,8 @@ def test_takeoff_withheld_while_still_rolling(airfield, brain):
 
 def test_lineup_readback_is_silent(airfield, brain):
     """Line-up readback is not in the SOP as a 'roger' — stay quiet until lined up."""
-    sc = _scenario(airfield, brain).holding("Holding C")
+    sc = (_scenario(airfield, brain).at_threshold("25")
+          .set_heading((airfield.runway_heading("25") + 45) % 360))
     sc.say("Tower, Colt 1, ready for departure", Controller.TOWER)
     r = sc.say("Line up and wait 25, Colt 1", Controller.TOWER)
     assert r == ""
@@ -793,17 +793,10 @@ def test_arrival_handoff_zone_arms_on_join_and_catches_late_turn(airfield, brain
 
 
 def test_holding_point_beside_runway_is_not_lined_up(airfield):
-    """A pilot at a holding point is NOT lined up, even if it is near the
-    threshold.
-
-    The position test must be a runway corridor, not a radius: at Kutaisi,
-    Holding A/N is only 387 m from the 07 threshold but 387 m *sideways*, and
-    Holding B is 565 m down the runway on a taxiway. A radius would clear them
-    for takeoff while they are still off the runway.
-    """
+    """Taxiway exits beside the runway are not positions on the runway."""
     for runway in ("25", "07"):
         hdg = airfield.runway_heading(runway)
-        for name, point in airfield.holding_points.items():
+        for name, point in airfield.runway_exit_points.items():
             assert not airfield.is_lined_up(point[0], point[1], hdg, runway,
                                             speed_kt=0.0), f"{runway} {name}"
 
@@ -1336,7 +1329,7 @@ def test_vacated_call_can_request_a_ramp_and_routes_from_exit(airfield, brain):
     sc.say("Tower, Colt 1, on final", Controller.TOWER)
     brain.check_landing_handoff("Colt 1", on_runway=True, rollout=True)
     brain.check_landing_handoff("Colt 1", on_runway=False, rollout=False)
-    sc.holding("Holding C")
+    sc.lat, sc.lon = airfield.parking_exit_points()["C"]
 
     r = sc.say("Colt 1, runway 25 vacated, requesting taxi to Ramp East",
                Controller.GROUND)
@@ -1352,7 +1345,7 @@ def test_pilot_can_change_ramp_after_automatic_parking_clearance(airfield, brain
     sc.say("Tower, Colt 1, on final", Controller.TOWER)
     brain.check_landing_handoff("Colt 1", on_runway=True, rollout=True)
     brain.check_landing_handoff("Colt 1", on_runway=False, rollout=False)
-    sc.holding("Holding C")
+    sc.lat, sc.lon = airfield.parking_exit_points()["C"]
     first = sc.say("Colt 1, runway vacated", Controller.GROUND)
     assert "cleared taxi" in first.lower()
     assert airfield.nearest_parking_area(sc.lat, sc.lon).lower() in first.lower()
@@ -1367,7 +1360,7 @@ def test_readback_of_vacated_parking_clearance_does_not_reissue(airfield, brain)
     sc.say("Tower, Colt 1, on final", Controller.TOWER)
     brain.check_landing_handoff("Colt 1", on_runway=True, rollout=True)
     brain.check_landing_handoff("Colt 1", on_runway=False, rollout=False)
-    sc.holding("Holding C")
+    sc.lat, sc.lon = airfield.parking_exit_points()["C"]
     clearance = sc.say(
         "Colt 1, runway 25 vacated, requesting taxi to Ramp South",
         Controller.GROUND)
@@ -1750,7 +1743,7 @@ def test_debrief_wrong_frequency_ready_call_gets_handoff_again(airfield, brain):
     # handoff.
     sc = _scenario(airfield, brain).park("Ramp South")
     sc.say("Ground, Colt 1, requesting taxi", Controller.GROUND)
-    sc.holding("Holding A/N")  # taxi out to the holding point first
+    sc.at_threshold("25")
     sc.say("Ground, Colt 1, holding short runway 25", Controller.GROUND)
     r = sc.say("Kutaisi Tower, Colt 1, ready to takeoff", Controller.GROUND)
     assert "contact tower" in (r or "").lower()

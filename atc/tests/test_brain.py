@@ -2220,11 +2220,10 @@ def test_holding_short_hands_to_tower(brain, airfield):
     # The Master Arms kneeboard hands the pilot to Tower without naming the
     # holding position ("contact Tower on channel 7").
     brain.handle("Ground, Colt 1, requesting taxi", controller=Controller.GROUND)
-    # sit at Holding C (P1) and report holding short
-    p1 = airfield.holding_points["Holding C"]
-    at_p1 = _track(airfield, p1[0], p1[1])
+    thr = airfield.runway_threshold("25")
+    at_threshold = _track(airfield, thr[0], thr[1])
     reply = brain.handle("Colt 1, holding short runway 25",
-                         track=at_p1, controller=Controller.GROUND)
+                         track=at_threshold, controller=Controller.GROUND)
     assert "contact Tower" in reply
     assert brain.pilots["Colt 1"].phase == Phase.HOLDING
 
@@ -3354,7 +3353,7 @@ def test_tower_answers_holding_short_report(brain, airfield):
     # not "say again".
     from scenario import Scenario
     sc = Scenario(airfield, brain, callsign="Colt 1", speaker="Caveman")
-    sc.holding("Holding A/N")
+    sc.at_threshold("25")
     brain._pilot("Colt 1").phase = Phase.HOLDING
     reply = brain.handle("Tower, Colt 1, holding short runway 25", sc._track(),
                          controller=Controller.TOWER)

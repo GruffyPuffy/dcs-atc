@@ -21,6 +21,8 @@ from shapely.geometry import Point, Polygon
 
 EARTH_RADIUS_M = 6_371_000.0
 M_PER_NM = 1852.0
+HOLDING_THRESHOLD_RADIUS_NM = 0.1
+RUNWAY_EXIT_RADIUS_NM = 0.15
 FT_PER_M = 3.280839895
 
 DEFAULT_CONFIG = Path(__file__).with_name("airspace.json")
@@ -197,15 +199,18 @@ class Airfield:
     # Taxi route from the runway back to a ramp (post-landing):
     #   {ramp_name: "Whiskey"}.
     parking_routes: dict[str, str] = field(default_factory=dict)
-    # Post-landing route by runway exit and destination ramp. Exit keys match
-    # holding-point suffixes (C, B, A/N, S/W); route includes the exit taxiway.
+    # Post-landing route by runway exit and destination ramp. Route keys match
+    # `runway_exit_points` or runway threshold names.
     parking_routes_by_exit: dict[str, dict[str, str]] = field(default_factory=dict)
     # Preferred landing exit side by active runway and departure ramp. This is
     # training guidance only; the taxi route still follows the exit actually used.
     landing_exit_sides: dict[str, dict[str, str]] = field(default_factory=dict)
     parking_areas: dict[str, tuple[float, float]] = field(default_factory=dict)
-    # Named runway holding positions (P1..P4 on the MA chart), lat/lon.
+    # Explicitly charted holding positions, lat/lon.
     holding_points: dict[str, tuple[float, float]] = field(default_factory=dict)
+    # Runway exits that are not runway thresholds, keyed by taxiway name.
+    # Runway thresholds themselves are also considered runway-end exits.
+    runway_exit_points: dict[str, tuple[float, float]] = field(default_factory=dict)
     # Control-tower building (lat, lon), georeferenced from the chart TWR
     # symbol when DCS does not give a usable dispatcher position.
     tower_pos: tuple[float, float] | None = None
@@ -276,28 +281,57 @@ class Airfield:
                       ramp: str | None = None) -> str | None:
         """Return route from inferred runway exit to `ramp`, if configured.
 
-        Exit inference uses the nearest charted runway intersection, but only
-        when the aircraft is close enough to identify it confidently. Older
+        Exit inference uses the nearest configured runway end or taxiway exit,
+        but only when the aircraft is within the exit-zone radius. Older
         airfields and uncertain positions keep using the legacy ramp route.
         """
         if ramp is None and lat is not None and lon is not None:
             ramp = self.nearest_parking_area(lat, lon)
         if (lat is not None and lon is not None and ramp
-                and self.parking_routes_by_exit and self.holding_points):
-            exit_name = self.nearest_holding_point(lat, lon)
-            if exit_name:
-                exit_distance = _haversine_nm(
-                    lat, lon, *self.holding_points[exit_name])
-                exit_key = exit_name.removeprefix("Holding ")
-                if exit_distance <= 0.3:
-                    route = self.parking_routes_by_exit.get(exit_key, {}).get(ramp)
-                    if route:
-                        return route
+                and self.parking_routes_by_exit):
+            exit_points = self.parking_exit_points()
+            candidates = [
+                (name, pos) for name, pos in exit_points.items()
+                if ramp in self.parking_routes_by_exit.get(name, {})
+            ]
+            if candidates:
+                exit_key, exit_pos = min(
+                    candidates,
+                    key=lambda item: _haversine_nm(lat, lon, *item[1]))
+                if _haversine_nm(lat, lon, *exit_pos) <= RUNWAY_EXIT_RADIUS_NM:
+                    return self.parking_routes_by_exit[exit_key][ramp]
         if not self.parking_routes:
             return None
         if ramp in self.parking_routes:
             return self.parking_routes[ramp]
         return next(iter(self.parking_routes.values()))
+
+    def parking_exit_points(self) -> dict[str, tuple[float, float]]:
+        """Coordinates used to choose a post-landing taxi route.
+
+        Legacy airfields may still define exits as holding points. Explicit
+        taxiway exits and the far runway threshold are included. The active
+        runway threshold is reserved for hold-short checks; the opposite end
+        is the runway-end exit for the current landing direction.
+        """
+        points = {
+            name.removeprefix("Holding "): pos
+            for name, pos in self.holding_points.items()
+        }
+        points.update(self.runway_exit_points)
+        far_end = self._opposite_runway(self.active_runway)
+        if far_end in self.runways:
+            points[far_end] = self.runways[far_end]
+        return points
+
+    def parking_exit_zone_geometry(self) -> list[dict]:
+        """Configured route-selection circles shown on the map."""
+        return [
+            {"center": [pos[0], pos[1]], "radius_nm": RUNWAY_EXIT_RADIUS_NM,
+             "label": name}
+            for name, pos in self.parking_exit_points().items()
+            if name in self.parking_routes_by_exit
+        ]
 
     def landing_exit_side(self, runway: str | None,
                           origin_ramp: str | None) -> str | None:
@@ -440,7 +474,7 @@ class Airfield:
         return min(self.gates, key=offset)
 
     def holding_zone_geometry(self, runway: str | None = None,
-                              thr_nm: float = 0.6,
+                              thr_nm: float = HOLDING_THRESHOLD_RADIUS_NM,
                               point_nm: float = 0.2) -> list[dict]:
         """The areas where a 'holding short' report is accepted, as map circles.
 
@@ -819,7 +853,7 @@ class Airfield:
         return self.ctr.nearest_gate(lat, lon)
 
     def is_at_runway(self, lat: float, lon: float, runway: str | None = None,
-                     max_nm: float = 0.6) -> bool:
+                     max_nm: float = HOLDING_THRESHOLD_RADIUS_NM) -> bool:
         """True if the position is at/near the runway threshold (holding point).
 
         Used to cross-check a pilot's "holding short" / "ready for departure"
@@ -861,12 +895,12 @@ class Airfield:
 
     def is_holding_short(self, lat: float, lon: float,
                          runway: str | None = None,
-                         point_nm: float = 0.2, thr_nm: float = 0.6) -> bool:
-        """True if the position is at a runway holding position.
+                         point_nm: float = 0.2,
+                         thr_nm: float = HOLDING_THRESHOLD_RADIUS_NM) -> bool:
+        """True if the position is near the active threshold or a named hold.
 
-        A pilot may hold at the threshold itself or at any named holding point
-        (P1..P4 on the MA chart), which can be over a mile from the threshold —
-        so we accept proximity to either.
+        Airfields may configure explicit holding points in addition to the
+        active runway threshold circle.
         """
         if self.is_at_runway(lat, lon, runway, thr_nm):
             return True
@@ -1178,6 +1212,10 @@ def _build_airfield(name: str, spec: dict, defaults: dict,
                      for p, v in spec.get("parking_areas", {}).items()}
     holding_points = {h: (float(v[0]), float(v[1]))
                       for h, v in spec.get("holding_points", {}).items()}
+    runway_exit_points = {
+        str(name): (float(v[0]), float(v[1]))
+        for name, v in spec.get("runway_exit_points", {}).items()
+    }
     stingray_training_spec = spec.get("stingray_training_zone") or {}
     stingray_training_inner_range_nm = float(
         stingray_training_spec.get("inner_range_nm", 0.0))
@@ -1245,6 +1283,7 @@ def _build_airfield(name: str, spec: dict, defaults: dict,
         landing_exit_sides=landing_exit_sides,
         parking_areas=parking_areas,
         holding_points=holding_points,
+        runway_exit_points=runway_exit_points,
         tower_pos=tower_pos,
         break_directions={str(k): str(v).lower()
                           for k, v in spec.get("break_directions", {}).items()},
