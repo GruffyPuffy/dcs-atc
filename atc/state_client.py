@@ -227,11 +227,22 @@ class StateClient:
         return reply["result"].get("callsigns", [])
 
     def weather(self) -> dict:
-        """Live mission weather (wind, QNH, clouds, visibility)."""
+        """Mission weather with wind bearings normalized to aviation "from".
+
+        DCS mission weather stores wind direction as the direction the wind
+        blows toward. ATIS, runway selection, and radio phraseology use the
+        meteorological direction the wind comes from, so invert each reported
+        DCS direction once here at the bridge boundary.
+        """
         reply = self.exchange("weather")
         if not reply.get("ok"):
             raise RuntimeError(f"state bridge error: {reply.get('error')}")
-        return reply["result"]
+        weather = dict(reply["result"])
+        for key in ("wind_dir", "wind_dir_2000"):
+            direction = weather.get(key)
+            if direction is not None:
+                weather[key] = (float(direction) + 180.0) % 360.0
+        return weather
 
     def tower(self, name: str) -> dict | None:
         """Tower/dispatcher position for an airbase, or None if unavailable."""

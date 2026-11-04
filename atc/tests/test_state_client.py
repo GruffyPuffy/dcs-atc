@@ -94,3 +94,18 @@ def test_bullseye_returns_none_when_unset(monkeypatch):
     monkeypatch.setattr(client, "exchange",
                         lambda op, **fields: {"ok": False, "error": "NO_BULLSEYE"})
     assert client.bullseye() is None
+
+
+def test_weather_converts_dcs_blow_to_direction_to_aviation_from(monkeypatch):
+    client = StateClient()
+    monkeypatch.setattr(client, "exchange", lambda op, **fields: {
+        "ok": True,
+        "result": {"wind_dir": 30, "wind_dir_2000": 180,
+                   "wind_speed_ms": 4},
+    })
+
+    weather = client.weather()
+
+    assert weather["wind_dir"] == 210
+    assert weather["wind_dir_2000"] == 0
+    assert weather["wind_speed_ms"] == 4
