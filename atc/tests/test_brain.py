@@ -3697,6 +3697,28 @@ def test_control_accepts_climb_and_rtb_variants(brain):
         assert "join via" in reply.lower(), (text, reply)
 
 
+def test_direct_control_rtb_outside_ctr_gets_computed_join_vector(brain,
+                                                                  airfield):
+    outside = _track(airfield, airfield.ctr.center_lat - 0.3,
+                     airfield.ctr.center_lon)
+    reply = brain.handle("Control, Colt 1, requesting RTB", outside,
+                         controller=Controller.CONTROL)
+    assert "join via Entry East" in reply
+    assert "heading" in reply.lower()
+    assert "roger RTB" not in reply
+    assert brain._pilot("Colt 1").arrival_join_issued
+
+
+def test_direct_control_rtb_inside_ctr_keeps_no_heading_response(brain,
+                                                                 airfield):
+    inside = _track(airfield, airfield.ctr.center_lat,
+                    airfield.ctr.center_lon)
+    reply = brain.handle("Control, Colt 1, RTB", inside,
+                         controller=Controller.CONTROL)
+    assert "join via Entry East" in reply
+    assert "heading" not in reply.lower()
+
+
 def test_rtb_plain_language_variants_are_understood_without_coaching(brain):
     cases = (
         (Controller.CONTROL, "Control, Colt 1, return to base", Phase.AIRBORNE),

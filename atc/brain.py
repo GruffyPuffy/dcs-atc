@@ -3589,8 +3589,28 @@ class AtcBrain:
             pilot.cleared_inbound = True
             gate = self._pick_entry_gate(track, low, pilot)
             pilot.entry_gate = gate
-            self._remember_arrival_join(pilot, None)
-            return self._say("control_join_nohdg", callsign, gate=gate)
+            # A direct RTB request to Control is itself the inbound request.
+            # When radar places the aircraft outside the CTR, give the same
+            # computed join vector used for an ordinary inbound call. Keep the
+            # no-heading form for an aircraft already inside the CTR or when
+            # position data is unavailable. Stingray RTB is handled by its
+            # separate delayed handoff and recovery path above.
+            heading = None
+            if (track is not None and self.airfield is not None
+                    and not self._inside_ctr(track)):
+                heading = self.airfield.join_heading(
+                    track.lat, track.lon, gate)
+            if heading is None:
+                self._remember_arrival_join(pilot, None)
+                pilot.arrival_join_issued = True
+                return self._say("control_join_nohdg", callsign, gate=gate)
+            turn = self._join_turn(track, heading)
+            self._remember_arrival_join(pilot, heading, turn)
+            key = "control_join" if turn else "control_join_straight"
+            pilot.arrival_join_issued = True
+            return self._say(key, callsign, gate=gate,
+                             heading=self._format_cockpit_bearing(heading),
+                             turn=turn)
         # Initial Control check-in, bare: "Kutaisi Control, Adder11" (Master Arms
         # kneeboard page 2, step 1) -> "Adder11, Control". Answer it instead of
         # "say again"; the pilot follows with the inbound call.
