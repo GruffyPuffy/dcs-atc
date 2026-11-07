@@ -3476,11 +3476,41 @@ def test_control_accepts_climb_and_rtb_variants(brain):
         brain._pilot("Colt 1").phase = Phase.AIRBORNE
         reply = brain.handle(text, controller=Controller.CONTROL)
         assert reply is not None and "say again" not in reply.lower(), text
-    for text in ("Control, Colt 1, RTB", "Colt 1, returning to base"):
+    for text in (
+            "Control, Colt 1, RTB",
+            "Control, Colt 1, request RTB",
+            "Control, Colt 1, request R2B",
+            "Control, Colt 1, requesting military R2D",
+            "Control, Colt 1, request RTD",
+            "Control, Colt 1, Miller Time",
+            "Control, Colt 1, Miller Time, request RTB",
+            "Colt 1, returning to base"):
         brain.pilots.pop("Colt 1", None)
         brain._pilot("Colt 1").phase = Phase.AIRBORNE
         reply = brain.handle(text, controller=Controller.CONTROL)
         assert reply is not None and "say again" not in reply.lower(), text
+        assert "join via" in reply.lower(), (text, reply)
+
+
+def test_rtb_plain_language_variants_are_understood_without_coaching(brain):
+    cases = (
+        (Controller.CONTROL, "Control, Colt 1, return to base", Phase.AIRBORNE),
+        (Controller.CONTROL, "Control, Colt 1, going home", Phase.AIRBORNE),
+        (Controller.CONTROL, "Control, Colt 1, heading back to base",
+         Phase.AIRBORNE),
+        (Controller.STINGRAY, "Stingray, Colt 1, returning home",
+         Phase.STINGRAY),
+        (Controller.STINGRAY, "Stingray, Colt 1, Miller Time",
+         Phase.STINGRAY),
+        (Controller.STINGRAY, "Stingray, Colt 1, request RTD",
+         Phase.STINGRAY),
+    )
+    for controller, text, phase in cases:
+        brain.pilots.pop("Colt 1", None)
+        brain._pilot("Colt 1").phase = phase
+        reply = brain.handle(text, controller=controller)
+        assert reply and "say again" not in reply.lower(), (text, reply)
+        assert brain.take_coach("Colt 1") == "", text
 
 
 def test_control_acknowledges_a_direction_report(brain):
@@ -3737,6 +3767,12 @@ def test_stingray_rtb_triggers(brain):
                  "Colt 1, bug out",
                  "Colt 1, winchester",
                  "Colt 1, requesting RTB",
+                 "Colt 1, request R2B",
+                 "Colt 1, requesting military R2D",
+                 "Colt 1, request RTD",
+                 "Colt 1, request R T D",
+                 "Colt 1, request R2-D",
+                 "Colt 1, request RTV",
                  "Colt 1, returning to base"):
         pilot = _stingray(brain)
         pilot.rtb_requested = False

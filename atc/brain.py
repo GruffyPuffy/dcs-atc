@@ -178,6 +178,17 @@ _READBACK_NUMBER_CUE_RE = re.compile(
     r"\b(runway|channel|heading|angels|altitude|qnh|feet|ft|bulls?"
     r"|bull'?s?eye|marking|for|at)\s*$", re.IGNORECASE)
 
+# Stingray-only STT renderings of the radio abbreviation RTB (including the
+# observed R2D-style transcripts). These are intentionally not global aliases.
+_RTB_STT_VARIANT = r"(?:rtb|r\s*2\s*[- ]?\s*[bd]|r\s*[- ]?\s*t\s*[- ]?\s*[bdv])"
+_RTB_INTENT_RE = re.compile(
+    rf"\b(miller time|bingo|joker|bugout|bug out|winchester|"
+    rf"{_RTB_STT_VARIANT}|return(?:ing)?\s+to\s+(?:base|the field|the boat)|"
+    rf"return(?:ing)?\s+home|going home|head(?:ing)?(?: back)? "
+    rf"(?:to base|home)|"
+    rf"request(?:ing)?\s+(?:to\s+)?(?:{_RTB_STT_VARIANT}|return)|"
+    rf"recover(?:ing|y))\b", re.IGNORECASE)
+
 # The words a figure may be built from, longest first so "twenty" is preferred
 # over a hypothetical "two" prefix match inside it.
 _FIGURE_WORD = "|".join(sorted(_NUMBER_WORDS, key=len, reverse=True))
@@ -3405,10 +3416,9 @@ class AtcBrain:
             pilot.pending_handoff_to = Controller.TOWER.value
             pilot.tower_handoff_announced = True
             return self._say("contact_tower_from_control", callsign)
-        # Common short-hands for returning to base. A pilot who says "RTB" or
-        # "returning to base" is inbound, and answering "say again" strands them.
-        if re.search(r"\b(rtb|returning to (?:base|the field|the boat)|"
-                     r"recover(?:ing|y))\b", low):
+        # Common ways to say RTB. Resolve plain-language and STT variants the
+        # same way as the abbreviation so accepted wording still enters arrival.
+        if _RTB_INTENT_RE.search(low):
             pilot.phase = Phase.INBOUND
             pilot.cleared_inbound = True
             gate = self._pick_entry_gate(track, low, pilot)
@@ -3479,11 +3489,8 @@ class AtcBrain:
         #   Joker        fuel state to start heading home
         #   Bugout       leaving the engagement
         #   Winchester   no ordnance remaining
-        #   RTB / returning to base / recovering  plain English
-        if re.search(r"\b(miller time|bingo|joker|bugout|bug out|winchester|"
-                     r"rtb|returning to (?:base|the field|the boat)|"
-                     r"request(?:ing)?\s+(?:to\s+)?(?:rtb|return)|"
-                     r"recover(?:ing|y))\b", low):
+        #   RTB / return to base / heading home / recovering  plain English
+        if _RTB_INTENT_RE.search(low):
             repeated = pilot.rtb_requested
             self._abandon_stingray_training_task(pilot)
             pilot.phase = Phase.STINGRAY
