@@ -2863,9 +2863,14 @@ class AtcBrain:
         # ("report runway sight", debrief 2026-10-18 13:06:55), so accept that
         # mangled readback too.
         if re.search(r"\b(report|reporting|wilco|roger|copy)\b.*"
-                     r"\brunway (?:in )?sight\b", low):
+                     r"\brunway (?:in )?(?:sight|inside|insight)\b", low):
             return ""
-        if re.search(r"\b(runway in sight|runway insight|visual)\b", low):
+        # Whisper may drop "in" ("runway sight") or hear the phrase as
+        # "runway inside". These are useful only as a runway-visibility report;
+        # the explicit instruction-readback guard above keeps "report runway
+        # inside" silent.
+        if re.search(r"\b(runway (?:in )?(?:sight|inside|insight)|visual)\b",
+                     low):
             pilot.phase = Phase.LANDING
             pilot.break_cleared = True
             # Master Arms: the break clearance is valid for the whole flight

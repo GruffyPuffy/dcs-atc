@@ -232,6 +232,13 @@ def test_tower_runway_in_sight_overhead(brain):
     assert "overhead break" in reply
 
 
+def test_tower_runway_sight_stt_variants_trigger_overhead(brain):
+    for report in ("runway sight", "runway inside", "runway insight"):
+        reply = brain.handle(f"Tower, Colt 1, {report}",
+                             controller=Controller.TOWER)
+        assert reply and "overhead break" in reply.lower(), report
+
+
 def test_tower_overhead_break_clears_break(brain):
     reply = brain.handle("Kutaisi Traffic, Colt 1, overhead break runway 25",
                          controller=Controller.TOWER)
@@ -2732,6 +2739,8 @@ def test_runway_in_sight_instruction_readback_is_silent(brain):
     reply = brain.handle("report runway sight, Colt 1",
                          controller=Controller.TOWER)
     assert reply == ""
+    assert brain.handle("report runway inside, Colt 1",
+                        controller=Controller.TOWER) == ""
     # The exact form is silent too, but the actual position report still
     # triggers the next SOP clearance.
     reply = brain.handle("report runway in sight, Colt 1",
