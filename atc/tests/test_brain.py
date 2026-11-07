@@ -583,6 +583,36 @@ def test_taxi_clearance_readback_checks_route(brain):
         "Cleared taxi Sierra Echo, hold short runway 25, Colt 1",
         controller=Controller.GROUND)
     assert "readback correct" in corrected.lower()
+    assert not brain._pilot("Colt 1").readback_pending
+
+
+def test_incomplete_taxi_readback_allows_correction_then_discards_stale_expectation(brain):
+    brain.handle("Ground, Colt 1, requesting taxi",
+                 controller=Controller.GROUND)
+    assert brain._pilot("Colt 1").readback_pending
+
+    missing_route = brain.handle(
+        "Taxi, hold short runway 25, Colt 1", controller=Controller.GROUND)
+    assert "taxi route" in missing_route.lower()
+    assert brain._pilot("Colt 1").readback_pending
+
+    # A long explanatory comment can mention the same keywords as a readback;
+    # it should move the exchange on instead of re-checking the old route.
+    comment = brain.handle(
+        "Colt 1, I was confused because the exit we used after landing "
+        "looked different and taxi was more automatic than expected",
+        controller=Controller.GROUND)
+    assert "taxi route" not in (comment or "").lower()
+    assert not brain._pilot("Colt 1").readback_pending
+
+
+def test_successful_taxi_readback_does_not_recheck_later_copy(brain):
+    brain.handle("Ground, Colt 1, requesting taxi",
+                 controller=Controller.GROUND)
+    brain.handle("Cleared taxi Sierra Echo, hold short runway 25, Colt 1",
+                 controller=Controller.GROUND)
+    reply = brain.handle("Colt 1 copy", controller=Controller.GROUND)
+    assert "taxi route" not in (reply or "").lower()
 
 
 def test_taxi_readback_accepts_mags_whiskey_route(airfield, brain):
@@ -1815,8 +1845,16 @@ def test_two_pilots_have_independent_state(brain):
 
 # ---------- Runway / go-around ----------
 
+def _arm_go_around_check(brain, callsign="Colt 1"):
+    pilot = brain._pilot(callsign)
+    pilot.phase = Phase.LANDING
+    pilot.break_cleared = True
+    pilot.pattern_flown = True
+    return pilot
+
+
 def test_go_around_fires_once(brain):
-    pilot = _airborne(brain, phase=Phase.LANDING)
+    pilot = _arm_go_around_check(brain)
     pilot.cleared_landing = True
     pilot.pattern_flown = True
     pilot.landing_handoff_announced = True
@@ -1831,14 +1869,17 @@ def test_go_around_fires_once(brain):
 
 
 def test_go_around_resets_when_not_on_final(brain):
+    pilot = _arm_go_around_check(brain)
     brain.check_final("Colt 1", on_final=True, runway_occupied=True)
     brain.check_final("Colt 1", on_final=False, runway_occupied=False)
+    pilot.pattern_flown = True  # radar observed the next circuit's turn
     again = brain.check_final("Colt 1", on_final=True, runway_occupied=True)
     assert "go around" in again
 
 
 def test_go_around_names_traffic_when_unit_on_runway(brain, airfield):
     # A tracked unit actually on the runway -> the go-around says "traffic".
+    _arm_go_around_check(brain)
     thr = airfield.runway_threshold("25")
     blocker = _Unit("AI-1", thr[0], thr[1], airfield.elevation_ft + 10)
     reply = brain.check_final("Colt 1", on_final=True, runway_occupied=True,
@@ -1849,6 +1890,7 @@ def test_go_around_names_traffic_when_unit_on_runway(brain, airfield):
 
 def test_go_around_generic_when_no_traffic_list(brain):
     # No traffic list (unknown) -> the generic "runway is occupied" wording.
+    _arm_go_around_check(brain)
     reply = brain.check_final("Colt 1", on_final=True, runway_occupied=True,
                               traffic=[])
     assert "go around" in reply.lower()
@@ -1859,6 +1901,7 @@ def test_go_around_generic_when_traffic_not_on_runway(brain, airfield):
     # The blocker sits on the parallel taxiway (outside the narrow corridor),
     # yet sequencing said occupied (e.g. a hold-short edge case): the call must
     # not claim "traffic on the runway" it cannot see.
+    _arm_go_around_check(brain)
     thr = airfield.runway_threshold("25")
     hdg = airfield.runway_heading("25")
     import math
@@ -1871,6 +1914,61 @@ def test_go_around_generic_when_traffic_not_on_runway(brain, airfield):
                               traffic=[taxi_unit])
     assert "go around" in reply.lower()
     assert "occupied" in reply.lower()
+
+
+def test_go_around_waits_for_reported_break(brain):
+    pilot = brain._pilot("Colt 1")
+    pilot.phase = Phase.LANDING
+    pilot.break_cleared = True
+    assert brain.check_final("Colt 1", on_final=True,
+                             runway_occupied=True) is None
+
+    assert brain.handle("Colt 1, in the break",
+                        controller=Controller.TOWER) == ""
+    assert pilot.pattern_flown
+    reply = brain.check_final("Colt 1", on_final=True,
+                              runway_occupied=True)
+    assert reply and "go around" in reply.lower()
+
+
+def test_go_around_waits_for_radar_observed_break(brain, airfield):
+    pilot = brain._pilot("Colt 1")
+    pilot.phase = Phase.LANDING
+    pilot.break_cleared = True
+    inbound = _inbound_bearing(airfield)
+    turn = _track_on(airfield, (inbound + 45) % 360, 2.0)
+
+    assert brain.check_final("Colt 1", on_final=True,
+                             runway_occupied=True) is None
+    assert brain.check_landing_clearance("Colt 1", turn) is None
+    assert pilot.pattern_flown
+    reply = brain.check_final("Colt 1", on_final=True,
+                              runway_occupied=True)
+    assert reply and "go around" in reply.lower()
+
+
+def test_short_final_after_landing_clearance_gets_one_reminder(brain):
+    pilot = brain._pilot("Colt 1")
+    pilot.phase = Phase.LANDING
+    pilot.cleared_landing = True
+    pilot.landing_runway = "25"
+
+    first = brain.handle("Colt 1, short final", controller=Controller.TOWER)
+    assert "already cleared to land runway 25" in first.lower()
+    second = brain.handle("Colt 1, short final", controller=Controller.TOWER)
+    assert second == ""
+
+
+def test_tower_copy_does_not_check_stale_ground_taxi_readback(brain):
+    brain.handle("Ground, Colt 1, requesting taxi",
+                 controller=Controller.GROUND)
+    pilot = brain.pilots["Colt 1"]
+    assert "taxi" in pilot.last_clearance.lower()
+    pilot.phase = Phase.INBOUND
+
+    reply = brain.handle("Colt 1, copy", controller=Controller.TOWER)
+    assert "roger" in reply.lower()
+    assert "taxi route" not in reply.lower()
 
 
 def test_pilot_reported_go_around_rearms_arrival_and_acknowledges(brain):
@@ -3024,9 +3122,9 @@ def test_premature_on_final_while_turning_base_challenged(brain, airfield):
     assert not brain.pilots["Colt 1"].cleared_landing
 
 
-def test_on_final_after_radar_clearance_is_silent(brain, airfield):
-    # After the radar has cleared the flight, the pilot's "on final" is a
-    # status report — no duplicate clearance.
+def test_on_final_after_radar_clearance_gets_one_reminder(brain, airfield):
+    # After a radar clearance, repeat final reports get one short reminder,
+    # then stay silent rather than repeating it on every report.
     inbound = _inbound_bearing(airfield)
     brain.handle("Tower, Colt 1, at entry west", controller=Controller.TOWER)
     brain.handle("Tower, Colt 1, runway in sight", controller=Controller.TOWER)
@@ -3034,7 +3132,10 @@ def test_on_final_after_radar_clearance_is_silent(brain, airfield):
     brain.check_landing_clearance("Colt 1", t)  # fly the pattern
     t = _track_on(airfield, inbound, 2.9)
     assert brain.check_landing_clearance("Colt 1", t)
-    assert brain.handle("Colt 1, on final", t,
+    reminder = brain.handle("Colt 1, on final", t,
+                            controller=Controller.TOWER)
+    assert "already cleared to land runway 25" in reminder.lower()
+    assert brain.handle("Colt 1, short final", t,
                         controller=Controller.TOWER) == ""
 
 
@@ -3122,14 +3223,15 @@ def test_break_clearance_covers_wingmen(brain, airfield):
     brain.handle("Tower, Colt 1, at entry west", controller=Controller.TOWER)
     brain.handle("Tower, Colt 1, runway in sight", controller=Controller.TOWER)
     assert brain.pilots["Colt 2"].break_cleared
-    # The lead's landing clearance covers the wing: their "on final" is
-    # silent (kneeboard RTB dialog: the wing only follows).
+    # The lead's landing clearance covers the wing: their "on final" gets a
+    # one-time reminder that the flight is already cleared.
     t_lead = _track_on(airfield, inbound, 4.0)
     assert brain.handle("Colt 1, on final", t_lead,
                         controller=Controller.TOWER)
     t_wing = _track_on(airfield, inbound, 4.5)
-    assert brain.handle("Colt 2, on final", t_wing,
-                        controller=Controller.TOWER) == ""
+    wing_reminder = brain.handle("Colt 2, on final", t_wing,
+                                 controller=Controller.TOWER)
+    assert "already cleared to land runway 25" in wing_reminder.lower()
     assert brain.pilots["Colt 2"].cleared_landing
 
 

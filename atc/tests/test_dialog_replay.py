@@ -196,9 +196,10 @@ def test_mp_lead_landing_clearance_covers_wingman(adder_flight):
     assert "cleared to land" in r.lower()
     assert lead.phase() == Phase.LANDING
 
-    # The wingman is covered: their final gets NO duplicate clearance.
+    # The wingman is covered: their final gets a one-time reminder that the
+    # flight is already cleared, not a duplicate clearance.
     r = wing.say("Tower, Adder 1-2, on final", Controller.TOWER)
-    assert r == ""
+    assert "already cleared to land runway 33" in r.lower()
     # ...but the SOP semantics still apply: the wingman IS cleared to land
     # (the post-landing handoff and go-around logic treat them as cleared).
     assert wing.phase() == Phase.LANDING

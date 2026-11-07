@@ -1375,12 +1375,17 @@ def test_readback_of_vacated_parking_clearance_does_not_reissue(airfield, brain)
 
 def test_go_around_fires_once(airfield, brain):
     # the background monitor calls check_final; it must fire once per approach
+    pilot = brain._pilot("Colt 1")
+    pilot.phase = Phase.LANDING
+    pilot.break_cleared = True
+    pilot.pattern_flown = True
     first = brain.check_final("Colt 1", on_final=True, runway_occupied=True)
     assert first is not None and "go around" in first.lower()
     again = brain.check_final("Colt 1", on_final=True, runway_occupied=True)
     assert again is None  # not repeated
     # once off final, it re-arms
     brain.check_final("Colt 1", on_final=False, runway_occupied=False)
+    pilot.pattern_flown = True  # radar observed the next circuit's turn
     rearmed = brain.check_final("Colt 1", on_final=True, runway_occupied=True)
     assert rearmed is not None
 
