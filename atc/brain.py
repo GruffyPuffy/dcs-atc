@@ -1489,6 +1489,7 @@ class AtcBrain:
         if taxi_route is None:
             taxi_route = re.search(r"\bvia\s+(.+?)(?:[.,]|$)",
                                    clearance, re.IGNORECASE)
+        route_missing = False
         if taxi_route:
             route_words = re.findall(r"[a-z]+", taxi_route.group(1).lower())
             spoken_route_words = self._taxi_route_words(low)
@@ -1504,8 +1505,8 @@ class AtcBrain:
                 spoken_route_words[index:index + route_size] == route_words
                 for index in range(len(spoken_route_words) - route_size + 1)))
             if route_words and not route_present:
-                return "taxi route"
-        if not missing_num and not missing_gate:
+                route_missing = True
+        if not missing_num and not missing_gate and not route_missing:
             return None
         # A gate WAS named, just a different one ("after departure, turn right,
         # exit north" when Exit East was cleared): the pilot did read back an
@@ -1515,7 +1516,56 @@ class AtcBrain:
         if missing_gate and any(re.search(rf"\b(?:exit|entry)\s+{re.escape(g)}\b",
                                           low, re.IGNORECASE) for g in self.gates):
             return "clearance"
-        return self._item_label(clearance, missing_num, missing_gate)
+        # Give the pilot every missing item, with values from the clearance.
+        # Sorting by source position keeps the spoken coaching in clearance
+        # order instead of set iteration order.
+        labeled: list[tuple[int, str]] = []
+        for number in missing_num:
+            number_match = re.search(rf"\b{re.escape(number)}\b", clearance)
+            if not number_match:
+                continue
+            start = number_match.start()
+            prefix = clearance[max(0, start - 32):start]
+            if re.search(r"\bq\.?n\.?h\.?\s*$", prefix, re.IGNORECASE):
+                label = f"QNH {number}"
+            elif re.search(r"\brunway\s*$", prefix, re.IGNORECASE):
+                label = f"runway {number}"
+            elif re.search(r"\bheading\s*$", prefix, re.IGNORECASE):
+                label = f"heading {number}"
+            elif re.search(r"\bchannel\s*$", prefix, re.IGNORECASE):
+                label = f"channel {number}"
+            elif re.search(r"\bangels\s*$", prefix, re.IGNORECASE):
+                label = f"altitude Angels {number}"
+            elif re.match(r"\s*(?:ft|feet)\b",
+                          clearance[number_match.end():], re.IGNORECASE):
+                label = f"altitude {number} feet"
+            elif re.search(r"\b(?:altitude|climb|descend|below)\b",
+                           prefix, re.IGNORECASE):
+                label = f"altitude {number}"
+            else:
+                label = self._item_label(clearance, [number], [])
+            labeled.append((start, label))
+        for gate in missing_gate:
+            match = re.search(rf"\b(exit|entry)\s+{re.escape(gate)}\b",
+                              clearance, re.IGNORECASE)
+            if match:
+                labeled.append((match.start(), f"{match.group(1)} {gate}"))
+        if route_missing and taxi_route:
+            labeled.append((taxi_route.start(),
+                            f"taxi route {taxi_route.group(1).strip()}"))
+        if not labeled:
+            return self._item_label(clearance, missing_num, missing_gate)
+        labels = [label for _, label in sorted(labeled, key=lambda item: item[0])]
+        return self._join_readback_items(labels)
+
+    @staticmethod
+    def _join_readback_items(items: list[str]) -> str:
+        """Join coaching details naturally for one or several missed items."""
+        if len(items) < 2:
+            return items[0] if items else "readback"
+        if len(items) == 2:
+            return f"{items[0]} and {items[1]}"
+        return f"{', '.join(items[:-1])}, and {items[-1]}"
 
     def _completes_clearance(self, low: str, pilot: PilotState) -> bool:
         """True if a short follow-up ("runway 07") supplies the item a prior
@@ -1618,11 +1668,11 @@ class AtcBrain:
             expected_heading = (pilot.arrival_join_heading.lstrip("0") or "0")
             if not any((number.lstrip("0") or "0") == expected_heading
                        for number in spoken):
-                item = "heading"
+                item = f"heading {pilot.arrival_join_heading}"
         said_turn = re.search(r"\b(?:turn\s+)?(left|right)\b", low)
         if (item is None and said_turn
                 and said_turn.group(1) != pilot.arrival_join_turn):
-            item = "turn"
+            item = f"turn {pilot.arrival_join_turn}"
         pilot.last_readback = True
         if item is None:
             corrected = pilot.arrival_join_readback_fails > 0

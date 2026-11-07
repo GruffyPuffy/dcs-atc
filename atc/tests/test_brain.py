@@ -644,6 +644,7 @@ def test_clearance_readback_missing_altitude_is_flagged_incomplete(brain):
     assert "readback incomplete" in low
     assert "altitude" in low
     assert "continue" in low
+    assert "read back when able" in low
     assert "readback correct" not in low  # honest: it was not correct
 
 
@@ -654,6 +655,22 @@ def test_clearance_readback_incomplete_never_says_correct(brain):
                          controller=Controller.GROUND)
     assert "readback incomplete" in reply.lower()
     assert "readback correct" not in reply.lower()
+
+
+def test_clearance_readback_coaches_all_missing_items_in_clearance_order(brain):
+    clearance = brain.handle("Ground, Colt 1, ready to copy clearance",
+                             controller=Controller.GROUND).lower()
+    reply = brain.handle("After departure turn right, Colt 1",
+                         controller=Controller.GROUND).lower()
+    gate = "east" if "exit east" in clearance else "west"
+    assert f"i did not get exit {gate} and altitude 1500 feet" in reply
+    assert "read back when able, or continue" in reply
+
+
+def test_readback_item_lists_multiple_missing_numeric_values(brain):
+    clearance = "Colt 1, Ground, runway 25 in use, QNH 2992."
+    assert brain._readback_item("Colt 1", clearance) == (
+        "runway 25 and QNH 2992")
 
 
 def test_readback_tolerates_callsign_glued_to_the_runway(brain):
@@ -1022,7 +1039,7 @@ def test_control_join_wrong_heading_gets_feedback_and_can_be_corrected(
         track=south, controller=Controller.CONTROL)
 
     assert "readback incomplete" in reply.lower()
-    assert "your heading" in reply.lower()
+    assert f"heading {heading:03d}" in reply.lower()
     assert brain.pilots["Colt 1"].phase == Phase.INBOUND
     assert not brain.pilots["Colt 1"].arrival_join_readback_complete
     assert (brain.pilots["Colt 1"].descend_intermediate
@@ -1042,7 +1059,7 @@ def test_control_join_checks_turn_when_pilot_reads_one_back(brain, airfield):
         track=south, controller=Controller.CONTROL)
 
     assert "readback incomplete" in reply.lower()
-    assert "your turn" in reply.lower()
+    assert "turn right" in reply.lower()
     assert brain.pilots["Colt 1"].phase == Phase.INBOUND
 
 
@@ -1307,7 +1324,7 @@ def test_taxi_readback_does_not_infer_runway_from_bare_suffix(brain):
         "runway 25.")
     incomplete = (
         "Cleared taxi Alpha November Delta, hold short runway 5, Colt 1")
-    assert brain._readback_item(incomplete, clearance) == "runway"
+    assert brain._readback_item(incomplete, clearance) == "runway 25"
 
 
 def test_taxi_route_readback_still_requires_all_words_in_order(brain):
@@ -1318,8 +1335,10 @@ def test_taxi_route_readback_still_requires_all_words_in_order(brain):
         "Cleared taxi to Ramp North via Alpha Delta November Echo, Colt one")
     missing_word = (
         "Cleared taxi to Ramp North via Alpha November Echo, Colt one")
-    assert brain._readback_item(wrong_order, clearance) == "taxi route"
-    assert brain._readback_item(missing_word, clearance) == "taxi route"
+    assert brain._readback_item(wrong_order, clearance) == (
+        "taxi route Alpha November Delta Echo")
+    assert brain._readback_item(missing_word, clearance) == (
+        "taxi route Alpha November Delta Echo")
 
 
 # ---------- Control ----------
