@@ -2776,11 +2776,14 @@ def test_repeat_after_wrong_exit_replays_the_clearance(brain):
     # "say again" itself and the pilot can never recover (12:44:32).
     brain.handle("Ground, Colt 1, ready to copy clearance",
                  controller=Controller.GROUND)
-    brain.handle("Ground, Colt 1, after departure, turn right, exit north,"
-                 " 1000 feet or below", controller=Controller.GROUND)
-    reply = brain.handle("Repeat copy clearance, Colt 1",
+    incorrect = brain.handle(
+        "Ground, Colt 1, after departure, turn right, exit north,"
+        " 1000 feet or below", controller=Controller.GROUND)
+    assert "say again" in incorrect.lower()
+    reply = brain.handle("Colt 1, say again",
                          controller=Controller.GROUND)
     assert "exit" in reply.lower()
+    assert "readback incomplete" not in reply.lower()
     assert "say again" not in reply.lower()
 
 
@@ -3672,6 +3675,62 @@ def test_stingray_training_task_uses_instrument_bulls_once(brain, airfield,
         pilot.stingray_training_tasks.clear()
         reply = brain._request_stingray_training_task("Colt 1", pilot, track)
         assert f"Bulls {expected} for 30" in reply, reply
+
+
+def test_stingray_training_task_accepts_logged_readback(brain, airfield,
+                                                         monkeypatch):
+    from airspace import _destination
+
+    pilot = _stingray(brain)
+    pilot.stingray_radar_contact_confirmed = True
+    bull_lat, bull_lon = brain.bullseye
+    track = _track(airfield, bull_lat, bull_lon, alt_ft=15000.0)
+    target = _destination(
+        bull_lat, bull_lon,
+        58.0 - brain.cockpit_bearing_offset_deg, 69.0)
+    monkeypatch.setattr(airfield, "random_stingray_training_target",
+                        lambda: target)
+
+    order = brain.handle("Stingray, Colt 1, request training tasking", track,
+                         controller=Controller.STINGRAY)
+    assert "Bulls 058 for 69, Angels 15" in order
+    task = pilot.stingray_training_tasks[-1]
+    assert task["bearing"] == "058"
+    assert task["range"] == "69"
+
+    # Observed session STT fused "Bulls 058 for 69" into "booth 058469".
+    reply = brain.handle("Proceed to booth 058469, angels 15, Colt 1",
+                         controller=Controller.STINGRAY)
+    assert reply == ""
+    assert task["readback_complete"]
+
+
+def test_say_again_after_training_readback_feedback_repeats_task_order(
+        brain, airfield, monkeypatch):
+    from airspace import _destination
+
+    pilot = _stingray(brain)
+    pilot.stingray_radar_contact_confirmed = True
+    bull_lat, bull_lon = brain.bullseye
+    track = _track(airfield, bull_lat, bull_lon, alt_ft=15000.0)
+    target = _destination(
+        bull_lat, bull_lon,
+        58.0 - brain.cockpit_bearing_offset_deg, 69.0)
+    monkeypatch.setattr(airfield, "random_stingray_training_target",
+                        lambda: target)
+    order = brain.handle("Stingray, Colt 1, request training tasking", track,
+                         controller=Controller.STINGRAY)
+
+    feedback = brain.handle(
+        "Proceed to booth 058469, angels 14, Colt 1",
+        controller=Controller.STINGRAY)
+    assert "readback incomplete" in feedback.lower()
+    assert "altitude Angels 15" in feedback
+
+    replay = brain.handle("Stingray, Colt 1, say again",
+                          controller=Controller.STINGRAY)
+    assert replay == order
+    assert "readback incomplete" not in replay.lower()
 
 
 def test_stingray_bullseye_call_acknowledged_without_a_bullseye(brain):

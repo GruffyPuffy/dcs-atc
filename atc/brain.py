@@ -711,6 +711,8 @@ class PilotState:
     parking_cleared: bool = False
     last_reply: str = ""  # last clearance, replayed on "say again"
     last_clearance: str = ""  # last clearance issued, for readback verification
+    # Repeat the expected instruction after readback feedback, not the feedback.
+    readback_replay: str = ""
     last_controller: str = ""  # last agency talked to (for the map view)
     # Radio handoff state is explicit so the map/debrief can distinguish the
     # agency last heard, the agency ATC asked the pilot to contact, and an
@@ -1550,7 +1552,14 @@ class AtcBrain:
                 continue
             start = number_match.start()
             prefix = clearance[max(0, start - 32):start]
-            if re.search(r"\bq\.?n\.?h\.?\s*$", prefix, re.IGNORECASE):
+            if re.search(r"\b(?:bulls?|bull'?s?eye)\s*$", prefix,
+                         re.IGNORECASE):
+                label = f"Bulls {number}"
+            elif (re.search(r"\bfor\s*$", prefix, re.IGNORECASE)
+                  and re.search(r"\b(?:bulls?|bull'?s?eye)\s+\d+\s+for\s*$",
+                                prefix, re.IGNORECASE)):
+                label = f"Bulls range {number}"
+            elif re.search(r"\bq\.?n\.?h\.?\s*$", prefix, re.IGNORECASE):
                 label = f"QNH {number}"
             elif re.search(r"\brunway\s*$", prefix, re.IGNORECASE):
                 label = f"runway {number}"
@@ -1638,6 +1647,7 @@ class AtcBrain:
         time.
         """
         agency = self._agency(controller)
+        pilot.readback_replay = clearance or pilot.last_clearance or pilot.last_reply
         item = self._readback_item(low, clearance)
         pilot.last_readback = True
         if item is None:
@@ -1686,6 +1696,7 @@ class AtcBrain:
                          f"{pilot.entry_gate}")
         else:
             clearance = f"join via {pilot.entry_gate}"
+        pilot.readback_replay = clearance
         item = self._readback_item(low, clearance)
         if pilot.arrival_join_heading:
             spoken = self._numbers(self.callsigns.strip(low))
@@ -1720,6 +1731,7 @@ class AtcBrain:
         "incomplete — continue" feedback without the clearance being withheld.
         """
         pilot.last_readback = True
+        pilot.readback_replay = clearance or pilot.last_clearance or pilot.last_reply
         item = self._readback_item(low, clearance)
         if item is None:
             pilot.readback_fails = 0
@@ -1873,6 +1885,10 @@ class AtcBrain:
         low = _normalize_picture_transcription(low)
         low = _fold_spoken_figures(low)
         low = _fold_bullseye_figures(low)
+        # Retain the expected instruction only for an immediate say-again.
+        if not re.search(r"\b(say again|repeat|repeat last|say again please|"
+                         r"repeat clearance)\b", low):
+            pilot.readback_replay = ""
         reply = self._dispatch(callsign, pilot, low, track, controller, traffic,
                                speaker)
         if reply:
@@ -2079,7 +2095,7 @@ class AtcBrain:
             return self._cancel(callsign, pilot, controller)
         if re.search(r"\b(say again|repeat|repeat last|say again please|"
                      r"repeat clearance)\b", low):
-            return pilot.last_reply or self._say(
+            return pilot.readback_replay or pilot.last_reply or self._say(
                 "say_again", callsign, agency=self._agency(controller))
 
         # Frequency-change *request* ("request channel change", "request
@@ -3503,6 +3519,20 @@ class AtcBrain:
                 return ""
             return self._say("stingray_rtb_copy", callsign)
 
+        # A task order is an instruction to be read back. Use the same
+        # expected-content checker as other clearances, with the task's exact
+        # Bullseye and altitude values. The narrow STT repair handles the
+        # observed "booth 058469" rendering of "Bulls 058 for 69".
+        active_task = next((task for task in reversed(
+            pilot.stingray_training_tasks)
+            if not task["completed"] and not task["abandoned"]), None)
+        if (active_task is not None
+                and not active_task.get("readback_complete", False)
+                and re.search(r"\b(proceed|bulls?|bull'?s?eye|booth|angels)\b",
+                              low)):
+            return self._stingray_training_readback(
+                callsign, pilot, active_task, low)
+
         # A bullseye picture call ("Bullseye 065 for 40, Angels 15, as fragged").
         # Verified against the mission's own bullseye when we have it; a call
         # that is off gets a coaching challenge (never a block — the pilot keeps
@@ -4201,12 +4231,56 @@ class AtcBrain:
             "completed_at": None,
             "abandoned": False,
             "inside_samples": 0,
+            "readback_complete": False,
+            "readback_fails": 0,
+            "bearing": self._format_cockpit_bearing(bearing),
+            "range": f"{distance:.0f}",
         }
         pilot.stingray_training_tasks.append(task)
-        return self._say(
+        reply = self._say(
             "stingray_training_task", callsign,
             bearing=self._format_cockpit_bearing(bearing),
             range=f"{distance:.0f}", angels=angels)
+        task["readback_clearance"] = reply
+        pilot.last_clearance = reply
+        pilot.readback_replay = reply
+        return reply
+
+    def _stingray_training_readback(self, callsign: str, pilot: PilotState,
+                                    task: dict, low: str) -> str:
+        """Check a pilot's readback of the currently assigned task order."""
+        clearance = task.get("readback_clearance", "")
+        normalized = re.sub(r"\bbooth\b", "Bulls", low,
+                            flags=re.IGNORECASE)
+        bearing = task["bearing"]
+        distance = task["range"]
+        normalized = re.sub(
+            # Whisper sometimes renders the spoken "for" as a digit 4 and
+            # glues it between the three-digit bearing and range.
+            rf"\b{re.escape(bearing)}(?:4)?{re.escape(distance)}\b",
+            f"Bulls {bearing} range {distance}", normalized,
+            flags=re.IGNORECASE)
+        # The general STT number decoder treats "for" as a possible spoken
+        # four between adjacent figures. Here it is the Bulls-range preposition.
+        normalized = re.sub(
+            rf"\b(?:bulls?|bull'?s?eye)\s+{re.escape(bearing)}\s+for\s+"
+            rf"{re.escape(distance)}\b",
+            f"Bulls {bearing} range {distance}", normalized,
+            flags=re.IGNORECASE)
+        pilot.last_readback = True
+        pilot.readback_replay = clearance
+        item = self._readback_item(normalized, clearance)
+        if item is None:
+            corrected = task.get("readback_fails", 0) > 0
+            task["readback_fails"] = 0
+            task["readback_complete"] = True
+            if corrected:
+                return self._say("readback_correct", callsign,
+                                 agency=self.stingray_short)
+            return ""
+        task["readback_fails"] = task.get("readback_fails", 0) + 1
+        return self._say("readback_incomplete", callsign,
+                         agency=self.stingray_short, item=item)
 
     @staticmethod
     def _abandon_stingray_training_task(pilot: PilotState) -> None:
