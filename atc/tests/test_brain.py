@@ -4194,6 +4194,46 @@ def test_marking_bulls_stt_four_is_repaired_as_for(brain):
     assert "radar contact" in reply.lower(), reply
 
 
+def test_recorded_marking_balls_transcript_decodes_bra(brain):
+    # The MP-session STT transcript rendered "we do marking balls, zero six
+    # three, four, oh three, nine". Here "oh" is zero and the stray four is
+    # the "for" separator, leaving a 063 for 39 BRA.
+    text = _fold_bullseye_figures(_fold_spoken_figures(
+        _normalize_picture_transcription(
+            "we do marking balls, zero six three, four, oh three, nine")))
+    assert parse_marking_call(text) == ("bullseye", 63.0, 39.0)
+
+
+def test_control_checks_marking_report_against_live_position(brain):
+    from scenario import _bearing_range_point
+    brain.cockpit_bearing_offset_deg = 0
+    bull_lat, bull_lon = 42.05, 42.40
+    brain.set_bullseye(bull_lat, bull_lon)
+    lat, lon = _bearing_range_point(bull_lat, bull_lon, 200, 20)
+    track = _track(brain.airfield, lat, lon, alt_ft=15000)
+
+    reply = brain.handle(
+        "Control, Colt 1, we do marking balls, zero six three, four, "
+        "oh three, nine", controller=Controller.CONTROL, track=track)
+    assert "negative" in reply.lower()
+    assert "i show you bullseye" in reply.lower()
+    assert "200 for 20" in reply  # Control gives the radar-derived BRA.
+
+
+def test_control_acknowledges_marking_report_when_radar_agrees(brain):
+    from scenario import _bearing_range_point
+    brain.cockpit_bearing_offset_deg = 0
+    bull_lat, bull_lon = 42.05, 42.40
+    brain.set_bullseye(bull_lat, bull_lon)
+    lat, lon = _bearing_range_point(bull_lat, bull_lon, 63, 39)
+    track = _track(brain.airfield, lat, lon, alt_ft=15000)
+    reply = brain.handle(
+        "Control, Colt 1, we do marking balls, zero six three, four, "
+        "oh three, nine", controller=Controller.CONTROL, track=track)
+    assert reply and "radar contact" in reply.lower()
+    assert "negative" not in reply.lower()
+
+
 def test_stt_mocking_bulls_is_normalized_to_marking_bull(brain):
     _stingray(brain)
     reply = brain.handle(

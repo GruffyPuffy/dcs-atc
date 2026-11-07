@@ -70,6 +70,7 @@ RADIO_ANSWER_KEYS = frozenset({
     "stingray_bullseye_challenge", "stingray_marking_unclear",
     "stingray_angels_rounding",
     "stingray_angels_and_position",
+    "control_picture_challenge", "control_picture_unclear",
 })
 
 # Safety-priority traffic bypasses a pending ATC gap, while the SRS transmit
@@ -210,6 +211,7 @@ def _normalize_picture_transcription(text: str) -> str:
     # candidates; it never makes a guessed position correct by itself.
     aliases = {key: value for key, value in _READBACK_NUMBER_ALIASES.items()
                if key not in {"to", "for"}}
+    aliases["oh"] = "zero"
     tail_match = re.search(r"\b(bull'?s?eye|bulls?|marking)\b", text,
                            re.IGNORECASE)
     if tail_match:
@@ -388,10 +390,21 @@ def _fold_bullseye_figures(text: str) -> str:
     # silently ignores the actual range (46). Restrict the repair to a
     # bullseye/marking phrase and keep the existing live-position verification
     # as the authority on whether the resulting BRA is correct.
+    def repair_stray_four(match: re.Match) -> str:
+        spoken_range = re.sub(r"\s*,\s*", " ", match.group(2)).strip()
+        distance = (spoken_range if re.fullmatch(r"\d{1,3}", spoken_range)
+                    else _spoken_figure(spoken_range))
+        if not distance:
+            return match.group(0)
+        distance = distance.lstrip("0") or "0"
+        return f"{match.group(1)} for {distance}"
+
     return re.sub(
-        r"(\b(?:bulls?|bull'?s?eye|marking(?:\s+[a-z']+)?)[\s,]+"
-        r"\d{2,3})\s*,\s*(?:4|four)\s*,\s*(\d{1,3})\b",
-        r"\1 for \2", folded, flags=re.IGNORECASE)
+        rf"(\b(?:bulls?|bull'?s?eye|marking(?:\s+[a-z']+)?)[\s,]+"
+        rf"\d{{2,3}})\s*,\s*(?:4|four)\s*,\s*"
+        rf"((?:(?:{_FIGURE_WORD}|\d)\s*,?\s*){{1,3}})"
+        rf"(?=\s|[.,]|$)",
+        repair_stray_four, folded, flags=re.IGNORECASE)
 
 
 def _stem(word: str) -> str:
@@ -3420,8 +3433,14 @@ class AtcBrain:
         # with "say again" trains the pilot to stop making the call (debrief
         # 2026-10-22: "marking bull, zero seven seven, four forty" was rejected
         # twice). We do not simulate the picture; acknowledge it.
-        if re.search(r"\b(marking|bullseye|bull'?s?eye|picture|"
-                     r"for \d{2,3}|radar contact)\b", low):
+        if re.search(r"\b(marking|bullseye|bull'?s?eye|bulls?)\b", low):
+            if (parse_marking_call(low) is not None
+                    or parse_bullseye_call(low) is not None
+                    or re.search(r"\b\d+\b|\b(?:" + _FIGURE_WORD + r")\b",
+                                 low)):
+                return self._control_picture_reply(callsign, low, track)
+            return self._say("roger", callsign, agency=self.control_short)
+        if re.search(r"\b(picture|for \d{2,3}|radar contact)\b", low):
             return self._say("roger", callsign, agency=self.control_short)
         if re.search(r"\bcontrol\b(?!\s+zone)", low):
             if pilot.phase == Phase.AIRBORNE or pilot.cleared_inbound:
@@ -3617,6 +3636,26 @@ class AtcBrain:
         if off:
             return self._say("stingray_bullseye_challenge", callsign, **off)
         return self._say("stingray_radar_contact", callsign)
+
+    def _control_picture_reply(self, callsign: str, low: str,
+                               track: AircraftTrack | None) -> str:
+        """Check a Control-channel marking report against the live position."""
+        if (re.search(r"\bmarking\b", low)
+                and parse_marking_call(low) is None):
+            return self._say("control_picture_unclear", callsign,
+                             agency=self.control_short)
+        if (re.search(r"\bbulls?\b", low)
+                and parse_bullseye_call(low) is None):
+            return self._say("control_picture_unclear", callsign,
+                             agency=self.control_short)
+        off = self._verify_picture(callsign, low, track)
+        if off and off.get("reference_unclear"):
+            return self._say("control_picture_unclear", callsign,
+                             agency=self.control_short)
+        if off:
+            return self._say("control_picture_challenge", callsign,
+                             agency=self.control_short, **off)
+        return self._say("control_contact", callsign)
 
     def _verify_picture(self, callsign: str, low: str,
                         track: AircraftTrack | None) -> dict | None:
