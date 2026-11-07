@@ -2427,6 +2427,21 @@ def test_reset_returns_to_idle(brain):
     assert brain.pilots["Colt 1"].exit_gate == ""
 
 
+def test_reset_on_ground_does_not_tell_pilot_to_contact_ground_again(brain):
+    reply = brain.handle("Ground, Colt 1, say reset",
+                         controller=Controller.GROUND)
+    assert "state reset" in reply.lower()
+    assert "ready when you are" in reply.lower()
+    assert "contact ground" not in reply.lower()
+    assert "channel 6" not in reply.lower()
+
+
+def test_reset_on_other_agency_still_directs_pilot_to_ground(brain):
+    reply = brain.handle("Tower, Colt 1, reset", controller=Controller.TOWER)
+    assert "state reset" in reply.lower()
+    assert "contact ground on channel 6" in reply.lower()
+
+
 def test_cancel_steps_back_one_phase(brain):
     brain.handle("Ground, Colt 1, requesting taxi", controller=Controller.GROUND)
     brain.handle("Tower, Colt 1, ready for departure", controller=Controller.TOWER)

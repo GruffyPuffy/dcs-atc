@@ -2529,6 +2529,7 @@ class AtcBrain:
         pilot.arrival_previous_bearing_deg = None
         pilot.arrival_previous_gate_range_nm = None
         pilot.readback_fails = 0
+        pilot.readback_pending = False
         pilot.parking_cleared = False
         pilot.ground_checkin_seen = False
         pilot.ground_information_complete = False
@@ -2555,6 +2556,9 @@ class AtcBrain:
         pilot.pending_handoff_to = ""
         pilot.requested_handoff_to = ""
         pilot.pending_coach = ""
+        if controller == Controller.GROUND:
+            return self._say("state_reset_ground", callsign,
+                             agency=self.ground_short)
         return self._say("state_reset", callsign,
                          agency=self._agency(controller))
 

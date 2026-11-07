@@ -38,7 +38,7 @@ REQUIRED_TEMPLATES = {
     "go_around", "go_around_continue_circuit", "ctr_warning", "roger", "say_again",
     "say_again_no_callsign",
     "radio_check", "atc_online",
-    "state_reset", "cancel_ack",
+    "state_reset", "state_reset_ground", "cancel_ack",
     "help_idle", "help_clearance", "help_taxi", "help_holding", "help_lineup",
     "help_departure", "help_airborne", "help_airborne_on_control",
     "help_stingray", "help_stingray_nobullseye",

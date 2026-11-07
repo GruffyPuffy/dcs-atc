@@ -94,6 +94,7 @@
     "say_again": "{callsign}, {agency}, say again.",
     "say_again_no_callsign": "{agency}, say again with your callsign.",
     "state_reset": "{callsign}, {agency}, state reset. Contact {ground} on channel {ground_channel} when ready.",
+    "state_reset_ground": "{callsign}, Ground, state reset. Ground is ready when you are.",
     "cancel_ack": "{callsign}, {agency}, clearance cancelled.",
     "position_challenge": "{callsign}, {agency}, negative. I show you {position}. Confirm your position.",
     "directions_gate": "{callsign}, {agency}, bearing {bearing}, distance {distance} miles to {gate}.",
