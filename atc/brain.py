@@ -162,6 +162,21 @@ _TENS = {"twenty": "20", "thirty": "30", "forty": "40", "fifty": "50",
          "sixty": "60", "seventy": "70", "eighty": "80", "ninety": "90"}
 _NUMBER_WORDS = {**_ONES, **_TEENS, **_TENS}
 
+# Casual speech and Whisper commonly render these number pronunciations as
+# ordinary words. They are only applied by the readback decoder, where the
+# clearance supplies the expected value; they are not global STT rewrites.
+_READBACK_NUMBER_ALIASES = {
+    "wun": "one", "won": "one",
+    "too": "two", "to": "two",
+    "tree": "three", "free": "three",
+    "fower": "four", "for": "four",
+    "fife": "five",
+    "ait": "eight", "ate": "eight",
+}
+_READBACK_NUMBER_CUE_RE = re.compile(
+    r"\b(runway|channel|heading|angels|altitude|qnh|feet|ft|bulls?"
+    r"|bull'?s?eye|marking|for|at)\s*$", re.IGNORECASE)
+
 # The words a figure may be built from, longest first so "twenty" is preferred
 # over a hypothetical "two" prefix match inside it.
 _FIGURE_WORD = "|".join(sorted(_NUMBER_WORDS, key=len, reverse=True))
@@ -190,6 +205,22 @@ def _normalize_picture_transcription(text: str) -> str:
     if not re.search(r"\b(bull'?s?eye|bulls?|marking)\b", text,
                      re.IGNORECASE):
         return text
+    # Repair number pronunciations only in the picture-call tail. Position is
+    # checked against radar later, so this merely supplies plausible BRA
+    # candidates; it never makes a guessed position correct by itself.
+    aliases = {key: value for key, value in _READBACK_NUMBER_ALIASES.items()
+               if key not in {"to", "for"}}
+    tail_match = re.search(r"\b(bull'?s?eye|bulls?|marking)\b", text,
+                           re.IGNORECASE)
+    if tail_match:
+        head, tail = text[:tail_match.start()], text[tail_match.start():]
+        for heard, canonical in aliases.items():
+            tail = re.sub(rf"\b{heard}\b", canonical, tail,
+                          flags=re.IGNORECASE)
+        # 'to' is a likely STT form of 'two' only inside a numeric run.
+        tail = re.sub(rf"\bto(?=\s+(?:{_FIGURE_WORD}|\d)\b)",
+                      "two", tail, flags=re.IGNORECASE)
+        text = head + tail
     # Whisper sometimes hears "marking bulls" as "marking balls". In a
     # marking/BRA report, that is the bullseye reference, not a named point.
     text = re.sub(r"\b(marking\s+)balls?\b", r"\1bulls", text,
@@ -1350,6 +1381,78 @@ class AtcBrain:
                 return True
         return False
 
+    @classmethod
+    def _readback_numbers(cls, text: str) -> set[str]:
+        """Decode likely spoken-number STT variants in a readback.
+
+        An alias such as ``to`` or ``for`` is rewritten only when it is next
+        to another number token or follows a number cue. This lets ``to five``
+        satisfy an expected 25 without treating ``taxi to Ramp`` as a spoken 2.
+        """
+        text = (text or "").lower()
+        tokens = list(re.finditer(r"[a-z]+|\d+", text))
+        pieces = []
+        numeric_words = set(_NUMBER_WORDS) | set(_READBACK_NUMBER_ALIASES)
+        for index, token in enumerate(tokens):
+            word = token.group()
+            canonical = _READBACK_NUMBER_ALIASES.get(word)
+            if canonical:
+                neighbors = tokens[max(0, index - 1):index] + tokens[index + 1:index + 2]
+                adjacent_number = any(
+                    item.group().isdigit() or item.group() in numeric_words
+                    for item in neighbors)
+                has_cue = bool(_READBACK_NUMBER_CUE_RE.search(
+                    text[:token.start()]))
+                if adjacent_number or has_cue:
+                    word = canonical
+            pieces.append(word)
+        return cls._numbers(" ".join(pieces))
+
+    @staticmethod
+    def _taxi_route_words(text: str) -> list[str]:
+        """Normalize a few observed STT renderings of NATO taxiway names."""
+        normalized = (text or "").lower()
+        aliases = {
+            "is here": "sierra",  # observed for "Sierra" in the MP debrief
+            "number": "november",
+            "no member": "november",
+            "whisky": "whiskey",
+        }
+        for heard, canonical in aliases.items():
+            pattern = r"\b" + r"\s+".join(map(re.escape, heard.split())) + r"\b"
+            normalized = re.sub(pattern, canonical, normalized)
+        return re.findall(r"[a-z]+", normalized)
+
+    def _taxi_runway_readback_matches(self, number: str, low: str) -> bool:
+        """Accept contextual runway STT slips without weakening other numbers."""
+        if not re.search(r"\bhold short\b", low):
+            return False
+
+        # Whisper can render spoken "two" as "to" in a runway number. Repair
+        # that only immediately after an explicit runway/hold-short cue.
+        digit = rf"(?:{_FIGURE_WORD}|\d)"
+        repaired = re.sub(
+            rf"\b(runway|hold short)\s+({digit})\s+to\b",
+            r"\1 \2 two", low)
+        if self._number_read_back(number, self._numbers(repaired)):
+            return True
+
+        # Observed transcript: "hold short, running to 5" for runway 25.
+        # Treat the final digit as sufficient only when "running to" is the
+        # STT rendering, and this airfield has exactly one runway with that
+        # suffix. Never infer a runway from a bare "to 5" or from other figures.
+        if self.airfield is None or len(number) != 2:
+            return False
+        suffix = re.search(rf"\brunning to\s+({digit})\b", low)
+        if not suffix:
+            return False
+        spoken_token = suffix.group(1)
+        spoken_digit = (spoken_token if spoken_token.isdigit()
+                        else _spoken_figure(spoken_token))
+        candidates = [rwy for rwy in self.airfield.runways
+                      if len(rwy) == len(number) and rwy.endswith(spoken_digit)]
+        return candidates == [number]
+
     def _readback_item(self, low: str, clearance: str) -> str | None:
         """The label of the first item the pilot failed to read back, or None.
 
@@ -1362,9 +1465,14 @@ class AtcBrain:
         """
         clearance = self.callsigns.strip(clearance or "")
         low = self.callsigns.strip(low or "")
-        spoken = self._numbers(low)
-        missing_num = [n for n in self._numbers(clearance)
-                       if not self._number_read_back(n, spoken)]
+        spoken = self._readback_numbers(low)
+        taxi_runway = re.search(
+            r"\bhold short runway\s+(\d+)\b", clearance, re.IGNORECASE)
+        missing_num = [
+            n for n in self._numbers(clearance)
+            if not self._number_read_back(n, spoken)
+            and not (taxi_runway and n == taxi_runway.group(1)
+                     and self._taxi_runway_readback_matches(n, low))]
         # Only a gate named as "Exit X" / "Entry X" counts. A bare gate word
         # collides with parking-area names ("Ramp South" contains "South"), so
         # matching the word alone would demand a gate the clearance never gave.
@@ -1383,7 +1491,7 @@ class AtcBrain:
                                    clearance, re.IGNORECASE)
         if taxi_route:
             route_words = re.findall(r"[a-z]+", taxi_route.group(1).lower())
-            spoken_route_words = re.findall(r"[a-z]+", low.lower())
+            spoken_route_words = self._taxi_route_words(low)
             # Whisper may spell the NATO word as either "Whiskey" or
             # "Whisky", and pauses often become commas ("Charlie, November").
             # Compare normalized word sequences so those harmless transcript
@@ -1391,8 +1499,6 @@ class AtcBrain:
             spelling_aliases = {"whisky": "whiskey"}
             route_words = [spelling_aliases.get(word, word)
                            for word in route_words]
-            spoken_route_words = [spelling_aliases.get(word, word)
-                                  for word in spoken_route_words]
             route_size = len(route_words)
             route_present = (route_size and any(
                 spoken_route_words[index:index + route_size] == route_words
@@ -1421,7 +1527,7 @@ class AtcBrain:
                                          or pilot.last_reply)
         if not clearance:
             return False
-        spoken = self._numbers(low)
+        spoken = self._readback_numbers(low)
         if all(self._number_read_back(n, spoken)
                for n in self._numbers(clearance)):
             return True

@@ -718,6 +718,30 @@ def test_readback_numbers_accept_spoken_digits():
     assert "070" in AtcBrain._numbers("heading zero seven zero")
 
 
+def test_readback_decoder_accepts_casual_number_pronunciations():
+    from brain import AtcBrain
+    for phrase, expected in (
+        ("to five", "25"), ("tree two", "32"),
+        ("free two", "32"), ("wun fife", "15"),
+        ("runway to", "2"), ("heading for tree", "43"),
+    ):
+        spoken = AtcBrain._readback_numbers(phrase)
+        assert AtcBrain._number_read_back(expected, spoken), (phrase, spoken)
+    # Common filler must not count as a number when it is not part of a
+    # number sequence or attached to an expected-number cue.
+    assert not AtcBrain._number_read_back(
+        "2", AtcBrain._readback_numbers("taxi to Ramp North"))
+
+
+def test_picture_decoder_accepts_casual_number_pronunciations():
+    from brain import (_fold_bullseye_figures,
+                       _normalize_picture_transcription, parse_marking_call)
+    call = _normalize_picture_transcription(
+        "marking bull tree zero free for fower zero")
+    call = _fold_bullseye_figures(call)
+    assert parse_marking_call(call) == ("bullseye", 303.0, 40.0)
+
+
 def test_readback_numbers_accept_compound_number_words():
     # A pilot may say "angels fifteen" or "angels thirty two" instead of
     # spelling the digits. Before this, the word tables held only single digits,
@@ -1230,6 +1254,9 @@ def test_taxi_route_readback_normalizes_punctuation_spelling_and_length(brain):
         ("Whiskey", "WHISKY"),
         ("Charlie November", "Charlie, November"),
         ("Alpha November Delta Echo", "Alpha, November delta Echo"),
+        ("Sierra Echo", "is here, echo"),
+        ("November Delta", "number delta"),
+        ("November Alpha", "no member alpha"),
     )
     for expected_route, spoken_route in cases:
         clearance = (
@@ -1238,6 +1265,42 @@ def test_taxi_route_readback_normalizes_punctuation_spelling_and_length(brain):
         readback = (
             f"Cleared taxi to Ramp North via {spoken_route}, Colt one")
         assert brain._readback_item(readback, clearance) is None, readback
+
+
+def test_taxi_readback_accepts_contextual_runway_stt_slips(brain):
+    clearance = (
+        "Colt 1, Ground, cleared taxi Alpha November Delta and hold short "
+        "runway 25.")
+    observed_stt = (
+        "Cleared taxi Alpha November Delta, hold short, running to 5, Colt 1")
+    assert brain._readback_item(observed_stt, clearance) is None
+
+    # STT can also turn the spoken digit "two" into the word "to". Resolve
+    # it only inside an explicit runway/hold-short number.
+    clearance_32 = (
+        "Colt 1, Ground, cleared taxi Alpha and hold short runway 32.")
+    spoken_32 = (
+        "Cleared taxi Alpha, hold short runway three to, Colt 1")
+    assert brain._readback_item(spoken_32, clearance_32) is None
+
+
+def test_ground_taxi_readback_accepts_observed_stt_variants(brain):
+    clearance = brain.handle("Ground, Colt 1, requesting taxi",
+                             controller=Controller.GROUND)
+    assert "Sierra Echo" in clearance
+    reply = brain.handle(
+        "Cleared taxi is here, echo, hold short, running to 5, Colt 1",
+        controller=Controller.GROUND)
+    assert "readback incomplete" not in (reply or "").lower()
+
+
+def test_taxi_readback_does_not_infer_runway_from_bare_suffix(brain):
+    clearance = (
+        "Colt 1, Ground, cleared taxi Alpha November Delta and hold short "
+        "runway 25.")
+    incomplete = (
+        "Cleared taxi Alpha November Delta, hold short runway 5, Colt 1")
+    assert brain._readback_item(incomplete, clearance) == "runway"
 
 
 def test_taxi_route_readback_still_requires_all_words_in_order(brain):
