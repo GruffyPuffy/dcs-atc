@@ -41,6 +41,21 @@ DEFAULT_PHRASEOLOGY = Path(__file__).with_name("phraseology.json")
 RADIO_NORMAL_POLICY = ("normal", 2.0)
 RADIO_ANSWER_POLICY = ("answer", 5.0)
 RADIO_EMERGENCY_POLICY = ("emergency", 2.0)
+READBACK_REMINDER_DELAY_SEC = 20.0
+
+# Only clearances with an immediate, specific readback expectation arm the
+# reminder. Reports, handoffs, challenges, and generic answers do not.
+READBACK_REMINDER_KEYS = frozenset({
+    "departure_exit", "departure_exit_straight",
+    "taxi", "taxi_parking", "line_up",
+    "lineup_readback", "lineup_readback_straight", "lineup_readback_left",
+    "takeoff", "cleared_land", "cleared_overhead", "touch_and_go_approved",
+    "vacate_runway",
+    "control_join", "control_join_straight", "control_join_nohdg",
+    "control_join_requested", "control_join_requested_straight",
+    "control_join_requested_nohdg", "control_climb", "control_descend",
+    "control_descend_step", "stingray_training_task",
+})
 
 # These are replies where a pilot is reasonably expected to answer promptly:
 # clearances/readbacks in the MA SOP, explicit requests for a report or repeat,
@@ -734,6 +749,11 @@ class PilotState:
     # _readback_coaching), so the coach can attach readback-specific wording
     # notes (e.g. a callsign leading the readback). Reset on every call.
     last_readback: bool = False
+    # One-shot reminder for the currently spoken readback-required clearance.
+    # The expected transmission is armed by _say and gets its deadline when
+    # the TTS is queued. Any pilot transmission cancels both fields.
+    readback_reminder_expected: str = ""
+    readback_reminder_deadline: float | None = None
     # Ground has read out the runway/QNH (or weather) info, so a later call
     # naming "in use"/QNH is a readback of it. Without this, any transmission
     # that merely mentions "in use" was answered "readback correct".
@@ -1318,13 +1338,56 @@ class AtcBrain:
         # Derive it from the airfield so the clearance follows the active runway.
         if self.airfield is not None:
             overrides["downwind"] = self.airfield.break_direction(self.runway)
-        return self.phraseology.render(
+        reply = self.phraseology.render(
             key, callsign=callsign, tower=self.tower_short,
             agency=agency or self.tower_short,
             runway=self.runway, wind=self.wind, ground=self.ground_short,
             control=self.control_short, stingray=self.stingray_short,
             qnh=self.qnh, weather=self.weather,
             **overrides, **fields)
+        if pilot and (key in READBACK_REMINDER_KEYS
+                      or (key == "ground_info_weather"
+                          and pilot.ground_info_readback_required)):
+            pilot.readback_reminder_expected = reply
+            pilot.readback_reminder_deadline = None
+        return reply
+
+    def mark_transmission_spoken(self, callsign: str, text: str,
+                                 audio_duration: float = 0.0) -> None:
+        """Start a clearance reminder timer after its TTS is queued."""
+        pilot = self.pilots.get(callsign)
+        if pilot is None:
+            return
+        if pilot.readback_reminder_expected == text:
+            pilot.readback_reminder_expected = ""
+            pilot.readback_reminder_deadline = (
+                time.monotonic() + max(0.0, audio_duration)
+                + READBACK_REMINDER_DELAY_SEC)
+        else:
+            # A different ATC transmission supersedes any old expectation.
+            pilot.readback_reminder_expected = ""
+            pilot.readback_reminder_deadline = None
+
+    def cancel_readback_reminder(self, callsign: str) -> None:
+        pilot = self.pilots.get(callsign)
+        if pilot:
+            pilot.readback_reminder_expected = ""
+            pilot.readback_reminder_deadline = None
+
+    def pop_due_readback_reminders(self, now: float | None = None) -> list[str]:
+        """Consume reminders that became due; each clearance fires once."""
+        now = time.monotonic() if now is None else now
+        due = []
+        for callsign, pilot in self.pilots.items():
+            deadline = pilot.readback_reminder_deadline
+            if deadline is not None and now >= deadline:
+                pilot.readback_reminder_deadline = None
+                due.append(callsign)
+        return due
+
+    def readback_reminder(self, callsign: str) -> str:
+        """Render the one-shot, non-blocking reminder for a pilot."""
+        return self.phraseology.render("readback_reminder", callsign=callsign)
 
     def take_radio_policy(self) -> tuple[str, float]:
         """Take the policy associated with the last generated reply."""
@@ -1806,6 +1869,11 @@ class AtcBrain:
         from the runway-occupancy check (they are not traffic to themselves).
         """
         self._radio_policy = RADIO_NORMAL_POLICY
+        # A reminder is canceled by any speech from this pilot, even an
+        # unparseable call or a flight-internal check-in.
+        known_speaker_call = self.callsign_for_speaker(speaker) if speaker else ""
+        if known_speaker_call and known_speaker_call != speaker:
+            self.cancel_readback_reminder(known_speaker_call)
         # Flight check-in (Master Arms SOP): on switching frequency a flight
         # checks in *as a flight* before addressing the agency — the lead says
         # just the flight callsign ("Adder1"), each wingman answers with their
@@ -1855,6 +1923,7 @@ class AtcBrain:
                                  agency=self._agency(controller))
             return None
         low = text.lower()
+        self.cancel_readback_reminder(callsign)
         pilot = self._pilot(callsign)
         # One-shot state of the PREVIOUS transmission: the pending coach note
         # belongs to exactly one exchange, and the readback flag only truthful

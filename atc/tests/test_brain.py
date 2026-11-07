@@ -84,6 +84,49 @@ def test_radio_policy_separates_safety_priority_from_normal_acknowledgments():
         assert radio_policy_for_key(key) == RADIO_NORMAL_POLICY
 
 
+def test_readback_reminder_waits_for_clearance_audio_and_fires_once(brain):
+    pilot = brain._pilot("Colt 1")
+    clearance = brain._say("taxi", "Colt 1", taxi_route="Sierra Echo")
+    brain.mark_transmission_spoken("Colt 1", clearance, audio_duration=4.0)
+    deadline = pilot.readback_reminder_deadline
+    assert deadline is not None
+
+    # Simulated monotonic times keep the test fast while checking the 20 s
+    # delay after the clearance audio duration has been accounted for.
+    assert brain.pop_due_readback_reminders(deadline - 0.001) == []
+    assert brain.pop_due_readback_reminders(deadline) == ["Colt 1"]
+    assert brain.pop_due_readback_reminders(deadline + 60.0) == []
+    assert "read back the clearance" in brain.readback_reminder("Colt 1")
+
+
+def test_any_pilot_speech_cancels_reminder_and_wrong_readback_does_not_rearm(
+        brain):
+    reply = brain.handle("Ground, Colt 1, request taxi",
+                         controller=Controller.GROUND)
+    pilot = brain.pilots["Colt 1"]
+    brain.mark_transmission_spoken("Colt 1", reply, audio_duration=2.0)
+    assert pilot.readback_reminder_deadline is not None
+
+    brain.remember_speaker("Caveman", "Colt 1")
+    brain.handle("unintelligible words", controller=Controller.GROUND,
+                 speaker="Caveman")
+    assert pilot.readback_reminder_deadline is None
+
+    # A new clearance can arm once; an incorrect readback cancels it and its
+    # feedback message does not arm another reminder.
+    reply = brain.handle("Ground, Colt 1, request taxi",
+                         controller=Controller.GROUND)
+    brain.mark_transmission_spoken("Colt 1", reply, audio_duration=2.0)
+    assert pilot.readback_reminder_deadline is not None
+    feedback = brain.handle(
+        "Colt 1, cleared taxi and hold short runway 25",
+        controller=Controller.GROUND, speaker="Caveman")
+    assert "readback incomplete" in feedback.lower()
+    assert pilot.readback_reminder_deadline is None
+    assert pilot.readback_reminder_expected == ""
+    assert brain.pop_due_readback_reminders(float("inf")) == []
+
+
 def test_all_radio_policy_keys_have_phraseology_templates():
     templates = AtcBrain().phraseology.templates
     assert RADIO_ANSWER_KEYS <= templates.keys()

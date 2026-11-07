@@ -459,6 +459,9 @@ def main() -> None:
             pcm48k, freq, wait_after=radio_wait,
             emergency=(radio_policy == "emergency"))
         audio_duration = len(pcm48k) / (SAMPLE_RATE * 2)
+        if callsign:
+            with lock:
+                brain.mark_transmission_spoken(callsign, text, audio_duration)
         if save_audio:
             stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
             with wave.open(str(audio_dir / f"tx_{stamp}.wav"), "wb") as wav:
@@ -975,6 +978,13 @@ def main() -> None:
         seen_units: dict[str, str] = {}
         while True:
             time.sleep(2.0)
+            with lock:
+                due_reminders = brain.pop_due_readback_reminders()
+                reminders = [(callsign, brain.readback_reminder(callsign))
+                             for callsign in due_reminders]
+            for callsign, reminder in reminders:
+                log(f"READBACK REMINDER: {callsign}")
+                speak_to_pilot(callsign, reminder)
             if state is None:
                 continue
             try:
@@ -1404,11 +1414,13 @@ def main() -> None:
         else:
             log("Bullseye (blue): not set in mission — bullseye calls are "
                 "acknowledged without a position check")
-        threading.Thread(target=monitor_ctr, daemon=True).start()
         if atis_hz and args.atis_interval > 0:
             threading.Thread(target=atis_loop, daemon=True).start()
         elif args.atis_interval > 0:
             threading.Thread(target=weather_loop, daemon=True).start()
+    # This loop also services readback reminders when the optional DCS state
+    # bridge is disabled; its position-monitoring section simply stays idle.
+    threading.Thread(target=monitor_ctr, daemon=True).start()
     log(f"ATC bot listening on {freq_mhz:.3f} MHz AM @ {args.host}:{args.port} "
         f"(log: {log_path.resolve()})")
 

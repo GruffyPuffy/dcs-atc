@@ -20,6 +20,7 @@ REQUIRED_TEMPLATES = {
     "lineup_readback_straight",
     "hold_short_traffic", "continue_approach",
     "ground_ack", "ground_info", "ground_info_readback", "readback_correct",
+    "readback_reminder",
     "tower_ack", "control_handoff_repeat",
     "inbound_outside", "inbound_inside", "inbound_via_gate",
     "report_runway_in_sight", "cleared_land", "cleared_overhead", "break_ack",
