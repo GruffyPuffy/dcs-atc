@@ -2223,7 +2223,10 @@ class AtcBrain:
         arrival to Tower, a pilot on Ground to Tower, a pilot on Stingray back
         to Control.
         """
-        target = self._requested_agency(low)
+        # If a pilot names a configured channel, honor that destination even
+        # when the request does not name an agency ("request channel 3").
+        # This keeps the reply grounded in what they actually asked to tune.
+        target = self._requested_agency(low) or self._requested_channel_agency(low)
         if target is None:
             target = self._next_agency(pilot, controller)
         if target == controller:
@@ -2269,6 +2272,22 @@ class AtcBrain:
             return Controller.TOWER
         if re.search(r"\bground\b", tail):
             return Controller.GROUND
+        return None
+
+    def _requested_channel_agency(self, low: str) -> Controller | None:
+        """Resolve an explicitly requested preset channel to its agency."""
+        match = re.search(rf"\bchannel\s*({_CHANNEL_NUMBER})\b", low)
+        if not match:
+            return None
+        spoken = match.group(1)
+        channel = _NUMBER_WORDS.get(spoken, spoken)
+        channels = getattr(self.airfield, "channels", None) or {}
+        for agency, configured_channel in channels.items():
+            if str(configured_channel).strip() == channel:
+                try:
+                    return Controller(agency)
+                except ValueError:
+                    continue
         return None
 
     def _next_agency(self, pilot: PilotState,

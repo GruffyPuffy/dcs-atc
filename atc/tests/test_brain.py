@@ -4011,6 +4011,33 @@ def test_stingray_channel_request_names_stingray_not_control(brain):
     assert reply.strip() != "Colt 1, Control."
 
 
+def test_pilot_channel_request_resolves_configured_channel_to_agency(brain):
+    # A channel number carries its destination even when the pilot omits the
+    # agency name. Spoken and numeric forms use the same configured mapping.
+    for request in ("request channel 3", "request channel three"):
+        _airborne(brain, callsign="Colt 1", phase=Phase.AIRBORNE)
+        reply = brain.handle(f"Control, Colt 1, {request}",
+                             controller=Controller.CONTROL)
+        assert "contact Stingray" in reply, request
+        assert "channel 3" in reply, request
+        assert brain.pilots["Colt 1"].requested_handoff_to == "stingray"
+
+    # Resolve another channel independently of the contextual next agency.
+    _stingray(brain)
+    reply = brain.handle("Stingray, Colt 1, request channel 6",
+                         controller=Controller.STINGRAY)
+    assert "contact Ground" in reply
+    assert "channel 6" in reply
+    assert brain.pilots["Colt 1"].requested_handoff_to == "ground"
+
+
+def test_unmapped_requested_channel_uses_contextual_next_agency(brain):
+    _stingray(brain)
+    reply = brain.handle("Stingray, Colt 1, request channel 99",
+                         controller=Controller.STINGRAY)
+    assert "contact Control" in reply and "channel 8" in reply
+
+
 def test_pilot_can_self_move_between_any_agencies(brain):
     # This is a trainer: we do not know what the pilot wants to practise, so a
     # pilot may ask to move to ANY agency from ANY agency. Every combination
