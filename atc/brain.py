@@ -4171,11 +4171,16 @@ class AtcBrain:
         return self.check_arrival_tower_handoff(callsign, track)
 
     def _spoken_parking(self, low: str) -> str | None:
-        """Parking area named in the transmission, e.g. 'ramp north'."""
+        """Parking area named in the transmission, e.g. 'ramp/apron north'."""
         if self.airfield is None:
             return None
         for area in self.airfield.parking_areas:
-            if re.search(rf"\b{re.escape(area.lower())}\b", low):
+            name = area.lower()
+            aliases = [name]
+            if name.startswith("ramp "):
+                aliases.append("apron " + name.removeprefix("ramp "))
+            if any(re.search(rf"\b{re.escape(alias)}\b", low)
+                   for alias in aliases):
                 return area
         return None
 

@@ -1172,6 +1172,13 @@ def test_ground_taxi_to_parking_named_ramp(brain, airfield):
     assert "cleared taxi" in reply
 
 
+def test_ground_taxi_to_parking_apron_alias(brain):
+    reply = brain.handle("Ground, Colt 1, request taxi to apron south",
+                         controller=Controller.GROUND)
+    assert "Ramp South" in reply
+    assert "cleared taxi" in reply
+
+
 def test_ground_taxi_to_parking_nearest_ramp(brain, airfield):
     # no ramp named -> nearest to the live position
     near_north = _track(airfield, 42.183, 42.490)
