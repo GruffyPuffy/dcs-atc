@@ -561,6 +561,15 @@ _CHANNEL_CHANGE_RE = re.compile(
     rf"\bchannel\s*{_CHANNEL_NUMBER}\b"
     rf"|\b(?:push(?:ing)?|switch(?:ing)?|chang(?:ing|e)|going|moving|"
     rf"contacting|diall?ing)\b[^.]*\bchannel\b"
+    # STT sometimes inserts "button" in the natural acknowledgment
+    # "pushing button seven" (debrief 2026-11-07). Keep the number required so
+    # an unrelated "pushing buttons" call cannot be swallowed as a handoff ack.
+    rf"|\bpush(?:ing)?\s+(?:the\s+)?button\s*{_CHANNEL_NUMBER}\b"
+    # In the logged "contact Ground of six", STT omitted both "on" and
+    # "channel". The agency plus a spoken channel number is still a clear
+    # frequency-change acknowledgment.
+    rf"|\bcontact\s+(?:ground|tower|control|approach|departure|stingray|"
+    rf"awacs|magic|overlord|center|centre)\s+of\s+{_CHANNEL_NUMBER}\b"
     rf"|\bpush\b")
 # A pilot *asking to change frequency*, rather than acknowledging one. A real
 # controller answers this ("contact Stingray on channel 3"), instead of leaving

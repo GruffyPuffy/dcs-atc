@@ -3223,6 +3223,9 @@ def test_spoken_channel_readback_is_silent(brain):
                  "Stingray, channel three, Colt 1",
                  "Colt 1 pushing channel three",
                  "Colt 1, switching to channel 3",
+                 "Colt 1, going to channel five",
+                 "Colt 1, channel five, Tower",
+                 "Colt 1, contact Tower on channel seven",
                  "Colt 1, channel 8, push"):
         assert brain.handle(text, controller=Controller.CONTROL) == "", text
 
@@ -3236,6 +3239,12 @@ def test_spoken_channel_readback_is_silent_in_handed_off_phases(brain):
     for controller, phase, text in (
             (Controller.GROUND, Phase.HOLDING, "Colt 1, channel seven push"),
             (Controller.GROUND, Phase.HOLDING, "Colt 1, channel seven, push."),
+            (Controller.CONTROL, Phase.AIRBORNE,
+             "Colt 1, pushing button seven"),
+            (Controller.CONTROL, Phase.AIRBORNE,
+             "Colt 1, pushing the button 7"),
+            (Controller.TOWER, Phase.LANDING,
+             "Colt 1, contact Ground of six"),
             (Controller.TOWER, Phase.AIRBORNE, "Colt 1, channel 8, push"),
             (Controller.CONTROL, Phase.AIRBORNE, "Colt 1, channel three, push"),
             (Controller.CONTROL, Phase.LANDING, "Colt 1, channel seven, push"),
