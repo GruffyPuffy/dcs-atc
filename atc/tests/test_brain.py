@@ -344,6 +344,28 @@ def test_tower_turning_final_is_silent(brain):
     assert not brain.pilots["Colt 1"].cleared_landing
 
 
+def test_tower_base_turn_report_requests_landing_clearance(brain):
+    # The MA SOP permits the flight lead to request landing clearance from
+    # base or final. Several common phrasings should work after the OHB clear.
+    for callsign, report in (("Colt 1", "turning base"),
+                             ("Ford 2", "base turn")):
+        brain.handle(f"Tower, {callsign}, runway in sight",
+                     controller=Controller.TOWER)
+        brain.handle(f"cleared for overhead break runway 25, {callsign}",
+                     controller=Controller.TOWER)
+        reply = brain.handle(f"{callsign}, {report}",
+                             controller=Controller.TOWER)
+        assert "cleared to land" in reply.lower(), report
+        assert brain.pilots[callsign].cleared_landing, report
+
+
+def test_tower_base_turn_without_break_clearance_does_not_clear(brain):
+    reply = brain.handle("Tower, Colt 1, turning base",
+                         controller=Controller.TOWER)
+    assert reply == ""
+    assert not brain.pilots["Colt 1"].cleared_landing
+
+
 def test_tower_pattern_calls_are_optional_before_final(brain):
     # Skip in-the-break and turning-final; on final still clears.
     brain.handle("Tower, Colt 1, runway in sight", controller=Controller.TOWER)
@@ -1974,6 +1996,32 @@ class _Unit:
         self.lat = lat
         self.lon = lon
         self.alt_ft = alt_ft
+
+
+def test_base_turn_clearance_checks_live_position(brain, airfield):
+    inbound = _inbound_bearing(airfield)
+    brain.handle("Tower, Colt 1, runway in sight", controller=Controller.TOWER)
+    # The pilot reports base while radar shows established final. Do not clear
+    # based on a position report that disagrees with the live track.
+    final = _track_on(airfield, inbound, 2.0)
+    reply = brain.handle("Colt 1, turning base", final,
+                         controller=Controller.TOWER)
+    assert "negative" in reply.lower()
+    assert not brain.pilots["Colt 1"].cleared_landing
+
+
+def test_base_turn_clearance_waits_for_runway_to_clear(brain, airfield):
+    inbound = _inbound_bearing(airfield)
+    brain.handle("Tower, Colt 1, runway in sight", controller=Controller.TOWER)
+    base = _track_on(airfield, (inbound + 45) % 360, 2.0)
+    threshold = airfield.runway_threshold(airfield.active_runway)
+    blocker = _Unit("AI-1", threshold[0], threshold[1],
+                    airfield.elevation_ft + 10)
+    reply = brain.handle("Colt 1, turning base", base,
+                         controller=Controller.TOWER, traffic=[blocker])
+    assert "continue approach" in reply.lower()
+    assert not brain.pilots["Colt 1"].cleared_landing
+    assert brain.pilots["Colt 1"].awaiting_landing
 
 
 def test_line_up_held_when_runway_occupied(brain, airfield):

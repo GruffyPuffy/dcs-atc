@@ -1696,12 +1696,18 @@ def test_debrief_runway_seven_taxi_readback_is_correct(airfield, brain):
     assert "did not get" not in (r or "").lower()
 
 
-def test_debrief_turning_base_is_silent(airfield, brain):
-    # "turning base" was met with "say again" every leg of the pattern.
+def test_debrief_turning_base_requests_landing_clearance(airfield, brain):
+    # The MA SOP allows the lead to request landing clearance at base. The
+    # report is accepted when radar places the aircraft in the base-turn slice.
     sc = _scenario(airfield, brain).at_gate("East")
     sc.say("Tower, Colt 1, runway in sight", Controller.TOWER)
     sc.say("right overhead break, Colt 1", Controller.TOWER)
-    assert sc.say("turning base, Colt 1", Controller.TOWER) == ""
+    threshold = airfield.runway_threshold("25")
+    inbound = (airfield.runway_heading("25") + 180) % 360
+    sc.lat, sc.lon = _point_from(
+        threshold[0], threshold[1], (inbound + 45) % 360, 2.0)
+    reply = sc.say("turning base, Colt 1", Controller.TOWER)
+    assert "cleared to land" in reply.lower()
     assert sc.say("downwind, Colt 1", Controller.TOWER) == ""
 
 

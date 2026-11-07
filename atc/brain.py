@@ -3165,15 +3165,32 @@ class AtcBrain:
             # request and not a cue to skip "turning final" — stay silent.
             pilot.phase = Phase.LANDING
             return ""
-        # Pattern position reports (MA: optional, no reply). Pilots fly and
-        # report the circuit differently — "turning base", "on downwind",
-        # "upwind", "crosswind" — and none of them is a landing request or a
-        # cue to skip "on final". One family, so adding a variant later is a
-        # one-word change. "turning final" is included here (it must not fall
-        # through to the bare-"final" landing clearance below).
+        # The MA SOP allows the lead to request landing clearance with a
+        # position report in the base turn or on final. Only accept base-turn
+        # wording after the OHB clearance; with radar available, confirm the
+        # flight is in a pattern-turn slice before clearing it.
+        if re.search(r"\b(?:base(?:\s+(?:leg|turn))?|"
+                     r"turn(?:ing)?\s+(?:to\s+|onto\s+)?base)\b", low):
+            pilot.phase = Phase.LANDING
+            if (not pilot.break_cleared or pilot.cleared_landing
+                    or pilot.touch_and_go_pending):
+                return ""
+            if (track is not None and self.airfield is not None
+                    and not self.airfield.in_pattern_turn(
+                        track.lat, track.lon, self.runway)):
+                return self._challenge(callsign, self.tower_short, track)
+            pilot.pattern_flown = True
+            if self._runway_busy(traffic, exclude=speaker):
+                pilot.phase = Phase.INBOUND
+                pilot.awaiting_landing = True
+                pilot.landing_ready_announced = False
+                return self._say("continue_approach", callsign)
+            return self._issue_landing_clearance(callsign, pilot)
+        # Other pattern position reports (MA: optional, no reply). “Downwind”,
+        # “upwind”, “crosswind”, and “turning final” are status only; “turning
+        # final” must not fall through to the bare-final clearance below.
         if re.search(r"\b(up ?wind|cross ?wind|down ?wind|"
-                     r"base (?:leg|turn)?|turn(?:ing)?\s+(?:to\s+|onto\s+)?"
-                     r"base|turn(?:ing)?(?:\s+to|\s+onto)?\s+final)\b", low):
+                     r"turn(?:ing)?(?:\s+to|\s+onto)?\s+final)\b", low):
             pilot.phase = Phase.LANDING
             return ""
         # Readback of the takeoff clearance once already cleared ("right turn
