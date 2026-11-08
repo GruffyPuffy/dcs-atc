@@ -2759,9 +2759,17 @@ class AtcBrain:
             r"taxi to the ramp|request(?:ing)?\s+(?:parking|"
             r"taxi\s+to\s+(?:parking|the ramp)))\b", low)
         requested_parking = self._spoken_parking(low)
-        named_ramp_request = (requested_parking is not None and re.search(
-            r"\b(request(?:ing)?|ask(?:ing)? for|prefer|want|need|"
-            r"could we|can we|may we)\b", low))
+        # A request cue and a ramp name must be connected by ramp/taxi intent.
+        # Do not combine unrelated words across a sentence: e.g. "I want to
+        # report an F-16 on Ramp South" is an observation, not a taxi request.
+        named_ramp_intent = re.search(
+            r"\b(?:request(?:ing)?|ask(?:ing)? for|prefer|want|need|"
+            r"could we|can we|may we)\b"
+            r"(?:\s+(?:to|the|a|for|taxi|taxiing|park|parking|go|head|"
+            r"return|proceed|switch|change|at|in)){0,6}"
+            r"\s+\b(?:ramp|apron)\b", low)
+        named_ramp_request = (requested_parking is not None
+                              and named_ramp_intent is not None)
         amended_ramp_request = (pilot.parking_cleared
                                 and named_ramp_request)
         postlanding_vacated = bool(vacated_report and

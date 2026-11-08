@@ -1330,6 +1330,28 @@ def test_ground_taxi_to_parking_nearest_ramp(brain, airfield):
     assert "Ramp North" in reply
 
 
+def test_ground_ramp_report_does_not_reissue_taxi_clearance(brain):
+    """A report mentioning a ramp is not itself a request to taxi there."""
+    pilot = brain._pilot("Colt 1")
+    pilot.phase = Phase.TAXI
+    pilot.parking_cleared = True
+    pilot.last_clearance = (
+        "Colt 1, Ground, cleared taxi to Ramp South via Whiskey.")
+
+    reply = brain.handle(
+        "Ground, Colt 1, I just want to report an F-16 on Ramp South "
+        "with the air brakes out",
+        controller=Controller.GROUND)
+    assert "cleared taxi" not in reply.lower()
+
+    # An actual request to change the assigned ramp still works.
+    reply = brain.handle(
+        "Ground, Colt 1, I want to taxi to Ramp North",
+        controller=Controller.GROUND)
+    assert "cleared taxi" in reply.lower()
+    assert "Ramp North" in reply
+
+
 def test_parking_readback_does_not_reissue_clearance(brain, airfield):
     # The readback "cleared taxi to ramp north" contains "to ramp", which used
     # to re-match the parking request and re-issue the clearance forever.
