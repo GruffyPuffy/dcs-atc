@@ -4371,7 +4371,9 @@ class AtcBrain:
                 or pilot.rtb_requested
                 or pilot.pending_handoff_to == Controller.CONTROL.value):
             return self._say("stingray_training_not_ready", callsign)
-        if (track is None or self.airfield is None or self.bullseye is None
+        # Assignment uses the configured zone and Bullseye, not the pilot's
+        # current position. A live track is only needed to monitor completion.
+        if (self.airfield is None or self.bullseye is None
                 or not self.airfield.has_stingray_training_zone):
             return self._say("stingray_training_unavailable", callsign)
         active = next((task for task in reversed(pilot.stingray_training_tasks)
