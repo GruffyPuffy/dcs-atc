@@ -75,6 +75,8 @@
     "control_handoff_repeat": "{callsign}, {control}, contact {tower} on channel {tower_channel}.",
     "control_picture_challenge": "{callsign}, {agency}, negative. I show you {point} {bearing} for {range}, angels {actual_angels}. Confirm your position.",
     "control_picture_unclear": "{callsign}, {agency}, I could not decode that picture. Say the reference, bearing, and range again.",
+    "position_reference_prompt": "{callsign}, {agency}, say again with a better position reference.",
+    "position_radar_contact": "{callsign}, {agency}, radar contact. I show you Bulls {bearing} for {range}, Angels {angels}.",
     "control_climb": "{callsign}, {control}, radar contact, climb to Angels {angels}.",
     "control_too_early": "{callsign}, {control}, roger, remain below {altitude} until clear of the control zone via {gate}.",
     "control_descend": "{callsign}, {control}, descend to {descent_altitude}.",

@@ -3963,6 +3963,83 @@ def test_control_accepts_natural_exit_position_as_departure_checkin(brain,
     assert pilot.climb_issued
 
 
+def test_control_non_bra_position_report_replies_with_radar_bulls(brain):
+    from scenario import _bearing_range_point
+    brain.cockpit_bearing_offset_deg = 0
+    brain.set_bullseye(42.05, 42.40)
+    lat, lon = _bearing_range_point(42.05, 42.40, 55, 30)
+    track = _track(brain.airfield, lat, lon, alt_ft=8000)
+    pilot = brain._pilot("Colt 1")
+    pilot.phase = Phase.INBOUND
+
+    reply = brain.handle(
+        "Control, Colt 1, confirming 9 miles west from Kutaisi",
+        controller=Controller.CONTROL, track=track)
+
+    assert "radar contact" in reply.lower()
+    assert "i show you bulls 055 for 30" in reply.lower()
+    assert "angels 8" in reply.lower()
+    assert "negative" not in reply.lower()
+
+
+def test_vague_control_position_gets_one_prompt_then_radar_bulls(brain):
+    from scenario import _bearing_range_point
+    brain.cockpit_bearing_offset_deg = 0
+    brain.set_bullseye(42.05, 42.40)
+    lat, lon = _bearing_range_point(42.05, 42.40, 55, 30)
+    track = _track(brain.airfield, lat, lon, alt_ft=8000)
+    pilot = brain._pilot("Colt 1")
+    pilot.phase = Phase.INBOUND
+
+    first = brain.handle("Control, Colt 1, 17 miles out, Angels 6",
+                         controller=Controller.CONTROL, track=track)
+    assert "better position reference" in first.lower()
+    assert pilot.position_reference_prompt_pending
+
+    second = brain.handle("Control, Colt 1, 18 miles out, Angels 6",
+                          controller=Controller.CONTROL, track=track)
+    assert "i show you bulls 055 for 30" in second.lower()
+    assert "angels 8" in second.lower()
+    assert "better position reference" not in second.lower()
+    assert not pilot.position_reference_prompt_pending
+
+
+def test_stingray_non_bra_position_report_replies_with_radar_bulls(brain):
+    from scenario import _bearing_range_point
+    brain.cockpit_bearing_offset_deg = 0
+    brain.set_bullseye(42.05, 42.40)
+    lat, lon = _bearing_range_point(42.05, 42.40, 55, 30)
+    track = _track(brain.airfield, lat, lon, alt_ft=15000)
+    _stingray(brain)
+
+    reply = brain.handle("Stingray, Colt 1, over Kutaisi",
+                         controller=Controller.STINGRAY, track=track)
+
+    assert "radar contact" in reply.lower()
+    assert "i show you bulls 055 for 30" in reply.lower()
+    assert "angels 15" in reply.lower()
+
+
+def test_vague_stingray_position_gets_one_prompt_then_radar_bulls(brain):
+    from scenario import _bearing_range_point
+    brain.cockpit_bearing_offset_deg = 0
+    brain.set_bullseye(42.05, 42.40)
+    lat, lon = _bearing_range_point(42.05, 42.40, 55, 30)
+    track = _track(brain.airfield, lat, lon, alt_ft=15000)
+    pilot = _stingray(brain)
+
+    first = brain.handle("Stingray, Colt 1, 17 miles out, Angels 6",
+                         controller=Controller.STINGRAY, track=track)
+    assert "better position reference" in first.lower()
+    assert pilot.position_reference_prompt_pending
+
+    second = brain.handle("Stingray, Colt 1, 18 miles out, Angels 6",
+                          controller=Controller.STINGRAY, track=track)
+    assert "i show you bulls 055 for 30" in second.lower()
+    assert "angels 15" in second.lower()
+    assert not pilot.position_reference_prompt_pending
+
+
 # ---------- Stingray (AWACS) — Master Arms SOP, kneeboard page 3 ----------
 # The tactical leg: check in, give a bullseye picture, then RTB and hand back to
 # Control. Written against the recorded SOP phrases so the flow cannot regress.
@@ -4698,6 +4775,21 @@ def test_control_acknowledges_marking_report_when_radar_agrees(brain):
         "oh three, nine", controller=Controller.CONTROL, track=track)
     assert reply and "radar contact" in reply.lower()
     assert "negative" not in reply.lower()
+
+
+def test_control_bra_with_angels_keeps_vector_validation(brain):
+    from scenario import _bearing_range_point
+    brain.cockpit_bearing_offset_deg = 0
+    brain.set_bullseye(42.05, 42.40)
+    lat, lon = _bearing_range_point(42.05, 42.40, 200, 20)
+    track = _track(brain.airfield, lat, lon, alt_ft=15000)
+
+    reply = brain.handle(
+        "Control, Colt 1, marking Bulls 063 for 39, Angels 15",
+        controller=Controller.CONTROL, track=track)
+
+    assert "negative" in reply.lower()
+    assert "i show you bullseye 200 for 20" in reply.lower()
 
 
 def test_stt_mocking_bulls_is_normalized_to_marking_bull(brain):

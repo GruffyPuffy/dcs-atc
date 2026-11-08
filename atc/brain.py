@@ -87,6 +87,7 @@ RADIO_ANSWER_KEYS = frozenset({
     "stingray_angels_rounding",
     "stingray_angels_and_position",
     "control_picture_challenge", "control_picture_unclear",
+    "position_reference_prompt",
 })
 
 # Safety-priority traffic bypasses a pending ATC gap, while the SRS transmit
@@ -247,6 +248,12 @@ def _spoken_position_report(text: str) -> bool:
                      text)
         or re.search(rf"\b(?:{direction})\s+of\s+"
                      r"(?:kutaisi|kutasi|the airfield)\b", text))
+
+
+def _vague_position_report(text: str) -> bool:
+    """Recognize a distance-only position update that needs a reference."""
+    return bool(re.search(r"\b\d+\s*(?:miles?|nm)\s+out\b", text,
+                         re.IGNORECASE))
 
 
 def _normalize_picture_transcription(text: str) -> str:
@@ -695,6 +702,8 @@ class PilotState:
     # not simulate channel 3, but the SOP call still goes out on Control.
     stingray_handoff_announced: bool = False
     stingray_radar_contact_confirmed: bool = False
+    # One-shot coaching state for a position report without a usable reference.
+    position_reference_prompt_pending: bool = False
     # Per-flight, persistent task history for the live map and saved debrief.
     stingray_training_tasks: list[dict] = field(default_factory=list)
     altitude_warned: bool = False  # warned about busting the CTR ceiling
@@ -1461,6 +1470,28 @@ class AtcBrain:
         return self._say("position_challenge", callsign, agency=agency,
                          position=position)
 
+    def _position_report_reply(self, callsign: str, pilot: PilotState,
+                               agency: str, track: AircraftTrack | None,
+                               vague: bool = False) -> str:
+        """Coach once for a missing reference, then supply radar-derived BRA."""
+        if vague and not pilot.position_reference_prompt_pending:
+            pilot.position_reference_prompt_pending = True
+            return self._say("position_reference_prompt", callsign,
+                             agency=agency)
+
+        pilot.position_reference_prompt_pending = False
+        if track is None:
+            return self._say("directions_unknown", callsign, agency=agency)
+        if self.bullseye is None:
+            return self._say("control_contact" if agency == self.control_short
+                             else "stingray_radar_contact", callsign)
+        bearing, distance = bearing_distance(
+            self.bullseye[0], self.bullseye[1], track.lat, track.lon)
+        angels = str(int(track.alt_ft / 1000.0 + 0.5))
+        return self._say("position_radar_contact", callsign, agency=agency,
+                         bearing=self._format_cockpit_bearing(bearing),
+                         range=int(round(distance)), angels=angels)
+
     def _holding_point(self, track: AircraftTrack | None) -> str:
         """Name of the holding position nearest the aircraft, or ''."""
         if track is None or self.airfield is None:
@@ -2019,6 +2050,11 @@ class AtcBrain:
         low = _normalize_picture_transcription(low)
         low = _fold_spoken_figures(low)
         low = _fold_bullseye_figures(low)
+        # The position-reference prompt applies to the next transmission only.
+        # A clear position/BRA report or an unrelated call starts a fresh turn.
+        if (pilot.position_reference_prompt_pending
+                and not _vague_position_report(low)):
+            pilot.position_reference_prompt_pending = False
         # Keep the active expectation separate from last_clearance: the latter
         # remains useful for "say again" after a readback is complete. A short,
         # readback-shaped retry may continue an incomplete exchange; ordinary
@@ -2033,6 +2069,8 @@ class AtcBrain:
                 r"\b(readback|read back|copy|roger|wilco|cleared|clear|"
                 r"hold short|line up|lined up|after departure|turn|heading|"
                 r"descend|climb|angels|exit|via|runway|qnh|in use)\b", low)
+            if _vague_position_report(low):
+                readback_cue = None
             if not readback_cue or len(low.split()) > 18:
                 pilot.readback_pending = False
         if self._is_callsign_only_call(low, speaker, callsign):
@@ -3600,6 +3638,29 @@ class AtcBrain:
             return self._say(key, callsign, gate=gate,
                              heading=self._format_cockpit_bearing(heading),
                              turn=turn)
+        # A distance-only report is not a heading/climb readback even when the
+        # pilot also says an altitude. Coach its missing reference before the
+        # broad departure check-in keywords (notably "angels") can consume it.
+        if _vague_position_report(low):
+            return self._position_report_reply(
+                callsign, pilot, self.control_short, track, vague=True)
+        # An inbound pilot's location update is not a departure check-in just
+        # because it includes altitude. Entry-zone handoff logic above remains
+        # authoritative; other reports get the radar-derived Bulls position.
+        if (pilot.phase == Phase.INBOUND
+                and _spoken_position_report(low)):
+            return self._position_report_reply(
+                callsign, pilot, self.control_short, track)
+        # Explicit BRA calls always follow the vector comparison path, even
+        # when the pilot also reports Angels (which is otherwise a broad
+        # departure-check-in cue).
+        if re.search(r"\b(marking|bullseye|bull'?s?eye|bulls?)\b", low):
+            if (parse_marking_call(low) is not None
+                    or parse_bullseye_call(low) is not None
+                    or re.search(r"\b\d+\b|\b(?:" + _FIGURE_WORD + r")\b",
+                                 low)):
+                return self._control_picture_reply(callsign, low, track)
+            return self._say("roger", callsign, agency=self.control_short)
         # Departure check-in ("airborne, 5 miles east climbing" / "at 1500 ft"):
         # radar contact and a climb clearance. Only the *first* check-in gets the
         # climb — a readback or a follow-up level report ("climbing angels 15",
@@ -3632,6 +3693,9 @@ class AtcBrain:
                 # Stingray handoff once they reach their assigned Angels level
                 # (radar, not a second call) — stay silent, same as any readback
                 # that has a next instruction. Do not "roger".
+                if _spoken_position_report(low):
+                    return self._position_report_reply(
+                        callsign, pilot, self.control_short, track)
                 return ""
             return self._issue_departure_climb(callsign, pilot)
         # Readback of the "remain below 1500 ft until clear of the control
@@ -3698,20 +3762,12 @@ class AtcBrain:
         # check-in right AFTER the Tower handoff (debrief 2026-10-18 12:55:33):
         # once the join has been issued (cleared_inbound) a bare check-in must
         # not re-arm the join flow by flipping Landing -> Inbound.
-        # A useful direction report ("marking both", "075 for 41") is a
-        # fighter-to-fighter picture call, not a clearance request. Answering it
-        # with "say again" trains the pilot to stop making the call (debrief
-        # 2026-10-22: "marking bull, zero seven seven, four forty" was rejected
-        # twice). We do not simulate the picture; acknowledge it.
-        if re.search(r"\b(marking|bullseye|bull'?s?eye|bulls?)\b", low):
-            if (parse_marking_call(low) is not None
-                    or parse_bullseye_call(low) is not None
-                    or re.search(r"\b\d+\b|\b(?:" + _FIGURE_WORD + r")\b",
-                                 low)):
-                return self._control_picture_reply(callsign, low, track)
-            return self._say("roger", callsign, agency=self.control_short)
         if re.search(r"\b(picture|for \d{2,3}|radar contact)\b", low):
             return self._say("roger", callsign, agency=self.control_short)
+        if _spoken_position_report(low) or _vague_position_report(low):
+            return self._position_report_reply(
+                callsign, pilot, self.control_short, track,
+                vague=_vague_position_report(low))
         if re.search(r"\bcontrol\b(?!\s+zone)", low):
             if pilot.phase == Phase.AIRBORNE or pilot.cleared_inbound:
                 return self._say("control_ack", callsign,
@@ -3832,10 +3888,12 @@ class AtcBrain:
             return ""
 
         # Non-BRA position updates are ordinary tactical check-ins on Stingray.
-        # Acknowledge them as radar contact without trying to parse them as a
-        # Bullseye picture or changing the RTB/task state.
-        if _spoken_position_report(low):
-            return self._say("stingray_radar_contact", callsign)
+        # Give the radar-derived Bulls position as coaching; explicit BRA calls
+        # above retain their compare-and-correct behavior.
+        if _spoken_position_report(low) or _vague_position_report(low):
+            return self._position_report_reply(
+                callsign, pilot, self.stingray_short, track,
+                vague=_vague_position_report(low))
 
         # Bare check-in ("Stingray, Adder11") -> "Adder11, Stingray". An
         # air-start (or a pilot who never checked in elsewhere) is on the
