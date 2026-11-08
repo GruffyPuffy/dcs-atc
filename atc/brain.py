@@ -3394,23 +3394,17 @@ class AtcBrain:
             pilot.phase = Phase.TAXI
             pilot.pending_handoff_to = Controller.GROUND.value
             return self._say("contact_ground", callsign)
-        # Check the exit-side readback for coaching, but never make the later
-        # position-triggered Ground handoff depend on it.
+        # Once Tower has issued its vacate instruction, any pilot transmission
+        # is enough to hand off to Ground. Avoid readback correction here: the
+        # pilot is rolling and should switch/check in before reporting clear.
+        # Radar remains a fallback if the pilot does not transmit again.
         if (pilot.landing_exit_instruction_announced
                 and pilot.landing_exit_side
-                and re.search(r"\bvacate\b", low)):
-            said_side = re.search(r"\bvacate(?:\s+the)?\s+(left|right)\b",
-                                  low)
-            if (said_side is None
-                    or said_side.group(1) != pilot.landing_exit_side):
-                if not pilot.landing_exit_readback_feedback_sent:
-                    pilot.landing_exit_readback_feedback_sent = True
-                    return self._say("readback_incomplete", callsign,
-                                     agency=self.tower_short,
-                                     item="exit side")
-            else:
-                pilot.readback_fails = 0
-            return ""
+                and not pilot.landing_handoff_announced):
+            pilot.landing_handoff_announced = True
+            pilot.phase = Phase.TAXI
+            pilot.pending_handoff_to = Controller.GROUND.value
+            return self._say("contact_ground", callsign)
         # Readback of the landing clearance ("runway 25, cleared to land") once
         # already cleared. Master Arms (Landing Procedures §Comms): "after the
         # landing clearance (and your readback) there's generally no need for

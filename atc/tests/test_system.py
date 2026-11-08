@@ -492,23 +492,26 @@ def test_held_landing_is_recleared_when_runway_clears(airfield, brain):
 # ---------- Post-landing handoff to Ground (MA SOP) ----------
 
 def test_landed_flight_is_pushed_to_ground(airfield, brain):
-    # Tower gives exit guidance on rollout; Ground handoff waits until the
-    # aircraft leaves the runway zone.
+    # Tower gives exit guidance on rollout. Reading it back is the cue to
+    # switch to Ground, before the aircraft has physically vacated the runway.
     sc = _scenario(airfield, brain).on_final("25")
     r = sc.say("Tower, Colt 1, on final", Controller.TOWER)
     assert "cleared to land" in r.lower()
     assert sc.phase() == Phase.LANDING
-    # Approach: no instruction. Rollout is latched, but the flight stays with
-    # Tower until it is actually outside the runway zone.
+    # Approach: no instruction; rollout gives the exit instruction.
     assert brain.check_landing_handoff(
         "Colt 1", on_runway=False, rollout=False) is None
     assert brain.check_landing_handoff(
         "Colt 1", on_runway=True, rollout=True) is None
     assert sc.phase() == Phase.LANDING
-    call = brain.check_landing_handoff(
-        "Colt 1", on_runway=False, rollout=False)
-    assert call and "contact Ground" in call
+    pilot = brain.pilots["Colt 1"]
+    pilot.landing_exit_instruction_announced = True
+    pilot.landing_exit_side = "left"
+    call = sc.say("vacate left, Colt 1", Controller.TOWER)
+    assert "contact Ground" in call
     assert sc.phase() == Phase.TAXI
+    assert pilot.landing_handoff_announced is True
+    # Radar's later runway-clear transition must not send a duplicate push.
     assert brain.check_landing_handoff(
         "Colt 1", on_runway=False, rollout=False) is None
 
@@ -526,7 +529,7 @@ def test_runway_vacated_state_hands_to_ground_once(airfield, brain):
         "Colt 1", on_runway=False, rollout=False) is None
 
 
-def test_exit_readback_is_checked_but_not_required_for_handoff(airfield, brain):
+def test_exit_readback_hands_off_before_runway_is_vacated(airfield, brain):
     sc = _scenario(airfield, brain).on_final("25")
     brain.set_spawn_ramp("Colt 1", "Ramp South")
     sc.say("Tower, Colt 1, on final", Controller.TOWER)
@@ -534,11 +537,26 @@ def test_exit_readback_is_checked_but_not_required_for_handoff(airfield, brain):
     exit_call = brain.check_landing_handoff(
         "Colt 1", on_runway=True, rollout=True)
     assert exit_call and "vacate left" in exit_call.lower()
-    # No readback is sent. The live runway transition still completes handoff.
-    handoff = brain.check_landing_handoff(
-        "Colt 1", on_runway=False, rollout=False)
+    # The correct readback is enough to push to Ground while still on runway.
+    handoff = sc.say("vacate left, Colt 1", Controller.TOWER)
     assert handoff and "contact Ground" in handoff
     assert sc.phase() == Phase.TAXI
+    assert brain.check_landing_handoff(
+        "Colt 1", on_runway=False, rollout=False) is None
+
+
+def test_wrong_exit_readback_still_hands_off_to_ground(airfield, brain):
+    sc = _scenario(airfield, brain).on_final("25")
+    brain.set_spawn_ramp("Colt 1", "Ramp South")
+    sc.say("Tower, Colt 1, on final", Controller.TOWER)
+    exit_call = brain.check_landing_handoff(
+        "Colt 1", on_runway=True, rollout=True)
+    assert exit_call and "vacate left" in exit_call.lower()
+
+    reply = sc.say("vacate right, Colt 1", Controller.TOWER)
+    assert "contact Ground" in reply
+    assert sc.phase() == Phase.TAXI
+    assert brain.pilots["Colt 1"].landing_handoff_announced is True
 
 
 def test_landing_handoff_rearms_on_next_approach(airfield, brain):
