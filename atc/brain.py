@@ -31,7 +31,8 @@ import topgun
 from atis import wind_speed_kt
 from callsigns import CallsignRegistry, flight_name
 from ctr import AircraftTrack, CtrEvent
-from airspace import GATE_ARC_HALF_ANGLE_DEG, bearing_distance
+from airspace import (DEPARTURE_CLIMB_RADAR_FALLBACK_MARGIN_NM,
+                      GATE_ARC_HALF_ANGLE_DEG, bearing_distance)
 from state_client import slot_callsign
 
 TOWER = "Kutaisi Tower"
@@ -225,6 +226,27 @@ _SPOKEN_ALTITUDE_REPORT_RE = re.compile(
     rf"\bat\s+(?:\d+|{_SPOKEN_ALTITUDE_WORD}"
     rf"(?:\s+{_SPOKEN_ALTITUDE_WORD})*)\s+(?:feet|ft)\b",
     re.IGNORECASE)
+
+
+def _spoken_position_report(text: str) -> bool:
+    """Recognize concise non-BRA position reports without global `at` rules."""
+    if re.search(r"\b(marking|bull'?s?eye|bulls?)\b", text):
+        return False
+    location = (r"(?:kutaisi|kutasi|airfield|(?:exit|gate)\s+"
+                r"(?:north|south|east|west|northeast|northwest|"
+                r"southeast|southwest))")
+    direction = (r"north|south|east|west|northeast|northwest|"
+                 r"southeast|southwest")
+    return bool(
+        re.search(rf"\b(?:at|over|near|past|passed|passing)\b.*\b{location}\b",
+                  text)
+        or re.search(rf"\b{location}\b.*\b(?:at|over|near|past|passed|passing)\b",
+                     text)
+        or re.search(rf"\b\d+\s*(?:miles?|nm)\s+(?:{direction})\s+"
+                     r"(?:of|from)\s+(?:kutaisi|kutasi|the airfield)\b",
+                     text)
+        or re.search(rf"\b(?:{direction})\s+of\s+"
+                     r"(?:kutaisi|kutasi|the airfield)\b", text))
 
 
 def _normalize_picture_transcription(text: str) -> str:
@@ -3586,7 +3608,9 @@ class AtcBrain:
         if (re.search(r"\b(airborne|climbing|climb|departing|departed|level|"
                       r"angels|on the way|at \d+|checking in|with you|"
                       r"ready to climb)\b", low)
-                or _SPOKEN_ALTITUDE_REPORT_RE.search(low)):
+                or _SPOKEN_ALTITUDE_REPORT_RE.search(low)
+                or (pilot.phase == Phase.AIRBORNE
+                    and _spoken_position_report(low))):
             # A departure stays a departure: it must NOT be flipped to Inbound
             # here, or Control would treat the outbound leg as an arrival
             # (debrief 2026-10-22: the post-takeoff check-in moved the pilot
@@ -3806,6 +3830,12 @@ class AtcBrain:
         if re.search(r"\b(copies|copy(?: that)?|roger(?: that)?|wilco)\b",
                      low):
             return ""
+
+        # Non-BRA position updates are ordinary tactical check-ins on Stingray.
+        # Acknowledge them as radar contact without trying to parse them as a
+        # Bullseye picture or changing the RTB/task state.
+        if _spoken_position_report(low):
+            return self._say("stingray_radar_contact", callsign)
 
         # Bare check-in ("Stingray, Adder11") -> "Adder11, Stingray". An
         # air-start (or a pilot who never checked in elsewhere) is on the
@@ -4358,19 +4388,42 @@ class AtcBrain:
 
     def check_departure_climb(self, callsign: str,
                               track: AircraftTrack | None) -> str | None:
-        """Climb a departure once it is clear of the control zone.
+        """Climb a departure after check-in or a conservative radar fallback.
 
         Control must have received the pilot's check-in before issuing a climb.
-        If the pilot checks in inside the CTR, Control tells them to remain
-        below the ceiling; the climb then goes out automatically once clear.
-        Fires once.
+        If that call was missed, radar provides a backstop only after the
+        aircraft has passed an exit arc or is beyond every configured exit arc
+        by a margin. Merely leaving the CTR is not enough: that preserves the
+        normal Tower/Control handoff window. Fires once.
         """
         pilot = self._pilot(callsign)
-        if (pilot.phase != Phase.AIRBORNE or not pilot.control_checkin_received
-                or pilot.climb_issued or track is None):
+        if (pilot.phase != Phase.AIRBORNE or pilot.climb_issued or track is None
+                or self.airfield is None):
             return None
-        if self._inside_ctr(track):
+        if pilot.control_checkin_received:
+            if self._inside_ctr(track):
+                return None
+            return self._issue_departure_climb(callsign, pilot)
+
+        # A passed exit arc is the natural departure boundary. If the pilot
+        # misses or uses a nonstandard exit, wait until well beyond the farthest
+        # configured departure arc before inferring the missed check-in.
+        passed_exit = any(
+            self.airfield.gate_arc_passed_outbound(
+                track.lat, track.lon, gate)
+            for gate in self.airfield.departure_gates(self.runway))
+        gate_radii = [self.airfield.ctr.distance_nm(*self.airfield.gates[gate])
+                      for gate in self.airfield.departure_gates(self.runway)
+                      if gate in self.airfield.gates]
+        fallback_radius = (max(gate_radii) +
+                           DEPARTURE_CLIMB_RADAR_FALLBACK_MARGIN_NM
+                           if gate_radii else float("inf"))
+        if not passed_exit and self.airfield.ctr.distance_nm(
+                track.lat, track.lon) < fallback_radius:
             return None
+        # Mark the inferred check-in so the ordinary assigned-Angels Stingray
+        # handoff can still follow this radar-issued climb.
+        pilot.control_checkin_received = True
         return self._issue_departure_climb(callsign, pilot)
 
     def _issue_departure_climb(self, callsign: str,

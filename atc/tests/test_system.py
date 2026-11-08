@@ -125,15 +125,55 @@ def test_control_climbs_departure_on_radar_once_clear_of_ctr(airfield, brain):
     assert not brain.pilots["Colt 1"].climb_issued
     # Still inside the CTR: no climb yet.
     assert brain.check_departure_climb("Colt 1", sc._track()) is None
-    # Now clear of the CTR: Control issues the climb after the check-in.
+    # Now clear of the CTR: a checked-in flight gets the climb immediately.
     sc.at_gate("East").set_alt(airfield.elevation_ft + 1500)
     call = brain.check_departure_climb("Colt 1", sc._track())
     target = brain.pilots["Colt 1"].departure_climb_angels
     assert target == 12
     assert call and f"climb to Angels {target}" in call
     assert brain.pilots["Colt 1"].climb_issued
-    # Fires once.
     assert brain.check_departure_climb("Colt 1", sc._track()) is None
+
+
+def test_missed_control_checkin_gets_climb_only_at_departure_exit(airfield,
+                                                                  brain):
+    sc = _scenario(airfield, brain).at_threshold("25")
+    sc.say("Tower, Colt 1, ready for departure", Controller.TOWER)
+    sc.say("Line up and wait 25, Colt 1", Controller.TOWER)
+    sc.say("Tower, Colt 1, airborne", Controller.TOWER)
+    _pass_departure_exit(sc, brain, airfield)
+
+    # Leaving the CTR is not enough to infer a missed check-in.
+    sc.at_runway("25", along_nm=2.0).set_alt(airfield.elevation_ft + 1500)
+    assert brain.check_departure_climb("Colt 1", sc._track()) is None
+    assert not brain.pilots["Colt 1"].climb_issued
+
+    # The actual outbound exit arc is a safe fallback point if the check-in
+    # was missed. It must still fire only once and arm the later Stingray push.
+    sc.at_gate("West").set_alt(airfield.elevation_ft + 1500)
+    call = brain.check_departure_climb("Colt 1", sc._track())
+    assert call and "climb to Angels" in call
+    assert brain.pilots["Colt 1"].control_checkin_received
+    assert brain.pilots["Colt 1"].climb_issued
+    assert brain.check_departure_climb("Colt 1", sc._track()) is None
+
+
+def test_missed_wrong_exit_checkin_uses_far_radar_radius(airfield, brain):
+    sc = _scenario(airfield, brain).at_threshold("25")
+    sc.say("Tower, Colt 1, ready for departure", Controller.TOWER)
+    sc.say("Line up and wait 25, Colt 1", Controller.TOWER)
+    sc.say("Tower, Colt 1, airborne", Controller.TOWER)
+    _pass_departure_exit(sc, brain, airfield)
+    sc.at_runway("25", along_nm=2.0).set_alt(airfield.elevation_ft + 1500)
+    assert brain.check_departure_climb("Colt 1", sc._track()) is None
+
+    # Off the configured exit corridors, wait until beyond the farthest exit
+    # arc plus the configured margin (not just outside the CTR).
+    sc.lat, sc.lon = _point_from(airfield.ctr.center_lat,
+                                 airfield.ctr.center_lon, 200.0, 12.5)
+    call = brain.check_departure_climb("Colt 1", sc._track())
+    assert call and "climb to Angels" in call
+    assert brain.pilots["Colt 1"].control_checkin_received
 
 
 def test_stingray_handoff_once_at_assigned_angels(airfield, brain):

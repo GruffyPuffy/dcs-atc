@@ -465,7 +465,8 @@ def _overlay_payload(airfield: Airfield) -> dict | None:
     }
 
 
-def _airspace_payload(airfield: Airfield, basemap: str | None = None) -> dict:
+def _airspace_payload(airfield: Airfield, basemap: str | None = None,
+                      runway: str | None = None) -> dict:
     """Static geometry for the map (CTR, gates, runways, taxi, parking)."""
     return {
         "name": airfield.name,
@@ -502,6 +503,8 @@ def _airspace_payload(airfield: Airfield, basemap: str | None = None) -> dict:
             "runway": airfield.runway_corridor_geometry(),
             "lineup": airfield.lineup_zone_geometry(),
             "gate_arcs": airfield.gate_arc_geometry(),
+            "departure_climb_fallback": (
+                airfield.departure_climb_fallback_geometry(runway)),
             "arrival_handoff_zones": airfield.arrival_handoff_zone_geometry(),
             "pattern": airfield.pattern_zones_geometry(),
         },
@@ -1221,7 +1224,8 @@ class MapService:
                     callsign, shown_tracks.path(callsign),
                     shown_tracks.comms(callsign)))
         self._maybe_save_tracks()  # keep the debrief file reasonably fresh
-        airfield = _airspace_payload(self.airfield, self.basemap)
+        airfield = _airspace_payload(self.airfield, self.basemap,
+                                     self.brain.runway)
         airfield["tower_pos"] = self._live_tower_pos()
         airfield["wind"] = _wind_payload(self.brain)
         airfield["topgun"] = {"radius_m": BUST_RADIUS_M}

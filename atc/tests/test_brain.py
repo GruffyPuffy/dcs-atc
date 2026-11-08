@@ -3931,17 +3931,33 @@ def test_early_control_request_does_not_bypass_exit_arc(brain, airfield):
     assert pilot.last_controller == Controller.TOWER.value
 
 
-def test_control_does_not_climb_until_departure_checks_in(brain, airfield):
+def test_control_radar_fallback_waits_until_departure_exit(brain, airfield):
     pilot = brain._pilot("Colt 1")
     pilot.phase = Phase.AIRBORNE
     pilot.departure_handoff_announced = True
-    track = _track(airfield, *airfield.gates["West"], alt_ft=airfield.elevation_ft + 1200)
+    track = _track(airfield, *airfield.runway_threshold("25"),
+                   alt_ft=airfield.elevation_ft + 1200)
     assert brain.check_departure_climb("Colt 1", track) is None
     assert not pilot.climb_issued
 
-    reply = brain.handle("Control, Colt 1, at 1200 feet", track,
-                         controller=Controller.CONTROL)
-    assert "radar contact" in reply
+    track = _track(airfield, *airfield.gates["West"],
+                   alt_ft=airfield.elevation_ft + 1200)
+    reply = brain.check_departure_climb("Colt 1", track)
+    assert "climb to Angels" in reply
+    assert pilot.control_checkin_received and pilot.climb_issued
+
+
+def test_control_accepts_natural_exit_position_as_departure_checkin(brain,
+                                                                    airfield):
+    pilot = brain._pilot("Colt 1")
+    pilot.phase = Phase.AIRBORNE
+    pilot.exit_gate = "West"
+    track = _track(airfield, *airfield.gates["West"],
+                   alt_ft=airfield.elevation_ft + 1500)
+    reply = brain.handle(
+        "Colt 1, just passed exit west on Kutaisi", track,
+        controller=Controller.CONTROL, speaker="Caveman")
+    assert "radar contact" in reply.lower()
     assert "climb to Angels" in reply
     assert pilot.control_checkin_received
     assert pilot.climb_issued
@@ -3964,6 +3980,18 @@ def test_stingray_checkin_is_acknowledged(brain):
     reply = brain.handle("Stingray, Colt 1", controller=Controller.STINGRAY)
     assert reply and "Stingray" in reply
     assert "say again" not in reply.lower()
+
+
+def test_stingray_accepts_natural_position_reports(brain, airfield):
+    pilot = _stingray(brain)
+    track = _track(airfield, *airfield.gates["West"], alt_ft=15000)
+    for text in ("Colt 1, at Exit West", "Colt 1, over Kutaisi",
+                 "Colt 1, 10 miles north of Kutaisi"):
+        reply = brain.handle(text, track, controller=Controller.STINGRAY,
+                             speaker="Caveman")
+        assert "radar contact" in reply.lower(), text
+        assert pilot.phase == Phase.STINGRAY
+        assert not pilot.rtb_requested
 
 
 def test_cockpit_bearing_formatter_wraps_rounded_360_to_000(brain):

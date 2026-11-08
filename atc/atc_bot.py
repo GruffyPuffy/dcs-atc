@@ -1200,8 +1200,8 @@ def main() -> None:
                               callsign=callsign,
                               radio_policy=RADIO_ANSWER_POLICY[0],
                               radio_wait=RADIO_ANSWER_POLICY[1])
-                    # Control may issue a climb only after the pilot checks in.
-                    # If still inside the CTR, wait until the aircraft clears it.
+                    # Control issues the climb after a check-in, or as a
+                    # conservative radar fallback at/beyond the departure exit.
                     with lock:
                         climb = brain.check_departure_climb(callsign, tr)
                     if climb:

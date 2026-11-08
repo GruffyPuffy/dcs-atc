@@ -88,6 +88,7 @@ def _destination(lat: float, lon: float, bearing_deg: float,
 
 
 GATE_ARC_HALF_ANGLE_DEG = 18.0
+DEPARTURE_CLIMB_RADAR_FALLBACK_MARGIN_NM = 2.0
 
 
 @dataclass
@@ -526,6 +527,25 @@ class Airfield:
                 "end_deg": (bearing + half_angle_deg) % 360,
             })
         return result
+
+    def departure_climb_fallback_geometry(
+            self, runway: str | None = None,
+            margin_nm: float = DEPARTURE_CLIMB_RADAR_FALLBACK_MARGIN_NM
+            ) -> dict | None:
+        """Outer radar-climb fallback circle beyond all departure exit arcs."""
+        radii = [bearing_distance(
+            self.ctr.center_lat, self.ctr.center_lon,
+            self.gates[gate][0], self.gates[gate][1])[1]
+            for gate in self.departure_gates(runway)
+            if gate in self.gates]
+        if not radii:
+            return None
+        return {
+            "center": [self.ctr.center_lat, self.ctr.center_lon],
+            "radius_nm": max(radii) + margin_nm,
+            "margin_nm": margin_nm,
+            "label": "Missed check-in climb fallback",
+        }
 
     def gate_arc_position(self, lat: float, lon: float, gate: str
                           ) -> tuple[float, float, float] | None:

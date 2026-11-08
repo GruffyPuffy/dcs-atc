@@ -309,6 +309,17 @@ function drawAirspace(af) {
     L.polyline([c, arc[arc.length - 1]], { ...style, weight: 1, opacity: 0.45 })
       .addTo(staticLayer);
   }
+  const climbFallback = checks.departure_climb_fallback;
+  if (climbFallback) {
+    L.circle(climbFallback.center, {
+      radius: climbFallback.radius_nm * 1852,
+      color: '#d29922', weight: 2, dashArray: '8 5',
+      fillColor: '#d29922', fillOpacity: 0.035,
+    }).bindTooltip(`${climbFallback.label} · ${climbFallback.radius_nm.toFixed(1)} NM `
+      + `from airfield reference (${climbFallback.margin_nm.toFixed(1)} NM `
+      + `beyond the farthest departure exit arc)`)
+      .addTo(staticLayer);
+  }
   // Show the configured lead-in sectors as a faint reference while idle. The
   // currently assigned inbound sector is highlighted in the live layer below.
   for (const zone of checks.arrival_handoff_zones || []) {
