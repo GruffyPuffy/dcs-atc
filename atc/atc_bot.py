@@ -212,7 +212,7 @@ def main() -> None:
     parser.add_argument("--tx-volume", type=float, default=0.6,
                         help="output volume for the ATC voices (TTS), 1.0 = "
                              "unchanged; e.g. 0.6 to quieten loud voices")
-    parser.add_argument("--speech-rate", type=float, default=0.9,
+    parser.add_argument("--speech-rate", type=float, default=0.7,
                         help="Piper length_scale; lower = faster (0.6-1.0)")
     parser.add_argument("--state-host", default="127.0.0.1")
     parser.add_argument("--state-port", type=int, default=10309)

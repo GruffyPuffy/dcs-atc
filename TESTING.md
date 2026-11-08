@@ -64,10 +64,9 @@ check the log together.
 ## 3. Tower — departure (Radio 1, 270.000)
 
 - [ ] **Ready for departure** → *"line up and wait runway 25"*
-- [ ] **Line-up readback** → *"cleared for takeoff runway 25"* (a **right**
-      turnout is spoken — *"right turnout, cleared for takeoff"*; a left turnout
-      is the default and is not; a straight-out departure gets *"fly runway
-      heading"*)
+- [ ] **Line-up readback** → *"cleared for takeoff runway 25"* (the assigned
+      left or right turnout is spoken; a straight-out departure gets
+      *"fly runway heading"*)
 - [ ] **Occupied runway** (optional) — park something on the runway, then ask
       → *"hold short, runway 25 is occupied"*
 

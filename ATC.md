@@ -206,7 +206,7 @@ channel.
 | "Tower, Colt 1, at runway 25, ready for departure" | **departure** (after taxi/holding) | "Colt 1, Tower, line up and wait runway 25." |
 | "Tower, Colt 1, airborne" / "…wheels up" / "…off the ground" | **departure report** (after takeoff) | "Colt 1, Tower, contact Control on channel 8." ("wheels up" is the MA call; "wheels up on the go" is a touch-and-go report and is **not** matched — see §7) |
 | "Tower, Colt 1, ready for departure" (**while an arrival**) | **wrong call** | "Colt 1, Tower, negative, report runway in sight for landing." (never clears a takeoff for a pilot who is inbound/landing) |
-| "Line up and wait 25, Colt 1" | **readback** | *(silent)* — then, once the aircraft is actually **lined up** (at the threshold, pointing down the runway, stationary), the monitor issues "cleared for takeoff runway 25" unprompted. The clearance does **not** follow the readback alone: the pilot has only acknowledged the instruction, they may still be taxiing on. (A right turnout is spoken, a left turnout is the default and is not, and a straight-out departure gets "fly runway heading".) |
+| "Line up and wait 25, Colt 1" | **readback** | *(silent)* — then, once the aircraft is actually **lined up** (at the threshold, pointing down the runway, stationary), the monitor issues the takeoff clearance unprompted. The clearance does **not** follow the readback alone: the pilot has only acknowledged the instruction, they may still be taxiing on. The assigned left or right turnout is spoken; a straight-out departure gets "fly runway heading". |
 | "Control, Colt 1, at 1500 ft" | **departure check-in** | "Colt 1, Control, radar contact, climb to the assigned Angels level (12–18)." |
 | "Climbing to Angels [assigned level], Colt 1" | **climb readback** | *(silent)* — then, once at that level, "Colt 1, Control, contact Stingray on channel 3." (Stingray is a real controller — see §11) |
 | "Kutaisi Control, Colt 1, inbound 35 miles north at Angels 12" | **inbound** | "Colt 1, Control, radar contact, turn right heading 150 to join via Entry East." (heading **and turn** computed from the live position; a pilot already pointing at the gate gets "fly heading 150" instead; entry is the best/straight-in gate for runway 25) |
@@ -973,8 +973,8 @@ Tactical 265.00) — the SOP's "contact Stingray on channel 3".
   acknowledgement — no "readback correct"). The **turnout** follows the
   departure exit gate (the same gate the Ground clearance named): a **right**
   turnout is spoken (*"right turnout, cleared for takeoff runway 25"*), a
-  **left** turnout is the default and is not spoken, and a straight-out
-  departure is told *"fly runway heading"*. The exit is chosen once, at "ready
+  **left or right** turnout is spoken, and a straight-out departure is told
+  *"fly runway heading"*. The exit is chosen once, at "ready
   to copy clearance", so Ground's exit and Tower's turnout always agree.
 - "runway in sight" / "overhead break" / "initial" → overhead-break clearance.
   A correct readback is **silent** (same as takeoff/landing).

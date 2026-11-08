@@ -186,6 +186,10 @@ _NUMBER_WORDS = {**_ONES, **_TEENS, **_TENS}
 _READBACK_NUMBER_ALIASES = {
     "wun": "one", "won": "one",
     "too": "two", "to": "two",
+    # Whisper can render spoken "two" as the letter Q in a runway readback
+    # ("Q5" for runway 25). Applied only by the context-gated readback decoder;
+    # "QNH" remains its own token and its pressure digits are unaffected.
+    "q": "two",
     "tree": "three", "free": "three",
     "fower": "four", "for": "four",
     "fife": "five",
@@ -2765,7 +2769,7 @@ class AtcBrain:
         # pilot gets "say again", stalling the flow at the very first exchange.
         if pilot.phase == Phase.IDLE and pilot.info_issued and re.search(
                 r"\b(runway|in use|qnh|q\.?n\.?h\.?)\b", low):
-            spoken = self._numbers(self.callsigns.strip(low))
+            spoken = self._readback_numbers(self.callsigns.strip(low))
             if not self._number_read_back(self.runway, spoken):
                 pilot.ground_runway_readback_fails += 1
                 if pilot.ground_runway_readback_fails >= 2:
@@ -3322,16 +3326,23 @@ class AtcBrain:
         # position report in the base turn or on final. Only accept base-turn
         # wording after the OHB clearance; with radar available, confirm the
         # flight is in a pattern-turn slice before clearing it.
+        turning_final_report = bool(re.search(
+            r"\bturn(?:ing)?(?:\s+to|\s+onto)?\s+final\b", low))
         if re.search(r"\b(?:base(?:\s+(?:leg|turn))?|"
-                     r"turn(?:ing)?\s+(?:to\s+|onto\s+)?base)\b", low):
+                     r"turn(?:ing)?\s+(?:to\s+|onto\s+)?base)\b", low) \
+                or turning_final_report:
             pilot.phase = Phase.LANDING
             if (not pilot.break_cleared or pilot.cleared_landing
                     or pilot.touch_and_go_pending):
                 return ""
-            if (track is not None and self.airfield is not None
-                    and not self.airfield.in_pattern_turn(
-                        track.lat, track.lon, self.runway)):
-                return self._challenge(callsign, self.tower_short, track)
+            if track is not None and self.airfield is not None:
+                in_turn = self.airfield.in_pattern_turn(
+                    track.lat, track.lon, self.runway)
+                established_final = (turning_final_report
+                    and self.airfield.is_established_final(
+                        track.lat, track.lon, track.heading, self.runway))
+                if not in_turn and not established_final:
+                    return self._challenge(callsign, self.tower_short, track)
             pilot.pattern_flown = True
             if self._runway_busy(traffic, exclude=speaker):
                 pilot.phase = Phase.INBOUND
@@ -3340,10 +3351,9 @@ class AtcBrain:
                 return self._say("continue_approach", callsign)
             return self._issue_landing_clearance(callsign, pilot)
         # Other pattern position reports (MA: optional, no reply). “Downwind”,
-        # “upwind”, “crosswind”, and “turning final” are status only; “turning
-        # final” must not fall through to the bare-final clearance below.
-        if re.search(r"\b(up ?wind|cross ?wind|down ?wind|"
-                     r"turn(?:ing)?(?:\s+to|\s+onto)?\s+final)\b", low):
+        # “upwind”, and “crosswind” are status only. “Turning final” was
+        # handled above as a position report and landing-clearance request.
+        if re.search(r"\b(up ?wind|cross ?wind|down ?wind)\b", low):
             pilot.phase = Phase.LANDING
             return ""
         # Readback of the takeoff clearance once already cleared ("right turn
@@ -3439,7 +3449,8 @@ class AtcBrain:
                                                       self.runway) \
                     and not self.airfield.is_established_final(
                         track.lat, track.lon, track.heading, self.runway):
-                return self._challenge(callsign, self.tower_short, track)
+                return self._say("tower_early_final_challenge", callsign,
+                                 agency=self.tower_short)
             # Cross-check: only clear to land if actually on final.
             if track is not None and self.airfield is not None \
                     and not self.airfield.is_on_final(track.lat, track.lon,
@@ -3913,8 +3924,13 @@ class AtcBrain:
         # matched any call merely containing "stingray"/"awacs", so every
         # unrecognised call ("Stingray, Colt 1, picture") got a false
         # "Colt 1, Stingray." ack instead of falling through to its own
-        # handling. A call that carries content is not a check-in.
-        if self._is_bare_checkin(low, ""):
+        # handling. A call that carries content is not a check-in. Repair two
+        # debriefed STT renderings only for this bare-check-in check: "staying
+        # ready" and "Dingray" for "Stingray".
+        checkin_text = re.sub(
+            r"\b(?:staying\s+ready|dingray)\b", "stingray", low,
+            flags=re.IGNORECASE)
+        if self._is_bare_checkin(checkin_text, ""):
             if pilot.phase in (Phase.IDLE, Phase.AIRBORNE):
                 pilot.phase = Phase.STINGRAY
             return self._say("stingray_ack", callsign)
@@ -4204,9 +4220,8 @@ class AtcBrain:
     def _takeoff_turnout(self, pilot: PilotState) -> str:
         """The turnout clause for the takeoff clearance: "left"/"right"/"straight".
 
-        Real ATC (per MA): a **left** turnout is the default and is not spoken;
-        a **right** turnout is called. A departure that flies the runway heading
-        to its exit is told "fly runway heading".
+        The turnout follows the assigned exit: left and right turns are both
+        stated. A straight-out departure is told "fly runway heading".
         """
         if self.airfield is None:
             return "straight"
@@ -4222,8 +4237,8 @@ class AtcBrain:
         """The takeoff clearance, with the turnout following the departure exit.
 
         Master Arms: "<callsign>, right turnout, cleared for take-off runway 25".
-        Only a right turnout is spoken — a left turnout is the default and gets
-        no clause; a straight-out departure is told "fly runway heading".
+        State the assigned left or right turnout; a straight-out departure is
+        told "fly runway heading".
         """
         # A pilot can land, taxi, and depart again in the same DCS spawn. The
         # Tower->Control handoff is one-shot per departure, not per spawn.

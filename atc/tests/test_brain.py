@@ -336,8 +336,7 @@ def test_tower_break_clearance_readback_tolerates_stt_brake(brain):
     assert reply == ""
 
 
-def test_tower_turning_final_is_silent(brain):
-    brain.handle("Tower, Colt 1, runway in sight", controller=Controller.TOWER)
+def test_tower_turning_final_without_break_clearance_stays_silent(brain):
     assert brain.handle("Colt 1, turning final",
                         controller=Controller.TOWER) == ""
     assert brain.pilots["Colt 1"].phase == Phase.LANDING
@@ -373,15 +372,14 @@ def test_tower_pattern_calls_are_optional_before_final(brain):
     assert "cleared to land" in reply
 
 
-def test_tower_pattern_then_final(brain):
+def test_tower_turning_final_requests_landing_clearance_after_break(brain):
     brain.handle("Tower, Colt 1, runway in sight", controller=Controller.TOWER)
     brain.handle("cleared for left overhead break runway 25, Colt 1",
                  controller=Controller.TOWER)
     assert brain.handle("Colt 1, in the break",
                         controller=Controller.TOWER) == ""
-    assert brain.handle("Colt 1, turning final",
-                        controller=Controller.TOWER) == ""
-    reply = brain.handle("Colt 1, on final", controller=Controller.TOWER)
+    reply = brain.handle("Colt 1, turning final",
+                         controller=Controller.TOWER)
     assert "cleared to land" in reply
 
 
@@ -455,6 +453,34 @@ def test_ground_checks_runway_in_no_atis_readback(brain):
     corrected = brain.handle("Runway 07 in use, QNH 2992, Colt 1",
                              controller=Controller.GROUND)
     assert "after departure" in corrected.lower()
+
+
+def test_ground_runway_25_readback_accepts_q5_stt_and_preserves_qnh(brain):
+    # Whisper may transcribe spoken "two five" as "Q5". QNH is a separate
+    # value and must remain intact in the same readback.
+    brain.handle("Ground, Colt 1, two-ship Hornets on Ramp South",
+                 controller=Controller.GROUND)
+
+    reply = brain.handle("Q5 in use, QNH 2996, Colt 1",
+                         controller=Controller.GROUND)
+
+    assert "readback correct" in reply.lower()
+    assert "ready for clearance" in reply.lower()
+    assert "25" in AtcBrain._readback_numbers("Q5 in use, QNH 2996")
+    assert "2996" in AtcBrain._readback_numbers("Q5 in use, QNH 2996")
+
+
+def test_ground_q5_readback_does_not_match_runway_07(brain):
+    brain.set_runway("07")
+    brain.handle("Ground, Colt 1, two-ship Hornets on Ramp South",
+                 controller=Controller.GROUND)
+
+    reply = brain.handle("Q5 in use, QNH 2996, Colt 1",
+                         controller=Controller.GROUND)
+
+    assert "negative" in reply.lower()
+    assert "runway 07 in use" in reply.lower()
+    assert "readback correct" not in reply.lower()
 
 
 def test_ground_waits_for_info_readback_before_clearance(brain):
@@ -931,8 +957,8 @@ def test_tower_lineup_readback_clears_takeoff(brain):
 
 
 def test_takeoff_turnout_follows_the_exit_gate(brain):
-    # Only a RIGHT turnout is spoken (MA: a left turnout is the default and is
-    # not called). A straight-out departure is told "fly runway heading".
+    # The assigned left/right turnout is spoken. A straight-out departure is
+    # told "fly runway heading".
     from brain import PilotState
     pilot = PilotState(callsign="Colt 1")
     # Kutaisi 25: Exit East is a right turn, Exit West is straight.
@@ -944,14 +970,14 @@ def test_takeoff_turnout_follows_the_exit_gate(brain):
     assert "turnout" not in reply
 
 
-def test_left_turnout_is_not_spoken(brain):
-    """A left turnout is the default, so it is never called (MA practice)."""
+def test_left_turnout_is_spoken(brain):
+    """The takeoff clearance states the assigned left turnout."""
     from brain import PilotState
     pilot = PilotState(callsign="Colt 1")
     # Kutaisi 25: Exit South is a left turn.
     pilot.exit_gate = "Exit South"
     reply = brain._takeoff_clearance("Colt 1", pilot)
-    assert "turnout" not in reply
+    assert "left turnout" in reply
     assert "fly runway heading" not in reply
     assert "cleared for takeoff" in reply
 
@@ -970,7 +996,7 @@ def test_takeoff_turnout_matches_the_ground_clearance_turn(brain, airfield):
     if expected == "right":
         assert "right turnout" in takeoff
     elif expected == "left":
-        assert "turnout" not in takeoff
+        assert "left turnout" in takeoff
         assert "fly runway heading" not in takeoff
     else:
         assert "fly runway heading" in takeoff
@@ -2131,6 +2157,37 @@ def test_base_turn_clearance_checks_live_position(brain, airfield):
     assert not brain.pilots["Colt 1"].cleared_landing
 
 
+def test_turning_final_report_clears_inside_pattern_turn(brain, airfield):
+    inbound = _inbound_bearing(airfield)
+    brain.handle("Tower, Colt 1, runway in sight", controller=Controller.TOWER)
+    brain.handle("cleared for overhead break runway 25, Colt 1",
+                 controller=Controller.TOWER)
+    # The 2026-11-08 debrief's "turning final" report was in this same
+    # configured turn slice. Accept the position wording, subject to radar.
+    track = _track_on(airfield, (inbound + 45) % 360, 2.0)
+
+    reply = brain.handle("Colt 1, turning final", track,
+                         controller=Controller.TOWER)
+
+    assert "cleared to land" in reply.lower()
+    assert brain.pilots["Colt 1"].cleared_landing
+
+
+def test_turning_final_report_does_not_bypass_position_validation(brain,
+                                                                  airfield):
+    inbound = _inbound_bearing(airfield)
+    brain.handle("Tower, Colt 1, runway in sight", controller=Controller.TOWER)
+    brain.handle("cleared for overhead break runway 25, Colt 1",
+                 controller=Controller.TOWER)
+    track = _track_on(airfield, (inbound + 150) % 360, 8.0)
+
+    reply = brain.handle("Colt 1, turning final", track,
+                         controller=Controller.TOWER)
+
+    assert "negative" in reply.lower()
+    assert not brain.pilots["Colt 1"].cleared_landing
+
+
 def test_base_turn_clearance_waits_for_runway_to_clear(brain, airfield):
     inbound = _inbound_bearing(airfield)
     brain.handle("Tower, Colt 1, runway in sight", controller=Controller.TOWER)
@@ -3156,7 +3213,24 @@ def test_premature_on_final_while_turning_base_challenged(brain, airfield):
     t = _track_on(airfield, (inbound + 45) % 360, 2.0)
     reply = brain.handle("Colt 1, on final", t, controller=Controller.TOWER)
     assert "negative" in reply.lower()
+    assert "negative, still in pattern turn" in reply.lower()
+    assert "report when on final" in reply.lower()
     assert "cleared" not in reply.lower()
+    assert not brain.pilots["Colt 1"].cleared_landing
+
+
+def test_premature_short_final_explains_what_to_report(brain, airfield):
+    inbound = _inbound_bearing(airfield)
+    brain.handle("Tower, Colt 1, at entry west", controller=Controller.TOWER)
+    brain.handle("Tower, Colt 1, runway in sight", controller=Controller.TOWER)
+    track = _track_on(airfield, (inbound + 45) % 360, 2.0)
+
+    reply = brain.handle("Colt 1, short final", track,
+                         controller=Controller.TOWER)
+
+    assert "negative" in reply.lower()
+    assert "negative, still in pattern turn" in reply.lower()
+    assert "report when on final" in reply.lower()
     assert not brain.pilots["Colt 1"].cleared_landing
 
 
@@ -4059,6 +4133,20 @@ def test_stingray_checkin_is_acknowledged(brain):
     reply = brain.handle("Stingray, Colt 1", controller=Controller.STINGRAY)
     assert reply and "Stingray" in reply
     assert "say again" not in reply.lower()
+
+
+def test_stingray_bare_checkin_accepts_debriefed_stt_variants(brain):
+    for text in ("Staying ready, Colt 1", "Dingray, Colt 1"):
+        _stingray(brain)
+        reply = brain.handle(text, controller=Controller.STINGRAY)
+        assert reply == "Colt 1-1, Stingray.", text
+
+
+def test_stingray_stt_alias_does_not_swallow_calls_with_content(brain):
+    _stingray(brain)
+    reply = brain.handle("Dingray, Colt 1, picture",
+                         controller=Controller.STINGRAY)
+    assert reply != "Colt 1-1, Stingray."
 
 
 def test_stingray_accepts_natural_position_reports(brain, airfield):
