@@ -88,7 +88,7 @@ def _destination(lat: float, lon: float, bearing_deg: float,
 
 
 GATE_ARC_HALF_ANGLE_DEG = 18.0
-DEPARTURE_CLIMB_RADAR_FALLBACK_MARGIN_NM = 2.0
+DEPARTURE_CLIMB_RADAR_FALLBACK_MARGIN_NM = 0.3
 
 
 @dataclass
