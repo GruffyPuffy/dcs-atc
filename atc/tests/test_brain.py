@@ -3251,6 +3251,24 @@ def test_on_final_after_radar_clearance_gets_one_reminder(brain, airfield):
                         controller=Controller.TOWER) == ""
 
 
+def test_on_final_after_recognized_landing_readback_is_silent(brain):
+    # 2026-11-08 test flight: Tower cleared Adder 1-1, the pilot read back
+    # "runway 25 cleared to land", then said "on final" a minute later. The
+    # later status report must be silent after the readback was understood.
+    brain.handle("Tower, Colt 1, runway in sight", controller=Controller.TOWER)
+    clearance = brain.handle("Colt 1, turning base",
+                             controller=Controller.TOWER)
+    assert "cleared to land" in clearance.lower()
+
+    readback = brain.handle("runway 25 cleared to land, Colt 1",
+                            controller=Controller.TOWER)
+    assert readback == ""
+    assert brain.pilots["Colt 1"].landing_clearance_readback_received
+
+    assert brain.handle("Colt 1, on final",
+                        controller=Controller.TOWER) == ""
+
+
 def test_straight_in_on_final_still_cleared_by_voice(brain, airfield):
     # A pilot who skips the OHB and flies straight-in never enters a slice:
     # their "on final" call (established position) still gets the clearance.

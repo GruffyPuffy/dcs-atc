@@ -679,6 +679,9 @@ class PilotState:
     phase: Phase = Phase.IDLE
     cleared_inbound: bool = False
     cleared_landing: bool = False
+    # A recognized pilot readback of the active landing clearance. Once heard,
+    # later "on final" status calls from this pilot need no reminder.
+    landing_clearance_readback_received: bool = False
     # Tower has issued the overhead-break clearance (debrief 2026-10-18: the
     # pilot's readback "right overhead brake" must not re-trigger the request).
     break_cleared: bool = False
@@ -2610,6 +2613,7 @@ class AtcBrain:
         pilot.phase = Phase.IDLE
         pilot.cleared_inbound = False
         pilot.cleared_landing = False
+        pilot.landing_clearance_readback_received = False
         pilot.break_cleared = False
         pilot.pattern_flown = False
         pilot.go_around_issued = False
@@ -2692,6 +2696,7 @@ class AtcBrain:
         }.get(pilot.phase, Phase.IDLE)
         pilot.phase = back
         pilot.cleared_landing = False
+        pilot.landing_clearance_readback_received = False
         pilot.break_cleared = False
         pilot.pattern_flown = False
         pilot.go_around_circuit = False
@@ -3104,6 +3109,7 @@ class AtcBrain:
             repeated = pilot.go_around_issued
             pilot.phase = Phase.INBOUND
             pilot.cleared_landing = False
+            pilot.landing_clearance_readback_received = False
             pilot.pattern_flown = False
             pilot.go_around_issued = True
             pilot.go_around_circuit = True
@@ -3134,6 +3140,7 @@ class AtcBrain:
             if self._runway_busy(traffic, exclude=speaker):
                 pilot.phase = Phase.INBOUND
                 pilot.cleared_landing = False
+                pilot.landing_clearance_readback_received = False
                 pilot.pattern_flown = False
                 pilot.go_around_issued = True
                 pilot.go_around_circuit = True
@@ -3151,6 +3158,7 @@ class AtcBrain:
             # full-stop landing clearance.
             pilot.phase = Phase.LANDING
             pilot.cleared_landing = False
+            pilot.landing_clearance_readback_received = False
             pilot.pattern_flown = False
             pilot.go_around_circuit = True
             pilot.touch_and_go_pending = True
@@ -3414,6 +3422,9 @@ class AtcBrain:
         # individual clearance, so it is acknowledged with silence too.
         if pilot.phase == Phase.LANDING and re.search(
                 r"\b(cleared|clear to land|copy|roger|wilco|readback)\b", low):
+            if (pilot.cleared_landing and re.search(
+                    r"\bclear(?:ed)?\s+to\s+land\b", low)):
+                pilot.landing_clearance_readback_received = True
             return ""
         if pilot.phase == Phase.INBOUND and pilot.cleared_landing \
                 and re.search(r"\b(on final|short final|final)\b", low):
@@ -3436,8 +3447,12 @@ class AtcBrain:
             if pilot.touch_and_go_pending:
                 return ""
             # After the clearance (voice or radar), this status report may
-            # mean the pilot missed the earlier call. Give one reminder.
+            # mean the pilot missed the earlier call. Remind once if its
+            # readback has not been recognized; after a recognized readback,
+            # MA practice is to stay silent on further final status calls.
             if pilot.cleared_landing:
+                if pilot.landing_clearance_readback_received:
+                    return ""
                 return self._already_cleared_landing_reminder(callsign, pilot)
             # Zones check: a pilot still in the pattern turn (inside a slice)
             # has NOT rolled out yet — their "on final" does not match the
@@ -5079,6 +5094,7 @@ class AtcBrain:
         pilot.go_around_circuit = False
         pilot.touch_and_go_pending = False
         pilot.cleared_landing = True
+        pilot.landing_clearance_readback_received = False
         pilot.already_cleared_landing_reminder_sent = False
         pilot.landing_runway = self.runway
         pilot.landing_rollout_seen = False
@@ -5093,6 +5109,7 @@ class AtcBrain:
             if wing_state is not None and wing_state.phase in (
                     Phase.INBOUND, Phase.LANDING):
                 wing_state.cleared_landing = True
+                wing_state.landing_clearance_readback_received = False
                 wing_state.already_cleared_landing_reminder_sent = False
         return self._say("cleared_land", callsign,
                          flight=self._formation_prefix(pilot))
@@ -5128,6 +5145,7 @@ class AtcBrain:
             pilot.go_around_issued = True
             pilot.phase = Phase.INBOUND
             pilot.cleared_landing = False
+            pilot.landing_clearance_readback_received = False
             pilot.pattern_flown = False
             pilot.go_around_circuit = True
             pilot.touch_and_go_pending = False
@@ -5248,6 +5266,7 @@ class AtcBrain:
             pilot.awaiting_landing = False
             pilot.phase = Phase.LANDING
             pilot.cleared_landing = True
+            pilot.landing_clearance_readback_received = False
             pilot.landing_runway = self.runway
             pilot.already_cleared_landing_reminder_sent = False
             pilot.landing_rollout_seen = False
