@@ -1111,21 +1111,13 @@ class AtcBrain:
         return found[0]
 
     def _is_flight_checkin(self, text: str, speaker: str = "") -> bool:
-        """True for a flight check-in: a bare callsign (or element number).
+        """Identify a transmission containing only a callsign or element number.
 
-        Master Arms SOP: on switching frequency a flight checks in *as a flight*
-        before addressing the agency — the lead says just the flight callsign
-        ("Adder1"), each wingman answers with their number ("2"). It is a
-        flight-internal call, not a call to the agency, so the controller does
-        not answer it (answering it would make the flight check-in act as the
-        agency contact).
-
-        Only a transmission that is *nothing but* the callsign (optionally with
-        the speaker's own name) counts, so a real request ("Dodge 1, requesting
-        taxi") or an agency check-in ("Ground, Dodge 1") is never swallowed. A
-        bare element number ("2", "3", "4" … for a 2/3/4-ship) is also accepted,
-        in digits or words ("two"): it is never a valid call to an agency, so
-        treating it as a flight check-in is safe.
+        Bare element numbers ("2", "3", "4" or their word forms) remain
+        flight-internal check-ins and are ignored. A callsign by itself is
+        treated by `handle()` as an agency call: it gets an acknowledgment when
+        no reply is pending, or readback feedback when a clearance is pending.
+        Real requests and agency-addressed calls are not bare check-ins.
         """
         rest = self.callsigns.strip(text)
         if speaker:
@@ -1139,6 +1131,30 @@ class AtcBrain:
         rest = re.sub(r"[^a-z0-9]+", "", rest.lower())
         return not rest or bool(re.fullmatch(r"[2-9]|two|three|four|five|six|"
                                              r"seven|eight|niner|nine", rest))
+
+    def _is_callsign_only_call(self, text: str, speaker: str,
+                               callsign: str) -> bool:
+        """True for a pilot calling the agency with only their callsign.
+
+        The known speaker mapping also lets a short, digits-only STT rendering
+        such as ``50-1-1`` count as that pilot's callsign. Bare element numbers
+        remain flight-internal check-ins and are handled separately.
+        """
+        if not callsign:
+            return False
+        own = self.callsign_for_speaker(speaker) if speaker else ""
+        if (own and own == callsign and re.fullmatch(
+                r"\s*\d+(?:[\s,.-]+\d+){1,2}\s*", text)):
+            return True
+        if not self._is_flight_checkin(text, speaker):
+            return False
+        remainder = self.callsigns.strip(text)
+        if speaker and speaker.lower() not in self._agency_words():
+            remainder = re.sub(rf"\b{re.escape(speaker)}\b", " ", remainder,
+                               flags=re.IGNORECASE)
+        # A callsign is present only if the registry removed it. This excludes
+        # bare wingman numbers/number words such as "2" or "two".
+        return not re.sub(r"[^a-z0-9]", "", remainder.lower())
 
     def _agency_words(self) -> set[str]:
         """Lower-case agency names that address a controller, not a flight.
@@ -1638,6 +1654,8 @@ class AtcBrain:
                 label = f"Bulls range {number}"
             elif re.search(r"\bq\.?n\.?h\.?\s*$", prefix, re.IGNORECASE):
                 label = f"QNH {number}"
+            elif taxi_runway and number == taxi_runway.group(1):
+                label = f"hold short runway {number}"
             elif re.search(r"\brunway\s*$", prefix, re.IGNORECASE):
                 label = f"runway {number}"
             elif re.search(r"\bheading\s*$", prefix, re.IGNORECASE):
@@ -1882,13 +1900,15 @@ class AtcBrain:
         known_speaker_call = self.callsign_for_speaker(speaker) if speaker else ""
         if known_speaker_call and known_speaker_call != speaker:
             self.cancel_readback_reminder(known_speaker_call)
-        # Flight check-in (Master Arms SOP): on switching frequency a flight
-        # checks in *as a flight* before addressing the agency — the lead says
-        # just the flight callsign ("Adder1"), each wingman answers with their
-        # number ("2"). It is a flight-internal call, not a call to the agency,
-        # so the controller stays silent. Checked before callsign extraction so
-        # the wingman's bare number is caught too (it names no callsign).
-        if self._is_flight_checkin(text, speaker):
+        # Bare element numbers are flight-internal check-ins; callsign-only
+        # transmissions are treated as agency calls below. Check the shape
+        # before extraction so a wingman's bare number is caught too (it names
+        # no callsign).
+        flight_checkin = self._is_flight_checkin(text, speaker)
+        # A callsign-only call is addressed to the agency and should receive a
+        # useful response. Bare element numbers still belong to the flight's
+        # internal check-in and remain silent.
+        if flight_checkin and not re.search(r"[a-z]", text, re.IGNORECASE):
             return ""
 
         # Every callsign the text names, in order. A transmission can mention
@@ -1898,6 +1918,8 @@ class AtcBrain:
         # (this was "Climbing to Enfield 15" being handled as flight Enfield).
         callsign = self.extract_callsign(text, speaker)
         if not callsign:
+            if flight_checkin:
+                return ""
             # Some calls may omit the flight number (e.g. "Colt help").
             name = self.callsigns.extract_name(text)
             if name and re.search(r"\btrainer\b", text.lower()) and re.search(
@@ -1930,6 +1952,9 @@ class AtcBrain:
                 return self._say("say_again_no_callsign", "",
                                  agency=self._agency(controller))
             return None
+        if flight_checkin and not self._is_callsign_only_call(
+                text, speaker, callsign):
+            return ""
         low = text.lower()
         self.cancel_readback_reminder(callsign)
         pilot = self._pilot(callsign)
@@ -1978,12 +2003,25 @@ class AtcBrain:
         # conversation (especially long comments containing words like
         # "exit" or "taxi") moves on and discards the pending expectation.
         if pilot.readback_pending:
+            if self._is_callsign_only_call(low, speaker, callsign):
+                clearance = pilot.last_clearance or pilot.last_reply
+                return self._check_readback(callsign, pilot, low, clearance,
+                                            controller)
             readback_cue = re.search(
                 r"\b(readback|read back|copy|roger|wilco|cleared|clear|"
                 r"hold short|line up|lined up|after departure|turn|heading|"
                 r"descend|climb|angels|exit|via|runway|qnh|in use)\b", low)
             if not readback_cue or len(low.split()) > 18:
                 pilot.readback_pending = False
+        if self._is_callsign_only_call(low, speaker, callsign):
+            if (controller == Controller.GROUND and pilot.info_issued
+                    and pilot.ground_info_readback_required):
+                return self._say("ground_info_readback_prompt", callsign)
+            if (controller == Controller.TOWER
+                    and pilot.phase in (Phase.INBOUND, Phase.LANDING)):
+                return self._say("tower_report_position", callsign)
+            return self._say("agency_ack", callsign,
+                             agency=self._agency(controller))
         # Retain the expected instruction only for an immediate say-again.
         if not re.search(r"\b(say again|repeat|repeat last|say again please|"
                          r"repeat clearance)\b", low):

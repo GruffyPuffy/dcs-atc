@@ -1441,7 +1441,8 @@ def test_taxi_readback_does_not_infer_runway_from_bare_suffix(brain):
         "runway 25.")
     incomplete = (
         "Cleared taxi Alpha November Delta, hold short runway 5, Colt 1")
-    assert brain._readback_item(incomplete, clearance) == "runway 25"
+    assert brain._readback_item(incomplete, clearance) == \
+        "hold short runway 25"
 
 
 def test_taxi_route_readback_still_requires_all_words_in_order(brain):
@@ -1779,13 +1780,13 @@ def test_frequency_change_push_is_silent(brain):
     assert reply == ""
 
 
-def test_flight_checkin_bare_callsign_is_silent(brain):
-    # Master Arms SOP: after switching frequency the flight checks in *as a
-    # flight* ("Colt 1") before addressing the agency. It is a flight-internal
-    # call, so the controller stays silent — it must NOT be answered as an
-    # agency contact (and must not get "say again").
-    assert brain.handle("Colt 1", controller=Controller.TOWER) == ""
-    assert brain.handle("Colt one", controller=Controller.GROUND) == ""
+def test_callsign_only_is_acknowledged_as_an_agency_call(brain):
+    # A callsign-only transmission gets an agency acknowledgment when no reply
+    # is pending, so the pilot knows the frequency is working and can continue.
+    assert brain.handle("Colt 1", controller=Controller.TOWER) \
+        == "Colt 1-1, Tower."
+    assert brain.handle("Colt one", controller=Controller.GROUND) \
+        == "Colt 1-1, Ground."
 
 
 def test_flight_checkin_wingman_number_is_silent(brain):
@@ -3431,6 +3432,60 @@ def test_bare_tower_checkin_is_acknowledged(brain):
     reply = brain.handle("Tower, Colt 1", controller=Controller.TOWER)
     assert reply and "Tower" in reply
     assert "say again" not in reply.lower()
+
+
+def test_callsign_only_call_prompts_for_pending_taxi_readback(brain):
+    pilot = brain._pilot("Colt 1")
+    pilot.phase = Phase.TAXI
+    pilot.readback_pending = True
+    pilot.last_clearance = (
+        "Colt 1, Ground, cleared taxi Alpha November Delta and hold short "
+        "runway 25.")
+
+    reply = brain.handle("Colt 1", controller=Controller.GROUND)
+
+    assert "readback incomplete" in reply.lower()
+    assert "taxi route alpha november delta" in reply.lower()
+    assert "hold short runway 25" in reply.lower()
+    assert "read back when able" in reply.lower()
+    assert pilot.readback_pending
+
+
+def test_callsign_only_stt_numbers_prompt_pending_readback(brain):
+    brain.remember_speaker("Decoy", "Colt 1")
+    pilot = brain._pilot("Colt 1")
+    pilot.phase = Phase.TAXI
+    pilot.readback_pending = True
+    pilot.last_clearance = (
+        "Colt 1, Ground, cleared taxi Alpha November Delta and hold short "
+        "runway 25.")
+
+    reply = brain.handle("50-1-1", controller=Controller.GROUND,
+                         speaker="Decoy")
+
+    assert "readback incomplete" in reply.lower()
+    assert "taxi route alpha november delta" in reply.lower()
+    assert pilot.readback_pending
+
+
+def test_callsign_only_call_without_pending_response_identifies_agency(brain):
+    expected = {
+        Controller.GROUND: "Ground",
+        Controller.TOWER: "Tower",
+        Controller.CONTROL: "Control",
+        Controller.STINGRAY: "Stingray",
+    }
+    for controller, agency in expected.items():
+        reply = brain.handle("Colt 1", controller=controller)
+        assert reply == f"Colt 1-1, {agency}.", (controller, reply)
+
+
+def test_callsign_only_tower_call_inbound_prompts_for_position(brain):
+    brain._pilot("Colt 1").phase = Phase.INBOUND
+
+    reply = brain.handle("Colt 1", controller=Controller.TOWER)
+
+    assert "report your position" in reply.lower()
 
 
 def test_bare_tower_checkin_with_full_name_is_acknowledged(brain):
