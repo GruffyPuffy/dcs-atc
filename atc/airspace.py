@@ -532,19 +532,24 @@ class Airfield:
             self, runway: str | None = None,
             margin_nm: float = DEPARTURE_CLIMB_RADAR_FALLBACK_MARGIN_NM
             ) -> dict | None:
-        """Outer radar-climb fallback circle beyond all departure exit arcs."""
+        """Outer fallback circle beyond the configured gate handoff zones."""
         radii = [bearing_distance(
             self.ctr.center_lat, self.ctr.center_lon,
             self.gates[gate][0], self.gates[gate][1])[1]
-            for gate in self.departure_gates(runway)
-            if gate in self.gates]
+            for gate in self.gates]
         if not radii:
             return None
+        gate_radius = max(radii)
+        handoff_radius = self.arrival_tower_handoff_zone_radius_nm
         return {
             "center": [self.ctr.center_lat, self.ctr.center_lon],
-            "radius_nm": max(radii) + margin_nm,
+            # Arrival handoff zones are outward-facing sectors centered at
+            # each gate. This conservative circle encloses every sector, then
+            # adds the same buffer used beyond a departure exit.
+            "radius_nm": gate_radius + handoff_radius + margin_nm,
             "margin_nm": margin_nm,
-            "label": "Missed check-in climb fallback",
+            "handoff_zone_radius_nm": handoff_radius,
+            "label": "Missed check-in climb fallback (outside gate zones)",
         }
 
     def gate_arc_position(self, lat: float, lon: float, gate: str

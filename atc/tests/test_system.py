@@ -22,9 +22,9 @@ def _scenario(airfield, brain):
     return Scenario(airfield, brain)
 
 
-def _pass_departure_exit(sc, brain, airfield):
-    """Advance the radar track through the assigned outbound gate arc."""
-    gate = brain.pilots["Colt 1"].exit_gate or "West"
+def _pass_departure_exit(sc, brain, airfield, gate=None):
+    """Advance the radar track through an outbound gate arc."""
+    gate = gate or brain.pilots["Colt 1"].exit_gate or "West"
     sc.at_gate(gate).set_alt(airfield.elevation_ft + 1500)
     return brain.check_departure_handoff("Colt 1", sc._track())
 
@@ -91,6 +91,20 @@ def test_control_checkin_outside_ctr_clears_climb(airfield, brain):
     assert brain.pilots["Colt 1"].climb_issued
 
 
+def test_two_part_control_checkin_clears_climb_on_position_report(airfield,
+                                                                 brain):
+    pilot = brain._pilot("Colt 1")
+    pilot.phase = Phase.AIRBORNE
+    sc = _scenario(airfield, brain).at_gate("West").set_alt(
+        airfield.elevation_ft + 1500)
+    first = sc.say("Control, Colt 1", Controller.CONTROL)
+    assert "Colt 1" in first and "Control" in first
+    assert not pilot.climb_issued
+    second = sc.say("Colt 1, at 1500 feet", Controller.CONTROL)
+    assert "climb to Angels" in second
+    assert pilot.climb_issued
+
+
 def test_tower_hands_departure_to_control_at_the_exit_arc(airfield, brain):
     # The kneeboard sequence hands off at the departure exit, not at the CTR
     # boundary or on an airborne radio report.
@@ -135,8 +149,9 @@ def test_control_climbs_departure_on_radar_once_clear_of_ctr(airfield, brain):
     assert brain.check_departure_climb("Colt 1", sc._track()) is None
 
 
-def test_missed_control_checkin_gets_climb_only_at_departure_exit(airfield,
-                                                                  brain):
+def test_missed_control_checkin_gets_climb_after_correct_exit_zone(airfield,
+                                                                   brain):
+    brain._pilot("Colt 1").exit_gate = "West"
     sc = _scenario(airfield, brain).at_threshold("25")
     sc.say("Tower, Colt 1, ready for departure", Controller.TOWER)
     sc.say("Line up and wait 25, Colt 1", Controller.TOWER)
@@ -148,9 +163,25 @@ def test_missed_control_checkin_gets_climb_only_at_departure_exit(airfield,
     assert brain.check_departure_climb("Colt 1", sc._track()) is None
     assert not brain.pilots["Colt 1"].climb_issued
 
-    # The actual outbound exit arc is a safe fallback point if the check-in
-    # was missed. It must still fire only once and arm the later Stingray push.
-    sc.at_gate("West").set_alt(airfield.elevation_ft + 1500)
+    # Crossing the assigned exit hands off to Control. The climb waits until
+    # radar sees the aircraft leave the existing Tower handoff zone.
+    gate = brain.pilots["Colt 1"].exit_gate
+    sc.at_gate(gate).set_alt(airfield.elevation_ft + 1500)
+    assert brain.pilots["Colt 1"].departure_handoff_gate == gate
+    assert brain.check_departure_climb("Colt 1", sc._track()) is None
+    _, gate_radius = bearing_distance(
+        airfield.ctr.center_lat, airfield.ctr.center_lon,
+        *airfield.gates[gate])
+    gate_bearing, _, _ = airfield.gate_arc_position(
+        sc.lat, sc.lon, gate)
+    sc.lat, sc.lon = _point_from(
+        airfield.ctr.center_lat, airfield.ctr.center_lon,
+        gate_bearing, gate_radius + 4.9)
+    assert brain.check_departure_climb("Colt 1", sc._track()) is None
+    assert brain.pilots["Colt 1"].departure_handoff_zone_seen
+    sc.lat, sc.lon = _point_from(
+        airfield.ctr.center_lat, airfield.ctr.center_lon,
+        gate_bearing, gate_radius + 5.1)
     call = brain.check_departure_climb("Colt 1", sc._track())
     assert call and "climb to Angels" in call
     assert brain.pilots["Colt 1"].control_checkin_received
@@ -158,22 +189,51 @@ def test_missed_control_checkin_gets_climb_only_at_departure_exit(airfield,
     assert brain.check_departure_climb("Colt 1", sc._track()) is None
 
 
-def test_missed_wrong_exit_checkin_uses_far_radar_radius(airfield, brain):
+def test_missed_wrong_exit_checkin_uses_outer_fallback_circle(airfield, brain):
     sc = _scenario(airfield, brain).at_threshold("25")
     sc.say("Tower, Colt 1, ready for departure", Controller.TOWER)
     sc.say("Line up and wait 25, Colt 1", Controller.TOWER)
     sc.say("Tower, Colt 1, airborne", Controller.TOWER)
-    _pass_departure_exit(sc, brain, airfield)
+    brain.pilots["Colt 1"].exit_gate = "West"
+    _pass_departure_exit(sc, brain, airfield, gate="North")
     sc.at_runway("25", along_nm=2.0).set_alt(airfield.elevation_ft + 1500)
     assert brain.check_departure_climb("Colt 1", sc._track()) is None
 
-    # Off the configured exit corridors, wait until beyond the farthest exit
-    # arc plus the configured margin (not just outside the CTR).
+    # A wrong exit waits for the outer fallback circle, beyond the handoff
+    # zones, even though it passed an exit arc.
+    fallback_radius = airfield.departure_climb_fallback_geometry(
+        "25")["radius_nm"]
     sc.lat, sc.lon = _point_from(airfield.ctr.center_lat,
-                                 airfield.ctr.center_lon, 200.0, 12.5)
+                                 airfield.ctr.center_lon, 200.0,
+                                 fallback_radius - 0.1)
+    assert brain.check_departure_climb("Colt 1", sc._track()) is None
+    sc.lat, sc.lon = _point_from(airfield.ctr.center_lat,
+                                 airfield.ctr.center_lon, 200.0,
+                                 fallback_radius + 0.1)
     call = brain.check_departure_climb("Colt 1", sc._track())
     assert call and "climb to Angels" in call
     assert brain.pilots["Colt 1"].control_checkin_received
+
+
+def test_missed_all_exits_hands_off_and_climbs_at_outer_circle(airfield,
+                                                               brain):
+    sc = _scenario(airfield, brain).at_threshold("25")
+    sc.say("Tower, Colt 1, ready for departure", Controller.TOWER)
+    sc.say("Line up and wait 25, Colt 1", Controller.TOWER)
+    sc.say("Tower, Colt 1, airborne", Controller.TOWER)
+    fallback_radius = airfield.departure_climb_fallback_geometry(
+        "25")["radius_nm"]
+    sc.lat, sc.lon = _point_from(airfield.ctr.center_lat,
+                                 airfield.ctr.center_lon, 180.0,
+                                 fallback_radius - 0.1)
+    assert brain.check_departure_handoff("Colt 1", sc._track()) is None
+    sc.lat, sc.lon = _point_from(airfield.ctr.center_lat,
+                                 airfield.ctr.center_lon, 180.0,
+                                 fallback_radius + 0.1)
+    handoff = brain.check_departure_handoff("Colt 1", sc._track())
+    assert handoff and "contact Control" in handoff
+    climb = brain.check_departure_climb("Colt 1", sc._track())
+    assert climb and "climb to Angels" in climb
 
 
 def test_stingray_handoff_once_at_assigned_angels(airfield, brain):

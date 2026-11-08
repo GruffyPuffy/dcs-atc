@@ -3931,10 +3931,13 @@ def test_early_control_request_does_not_bypass_exit_arc(brain, airfield):
     assert pilot.last_controller == Controller.TOWER.value
 
 
-def test_control_radar_fallback_waits_until_departure_exit(brain, airfield):
+def test_control_radar_fallback_waits_beyond_assigned_exit_zone(brain,
+                                                                airfield):
     pilot = brain._pilot("Colt 1")
     pilot.phase = Phase.AIRBORNE
     pilot.departure_handoff_announced = True
+    pilot.exit_gate = "West"
+    pilot.departure_handoff_gate = "West"
     track = _track(airfield, *airfield.runway_threshold("25"),
                    alt_ft=airfield.elevation_ft + 1200)
     assert brain.check_departure_climb("Colt 1", track) is None
@@ -3942,9 +3945,8 @@ def test_control_radar_fallback_waits_until_departure_exit(brain, airfield):
 
     track = _track(airfield, *airfield.gates["West"],
                    alt_ft=airfield.elevation_ft + 1200)
-    reply = brain.check_departure_climb("Colt 1", track)
-    assert "climb to Angels" in reply
-    assert pilot.control_checkin_received and pilot.climb_issued
+    assert brain.check_departure_climb("Colt 1", track) is None
+    assert not pilot.climb_issued
 
 
 def test_control_accepts_natural_exit_position_as_departure_checkin(brain,

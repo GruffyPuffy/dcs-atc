@@ -751,6 +751,11 @@ class PilotState:
     # Tower has pushed a departure to Control (MA SOP: "expect instructions to
     # switch to control" once airborne). Re-armed by each takeoff clearance.
     departure_handoff_announced: bool = False
+    # Gate whose outbound arc triggered the Tower-to-Control handoff.
+    departure_handoff_gate: str = ""
+    # Tracks entry into the existing Tower handoff zone for that exit, so the
+    # missed-check-in climb can fire when radar observes the aircraft leave it.
+    departure_handoff_zone_seen: bool = False
     # The flight has told Stingray it is returning to base ("Miller Time",
     # "Bingo", "requesting RTB"). Arms the handoff back to Control.
     rtb_requested: bool = False
@@ -2614,6 +2619,8 @@ class AtcBrain:
         pilot.stingray_handoff_announced = False
         pilot.stingray_radar_contact_confirmed = False
         self._abandon_stingray_training_task(pilot)
+        pilot.departure_handoff_gate = ""
+        pilot.departure_handoff_zone_seen = False
         pilot.exit_gate = ""
         pilot.entry_gate = ""
         pilot.arrival_join_issued = False
@@ -3165,6 +3172,8 @@ class AtcBrain:
                         track.lat, track.lon, gate)):
                 pilot.phase = Phase.AIRBORNE
                 pilot.departure_handoff_announced = True
+                pilot.departure_handoff_gate = gate
+                pilot.departure_handoff_zone_seen = False
                 pilot.departure_previous_range_nm = None
                 pilot.departure_previous_bearing_deg = None
                 note = self._exit_deviation_note(pilot, gate)
@@ -4219,6 +4228,8 @@ class AtcBrain:
         # A pilot can land, taxi, and depart again in the same DCS spawn. The
         # Tower->Control handoff is one-shot per departure, not per spawn.
         pilot.departure_handoff_announced = False
+        pilot.departure_handoff_gate = ""
+        pilot.departure_handoff_zone_seen = False
         pilot.departure_previous_range_nm = None
         pilot.departure_previous_bearing_deg = None
         pilot.control_checkin_received = False
@@ -4414,7 +4425,17 @@ class AtcBrain:
                                 self.airfield.gate_arc_passed_outbound(
                                     track.lat, track.lon, gate))), None)
         if passed_gate is None:
-            return None
+            fallback = self.airfield.departure_climb_fallback_geometry(
+                self.runway)
+            if (fallback is None
+                    or current_range < fallback["radius_nm"]):
+                return None
+            # No modeled exit was used. The outer fallback still gives the
+            # flight a Tower-to-Control handoff before climb is issued.
+            pilot.departure_handoff_gate = ""
+        else:
+            pilot.departure_handoff_gate = passed_gate
+        pilot.departure_handoff_zone_seen = False
         pilot.departure_handoff_announced = True
         # Crossing the departure exit makes the flight physically airborne,
         # even though its checked-in radio agency remains Tower until it calls
@@ -4446,13 +4467,11 @@ class AtcBrain:
 
     def check_departure_climb(self, callsign: str,
                               track: AircraftTrack | None) -> str | None:
-        """Climb a departure after check-in or a conservative radar fallback.
+        """Climb after check-in or a deliberately late radar fallback.
 
-        Control must have received the pilot's check-in before issuing a climb.
-        If that call was missed, radar provides a backstop only after the
-        aircraft has passed an exit arc or is beyond every configured exit arc
-        by a margin. Merely leaving the CTR is not enough: that preserves the
-        normal Tower/Control handoff window. Fires once.
+        A missed check-in gets a local fallback when radar observes the flight
+        leave the existing Tower handoff zone for its assigned exit. A wrong
+        or missed exit waits for the outer fallback circle. Fires once.
         """
         pilot = self._pilot(callsign)
         if (pilot.phase != Phase.AIRBORNE or pilot.climb_issued or track is None
@@ -4463,20 +4482,26 @@ class AtcBrain:
                 return None
             return self._issue_departure_climb(callsign, pilot)
 
-        # A passed exit arc is the natural departure boundary. If the pilot
-        # misses or uses a nonstandard exit, wait until well beyond the farthest
-        # configured departure arc before inferring the missed check-in.
-        passed_exit = any(
-            self.airfield.gate_arc_passed_outbound(
-                track.lat, track.lon, gate)
-            for gate in self.airfield.departure_gates(self.runway))
-        gate_radii = [self.airfield.ctr.distance_nm(*self.airfield.gates[gate])
-                      for gate in self.airfield.departure_gates(self.runway)
-                      if gate in self.airfield.gates]
-        fallback_radius = (max(gate_radii) +
-                           DEPARTURE_CLIMB_RADAR_FALLBACK_MARGIN_NM
-                           if gate_radii else float("inf"))
-        if not passed_exit and self.airfield.ctr.distance_nm(
+        fallback = self.airfield.departure_climb_fallback_geometry(
+            self.runway)
+        fallback_radius = (fallback["radius_nm"] if fallback
+                           else float("inf"))
+        assigned_exit = pilot.exit_gate
+        correct_exit = (pilot.departure_handoff_gate
+                        and pilot.departure_handoff_gate == assigned_exit)
+        if correct_exit:
+            inside_handoff_zone = self.airfield.in_arrival_handoff_zone(
+                track.lat, track.lon, assigned_exit)
+            if inside_handoff_zone:
+                pilot.departure_handoff_zone_seen = True
+                return None
+            if not pilot.departure_handoff_zone_seen:
+                # If radar skipped over the whole zone between samples, the
+                # outer fallback circle remains the backstop.
+                if self.airfield.ctr.distance_nm(
+                        track.lat, track.lon) < fallback_radius:
+                    return None
+        elif self.airfield.ctr.distance_nm(
                 track.lat, track.lon) < fallback_radius:
             return None
         # Mark the inferred check-in so the ordinary assigned-Angels Stingray
