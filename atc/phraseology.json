@@ -19,7 +19,8 @@
     "descent_altitude": "1500 feet",
     "angels": "15",
     "stingray_channel": "3",
-    "qnh": "2992"
+    "qnh": "2992",
+    "readback_retries": 1
   },
   "templates": {
     "taxi": "{callsign}, {ground}, cleared taxi {taxi_route} and hold short runway {runway}.",
@@ -41,10 +42,11 @@
     "ground_info_weather": "{callsign}, {ground}, weather is {weather}. Wind {wind}, runway {runway} in use, QNH {qnh}.",
     "ground_info_readback": "{callsign}, {ground}, readback correct, advise when ready for clearance.",
     "ground_info_readback_prompt": "{callsign}, {ground}, read back runway {runway} and QNH {qnh} first.",
-    "ground_info_runway_correction": "{callsign}, {ground}, negative, runway {runway} in use, QNH {qnh}.",
+    "ground_info_runway_correction": "{callsign}, {ground}, negative, runway {runway} in use, QNH {qnh}. Read back again.",
     "ground_info_final_continue": "{callsign}, {ground}, runway {runway} in use, QNH {qnh}. Continue.",
     "readback_correct": "{callsign}, {agency}, readback correct.",
-    "readback_incomplete": "{callsign}, {agency}, readback incomplete, I did not get {item}. Read back when able, or continue.",
+    "readback_incomplete_retry": "{callsign}, {agency}, readback incomplete, I did not get {item}. Read back again when able.",
+    "readback_incomplete": "{callsign}, {agency}, readback incomplete, I did not get {item}. No need to repeat.",
     "readback_reminder": "{callsign}, reminder, read back the clearance when able.",
     "inbound_outside": "{callsign}, {tower}, roger, report entering the control zone, runway {runway} active.",
     "inbound_inside": "{callsign}, {tower}, radar contact {position}, cleared control zone entry, join {downwind} downwind runway {runway}.",

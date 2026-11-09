@@ -252,9 +252,50 @@ follows this rule:
 | Control descent | Tower handoff | the handoff |
 | Overhead-break clearance | in the break / on final | *(silent)* |
 
-An **incomplete** readback is never silently accepted: it gets an honest
-"readback incomplete — I did not get your {item}. Continue." (the phase still
-advances, so a fumbled readback never traps the pilot).
+An **incomplete** readback is never silently accepted: it identifies what was
+missed and asks the pilot to read back again. After the configured retry limit
+(one retry by default), it says **"No need to repeat"** and clears the check so
+a fumbled readback never traps the pilot.
+
+Example dialogs (using the default one-retry setting):
+
+**Correct readback**
+
+```text
+ATC:   Adder 1-1, Ground, after departure turn right Exit West, 1500 ft or below.
+Pilot: After departure turn right Exit West, 1500 feet or below, Adder 1-1.
+ATC:   (silent; the readback is correct)
+```
+
+**No readback**
+
+```text
+ATC:   Adder 1-1, Ground, after departure turn right Exit West, 1500 ft or below.
+Pilot: (no reply for about 20 seconds)
+ATC:   Adder 1-1, reminder, read back the clearance when able.
+Pilot: After departure turn right Exit West, 1500 feet or below, Adder 1-1.
+ATC:   (silent; the readback is correct)
+```
+
+**Incorrect, then correct**
+
+```text
+ATC:   Adder 1-1, Ground, after departure turn right Exit West, 1500 ft or below.
+Pilot: After departure turn right Exit West, Adder 1-1.
+ATC:   Adder 1-1, Ground, readback incomplete, I did not get altitude 1500 feet. Read back again when able.
+Pilot: After departure turn right Exit West, 1500 feet or below, Adder 1-1.
+ATC:   Adder 1-1, Ground, readback correct.
+```
+
+**Incorrect twice**
+
+```text
+ATC:   Adder 1-1, Ground, after departure turn right Exit West, 1500 ft or below.
+Pilot: After departure turn right Exit West, Adder 1-1.
+ATC:   Adder 1-1, Ground, readback incomplete, I did not get altitude 1500 feet. Read back again when able.
+Pilot: After departure turn right Exit West, Adder 1-1.
+ATC:   Adder 1-1, Ground, readback incomplete, I did not get altitude 1500 feet. No need to repeat.
+```
 
 **One exception:** if an earlier attempt at that clearance was incomplete, the
 readback that **fixes** it *is* confirmed with "readback correct". Saying nothing

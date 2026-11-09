@@ -43,6 +43,7 @@ RADIO_NORMAL_POLICY = ("normal", 2.0)
 RADIO_ANSWER_POLICY = ("answer", 5.0)
 RADIO_EMERGENCY_POLICY = ("emergency", 2.0)
 READBACK_REMINDER_DELAY_SEC = 20.0
+DEFAULT_READBACK_RETRIES = 1
 
 # Only clearances with an immediate, specific readback expectation arm the
 # reminder. Reports, handoffs, challenges, and generic answers do not.
@@ -81,7 +82,8 @@ RADIO_ANSWER_KEYS = frozenset({
     "ground_info", "ground_info_weather", "ground_info_readback",
     "ground_info_runway_correction", "ground_info_readback_prompt",
     "ground_info_final_continue",
-    "readback_incomplete", "say_again", "say_again_no_callsign",
+    "readback_incomplete", "readback_incomplete_retry",
+    "say_again", "say_again_no_callsign",
     "speed_position_unknown", "speed_restriction_ctr",
     "stingray_bullseye_challenge", "stingray_marking_unclear",
     "stingray_angels_rounding",
@@ -831,7 +833,8 @@ class PilotState:
 class Phraseology:
     """Reply templates loaded from phraseology.json."""
 
-    def __init__(self, templates: dict[str, str], variables: dict[str, str]):
+    def __init__(self, templates: dict[str, str],
+                 variables: dict[str, object]):
         self.templates = templates
         self.variables = variables
 
@@ -874,6 +877,12 @@ class AtcBrain:
         self.gate_locator = gate_locator  # callable(lat, lon) -> gate name
         self.airfield = airfield  # Airfield, for position cross-checks
         self.phraseology = phraseology or Phraseology.load()
+        try:
+            self.readback_retries = max(0, int(
+                self.phraseology.variables.get(
+                    "readback_retries", DEFAULT_READBACK_RETRIES)))
+        except (TypeError, ValueError):
+            self.readback_retries = DEFAULT_READBACK_RETRIES
         self.callsigns = callsigns or CallsignRegistry()
         self.pilots: dict[str, PilotState] = {}
         # Side-channel for the radio output scheduler. ``handle`` is called
@@ -1800,11 +1809,10 @@ class AtcBrain:
         A clean first readback keeps the silent behaviour, so every tested
         kneeboard dialog is unchanged.
 
-        An incomplete readback is **not** called correct: it gets an honest
-        "readback incomplete — {item} not read back, continue." so the pilot
-        knows what to train on, and the caller still advances the phase, so a
-        fumbled readback never traps them — they keep flying and fix it next
-        time.
+        An incomplete readback gets a retry prompt up to the configured limit.
+        Once those retries are used, it gets an honest "readback incomplete"
+        with "continue" and the active check is cleared, so repeated errors
+        cannot trap the pilot in a loop.
         """
         agency = self._agency(controller)
         pilot.readback_replay = clearance or pilot.last_clearance or pilot.last_reply
@@ -1819,11 +1827,26 @@ class AtcBrain:
                                  agency=agency)
             return ""
         pilot.readback_fails += 1
-        if item == "clearance":
+        exhausted = pilot.readback_fails > self.readback_retries
+        if item == "clearance" and not exhausted:
             # A wrong item was read back (e.g. a different exit): the honest
             # response is the clearance again, not "I did not get your exit".
             return self._say("say_again", callsign, agency=agency)
-        return self._say("readback_incomplete", callsign, agency=agency,
+        reply = self._readback_failure_reply(
+            callsign, item, controller, pilot.readback_fails)
+        if exhausted:
+            pilot.readback_pending = False
+            pilot.readback_fails = 0
+        return reply
+
+    def _readback_failure_reply(self, callsign: str, item: str,
+                                controller: Controller, failures: int,
+                                *, force_continue: bool = False) -> str:
+        """Coach another attempt, then explicitly let the pilot continue."""
+        key = ("readback_incomplete_retry"
+               if failures <= self.readback_retries and not force_continue
+               else "readback_incomplete")
+        return self._say(key, callsign, agency=self._agency(controller),
                          item=item)
 
     def _remember_arrival_join(self, pilot: PilotState,
@@ -1880,10 +1903,17 @@ class AtcBrain:
                                  agency=self._agency(controller))
             return ""
         pilot.arrival_join_readback_fails += 1
+        exhausted = (pilot.arrival_join_readback_fails
+                     > self.readback_retries)
         if item == "clearance":
             item = "entry"
-        return self._say("readback_incomplete", callsign,
-                         agency=self._agency(controller), item=item)
+        reply = self._readback_failure_reply(
+            callsign, item, controller, pilot.arrival_join_readback_fails)
+        if exhausted:
+            pilot.arrival_join_readback_complete = True
+            pilot.arrival_join_readback_fails = 0
+            pilot.readback_pending = False
+        return reply
 
     def _readback_coaching(self, callsign, pilot, low, clearance,
                            controller) -> str:
@@ -1904,8 +1934,11 @@ class AtcBrain:
             # Wrong-item readback: the clearance itself follows right away, a
             # "say again" here would be noise.
             return ""
-        return self._say("readback_incomplete", callsign,
-                         agency=self._agency(controller), item=item) + " "
+        # The next takeoff clearance follows immediately, so the pilot cannot
+        # retry this line-up readback as a separate step.
+        return self._readback_failure_reply(
+            callsign, item, controller, pilot.readback_fails,
+            force_continue=True) + " "
 
     @staticmethod
     def _item_label(clearance: str, missing_num, missing_gate) -> str:
@@ -2078,7 +2111,7 @@ class AtcBrain:
                 return self._check_readback(callsign, pilot, low, clearance,
                                             controller)
             readback_cue = re.search(
-                r"\b(readback|read back|copy|roger|wilco|cleared|clear|"
+                r"\b(say again|repeat|readback|read back|copy|roger|wilco|cleared|clear|"
                 r"hold short|line up|lined up|after departure|turn|heading|"
                 r"descend|climb|angels|exit|via|runway|qnh|in use)\b", low)
             if _vague_position_report(low):
@@ -2777,13 +2810,15 @@ class AtcBrain:
             spoken = self._readback_numbers(self.callsigns.strip(low))
             if not self._number_read_back(self.runway, spoken):
                 pilot.ground_runway_readback_fails += 1
-                if pilot.ground_runway_readback_fails >= 2:
+                if (pilot.ground_runway_readback_fails
+                        > self.readback_retries):
                     # Do not trap training in an endless readback loop. State
                     # the correct information once more, then release the
                     # information step without claiming the readback was right.
                     pilot.info_issued = False
                     pilot.ground_info_readback_required = False
                     pilot.ground_runway_readback_fails = 0
+                    pilot.readback_pending = False
                     final = self._say("ground_info_final_continue", callsign)
                     if pilot.pending_ground_clearance:
                         pilot.pending_ground_clearance = False
@@ -2796,8 +2831,9 @@ class AtcBrain:
                         and spoken):
                     return self._say("ground_info_runway_correction",
                                      callsign)
-                return self._say("readback_incomplete", callsign,
-                                 agency=self.ground_short, item="runway")
+                return self._readback_failure_reply(
+                    callsign, "runway", Controller.GROUND,
+                    pilot.ground_runway_readback_fails)
             pilot.info_issued = False
             pilot.ground_info_readback_required = False
             pilot.readback_pending = False
@@ -4256,6 +4292,7 @@ class AtcBrain:
         pilot.departure_handoff_zone_seen = False
         pilot.departure_previous_range_nm = None
         pilot.departure_previous_bearing_deg = None
+        pilot.readback_fails = 0
         pilot.control_checkin_received = False
         pilot.climb_issued = False
         pilot.departure_climb_angels = None
@@ -4662,8 +4699,14 @@ class AtcBrain:
                                  agency=self.stingray_short)
             return ""
         task["readback_fails"] = task.get("readback_fails", 0) + 1
-        return self._say("readback_incomplete", callsign,
-                         agency=self.stingray_short, item=item)
+        exhausted = task["readback_fails"] > self.readback_retries
+        reply = self._readback_failure_reply(
+            callsign, item, Controller.STINGRAY, task["readback_fails"])
+        if exhausted:
+            task["readback_complete"] = True
+            task["readback_fails"] = 0
+            pilot.readback_pending = False
+        return reply
 
     @staticmethod
     def _abandon_stingray_training_task(pilot: PilotState) -> None:
