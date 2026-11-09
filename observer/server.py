@@ -70,6 +70,7 @@ class Observer:
                 with self.lock:
                     self.snapshot = {"aircraft": aircraft,
                                      "bullseye": [be["lat"], be["lon"]] if be else None,
+                                     "view_coalition": self.args.coalition,
                                      "error": None, "updated": now,
                                      "history_minutes": self.args.history,
                                      "srs": self.snapshot.get("srs", "Not connected")}

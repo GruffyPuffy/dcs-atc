@@ -18,4 +18,29 @@ commands are sent to DCS. The SRS connection in this first prototype performs
 the client handshake only; selecting radio frequencies, receiving audio, and
 transcription are future work.
 
-The page uses OpenStreetMap tiles and Leaflet from their public CDNs.
+The map uses the same dcsmaps Caucasus tile source and WMS overlay as the ATC
+map: DCS tiles underneath, with airbases, cities, towns, roads, railroads,
+landmarks, TACAN, VOR, NDB, DME, and database layers above. The **Map labels**
+checkbox toggles the WMS overlay, which refreshes after map movement or zoom.
+Leaflet is loaded from its public CDN.
+
+## Unit symbols
+
+Aircraft and other units use MIL-STD-2525 / APP-6 SVG symbols rendered by the
+independent `milsymbol` JavaScript library (pinned CDN version 3.0.4). DCS
+blue, red, and neutral sides always render blue, red, and green, respectively.
+Fixed-wing and
+rotary-wing aircraft have distinct icons; ground and sea units use their
+respective generic symbol sets. This is a display classification based on the
+bridge's DCS category, not a detailed symbol database for each DCS aircraft
+model. Markers shrink with zoom; at zoom levels below 8, nearby units of the
+same coalition and domain are grouped into counted markers. Aircraft expand
+into individual units at zoom 11; ground and sea units stay grouped until zoom
+15. The bridge currently doesn't expose a spawned/active flag, so the observer
+can't reliably suppress unspawned dynamic-spawn slots without a bridge change.
+The rest of the symbol code and map UI live under `observer/`.
+
+The Units panel separates units with a non-empty bridge `player` name into
+Real Players and puts units without a current player name under AI / no player.
+Player paths are checked by default. A player joining, leaving, or changing
+unit updates the lists and default path selection on the next bridge poll.
