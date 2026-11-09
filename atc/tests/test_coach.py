@@ -78,13 +78,13 @@ def test_say_again_replays_the_clearance_without_the_note(brain):
 
 
 def test_no_note_on_readback_feedback(brain):
-    # "readback incomplete" already corrected this transmission; the coach
+    # The negative correction already handles this transmission; the coach
     # never stacks a wording note on it.
     brain.handle("Ground, Colt 1, requesting taxi", controller=Controller.GROUND)
     # Sloppy AND incomplete: only the semantic feedback speaks.
     reply = brain.handle("Colt 1, I need, hold short",
                          controller=Controller.GROUND)
-    assert "readback incomplete" in reply.lower()
+    assert "negative" in reply.lower()
     assert brain.take_coach("Colt 1") == ""
 
 

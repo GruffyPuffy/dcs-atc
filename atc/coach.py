@@ -14,8 +14,8 @@ names the canonical pilot call from the MA SOP (same dialogs the kneeboard
 renders). Nothing is required for the call to work — the suggestion is pure
 pedagogy on top. Add rules as new sloppy habits show up in debriefs.
 
-The suggestion NEVER fires when the reply already carries semantic feedback
-("readback incomplete"): one corrective note per transmission, no nagging.
+The suggestion NEVER fires when the reply already carries a readback
+correction: one corrective note per transmission, no nagging.
 """
 
 import re
@@ -91,8 +91,8 @@ def note(utterance: str) -> str:
     Returns just the canonical wording ("requesting taxi") — the brain wraps
     it in the `coach_wording` phraseology template (the "Apollo suggests:"
     voice). The brain only asks in coach mode; in casual mode the coach is
-    never invoked at all. The brain already suppresses notes on semantic
-    feedback ("readback incomplete"): one corrective point per transmission.
+    never invoked at all. The brain already suppresses notes on readback
+    corrections: one corrective point per transmission.
     """
     if not utterance:
         return ""

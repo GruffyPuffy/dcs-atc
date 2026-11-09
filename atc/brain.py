@@ -43,6 +43,7 @@ RADIO_NORMAL_POLICY = ("normal", 2.0)
 RADIO_ANSWER_POLICY = ("answer", 5.0)
 RADIO_EMERGENCY_POLICY = ("emergency", 2.0)
 READBACK_REMINDER_DELAY_SEC = 20.0
+DEFAULT_READBACK_RETRIES = 1
 
 # Only clearances with an immediate, specific readback expectation arm the
 # reminder. Reports, handoffs, challenges, and generic answers do not.
@@ -81,7 +82,8 @@ RADIO_ANSWER_KEYS = frozenset({
     "ground_info", "ground_info_weather", "ground_info_readback",
     "ground_info_runway_correction", "ground_info_readback_prompt",
     "ground_info_final_continue",
-    "readback_incomplete", "say_again", "say_again_no_callsign",
+    "readback_incomplete", "readback_incomplete_retry",
+    "say_again", "say_again_no_callsign",
     "speed_position_unknown", "speed_restriction_ctr",
     "stingray_bullseye_challenge", "stingray_marking_unclear",
     "stingray_angels_rounding",
@@ -186,6 +188,10 @@ _NUMBER_WORDS = {**_ONES, **_TEENS, **_TENS}
 _READBACK_NUMBER_ALIASES = {
     "wun": "one", "won": "one",
     "too": "two", "to": "two",
+    # Whisper can render spoken "two" as the letter Q in a runway readback
+    # ("Q5" for runway 25). Applied only by the context-gated readback decoder;
+    # "QNH" remains its own token and its pressure digits are unaffected.
+    "q": "two",
     "tree": "three", "free": "three",
     "fower": "four", "for": "four",
     "fife": "five",
@@ -675,6 +681,9 @@ class PilotState:
     phase: Phase = Phase.IDLE
     cleared_inbound: bool = False
     cleared_landing: bool = False
+    # A recognized pilot readback of the active landing clearance. Once heard,
+    # later "on final" status calls from this pilot need no reminder.
+    landing_clearance_readback_received: bool = False
     # Tower has issued the overhead-break clearance (debrief 2026-10-18: the
     # pilot's readback "right overhead brake" must not re-trigger the request).
     break_cleared: bool = False
@@ -824,7 +833,8 @@ class PilotState:
 class Phraseology:
     """Reply templates loaded from phraseology.json."""
 
-    def __init__(self, templates: dict[str, str], variables: dict[str, str]):
+    def __init__(self, templates: dict[str, str],
+                 variables: dict[str, object]):
         self.templates = templates
         self.variables = variables
 
@@ -867,6 +877,12 @@ class AtcBrain:
         self.gate_locator = gate_locator  # callable(lat, lon) -> gate name
         self.airfield = airfield  # Airfield, for position cross-checks
         self.phraseology = phraseology or Phraseology.load()
+        try:
+            self.readback_retries = max(0, int(
+                self.phraseology.variables.get(
+                    "readback_retries", DEFAULT_READBACK_RETRIES)))
+        except (TypeError, ValueError):
+            self.readback_retries = DEFAULT_READBACK_RETRIES
         self.callsigns = callsigns or CallsignRegistry()
         self.pilots: dict[str, PilotState] = {}
         # Side-channel for the radio output scheduler. ``handle`` is called
@@ -1685,14 +1701,6 @@ class AtcBrain:
                 route_missing = True
         if not missing_num and not missing_gate and not route_missing:
             return None
-        # A gate WAS named, just a different one ("after departure, turn right,
-        # exit north" when Exit East was cleared): the pilot did read back an
-        # exit — saying "I did not get your exit" is confusing. The honest
-        # controller response is to say the clearance again, so label it as a
-        # full "say again" of the clearance instead of a missing item.
-        if missing_gate and any(re.search(rf"\b(?:exit|entry)\s+{re.escape(g)}\b",
-                                          low, re.IGNORECASE) for g in self.gates):
-            return "clearance"
         # Give the pilot every missing item, with values from the clearance.
         # Sorting by source position keeps the spoken coaching in clearance
         # order instead of set iteration order.
@@ -1721,10 +1729,17 @@ class AtcBrain:
             elif re.search(r"\bchannel\s*$", prefix, re.IGNORECASE):
                 label = f"channel {number}"
             elif re.search(r"\bangels\s*$", prefix, re.IGNORECASE):
-                label = f"altitude Angels {number}"
+                label = f"Angels {number}"
             elif re.match(r"\s*(?:ft|feet)\b",
                           clearance[number_match.end():], re.IGNORECASE):
-                label = f"altitude {number} feet"
+                after_unit = re.sub(
+                    r"^\s*(?:ft|feet)\b", "",
+                    clearance[number_match.end():], count=1,
+                    flags=re.IGNORECASE)
+                restriction = re.match(r"\s+or\s+(below|above)\b",
+                                       after_unit, re.IGNORECASE)
+                suffix = f" or {restriction.group(1)}" if restriction else ""
+                label = f"altitude {number} ft{suffix}"
             elif re.search(r"\b(?:altitude|climb|descend|below)\b",
                            prefix, re.IGNORECASE):
                 label = f"altitude {number}"
@@ -1793,11 +1808,9 @@ class AtcBrain:
         A clean first readback keeps the silent behaviour, so every tested
         kneeboard dialog is unchanged.
 
-        An incomplete readback is **not** called correct: it gets an honest
-        "readback incomplete — {item} not read back, continue." so the pilot
-        knows what to train on, and the caller still advances the phase, so a
-        fumbled readback never traps them — they keep flying and fix it next
-        time.
+        An incorrect or incomplete readback gets the expected item stated
+        directly, with a retry prompt up to the configured limit. After that,
+        the check is cleared so repeated errors cannot trap the pilot.
         """
         agency = self._agency(controller)
         pilot.readback_replay = clearance or pilot.last_clearance or pilot.last_reply
@@ -1812,11 +1825,22 @@ class AtcBrain:
                                  agency=agency)
             return ""
         pilot.readback_fails += 1
-        if item == "clearance":
-            # A wrong item was read back (e.g. a different exit): the honest
-            # response is the clearance again, not "I did not get your exit".
-            return self._say("say_again", callsign, agency=agency)
-        return self._say("readback_incomplete", callsign, agency=agency,
+        exhausted = pilot.readback_fails > self.readback_retries
+        reply = self._readback_failure_reply(
+            callsign, item, controller, pilot.readback_fails)
+        if exhausted:
+            pilot.readback_pending = False
+            pilot.readback_fails = 0
+        return reply
+
+    def _readback_failure_reply(self, callsign: str, item: str,
+                                controller: Controller, failures: int,
+                                *, force_continue: bool = False) -> str:
+        """State the expected item, then end the check at its retry limit."""
+        key = ("readback_incomplete_retry"
+               if failures <= self.readback_retries and not force_continue
+               else "readback_incomplete")
+        return self._say(key, callsign, agency=self._agency(controller),
                          item=item)
 
     def _remember_arrival_join(self, pilot: PilotState,
@@ -1873,10 +1897,17 @@ class AtcBrain:
                                  agency=self._agency(controller))
             return ""
         pilot.arrival_join_readback_fails += 1
+        exhausted = (pilot.arrival_join_readback_fails
+                     > self.readback_retries)
         if item == "clearance":
             item = "entry"
-        return self._say("readback_incomplete", callsign,
-                         agency=self._agency(controller), item=item)
+        reply = self._readback_failure_reply(
+            callsign, item, controller, pilot.arrival_join_readback_fails)
+        if exhausted:
+            pilot.arrival_join_readback_complete = True
+            pilot.arrival_join_readback_fails = 0
+            pilot.readback_pending = False
+        return reply
 
     def _readback_coaching(self, callsign, pilot, low, clearance,
                            controller) -> str:
@@ -1897,8 +1928,11 @@ class AtcBrain:
             # Wrong-item readback: the clearance itself follows right away, a
             # "say again" here would be noise.
             return ""
-        return self._say("readback_incomplete", callsign,
-                         agency=self._agency(controller), item=item) + " "
+        # The next takeoff clearance follows immediately, so the pilot cannot
+        # retry this line-up readback as a separate step.
+        return self._readback_failure_reply(
+            callsign, item, controller, pilot.readback_fails,
+            force_continue=True) + " "
 
     @staticmethod
     def _item_label(clearance: str, missing_num, missing_gate) -> str:
@@ -2071,7 +2105,7 @@ class AtcBrain:
                 return self._check_readback(callsign, pilot, low, clearance,
                                             controller)
             readback_cue = re.search(
-                r"\b(readback|read back|copy|roger|wilco|cleared|clear|"
+                r"\b(say again|repeat|readback|read back|copy|roger|wilco|cleared|clear|"
                 r"hold short|line up|lined up|after departure|turn|heading|"
                 r"descend|climb|angels|exit|via|runway|qnh|in use)\b", low)
             if _vague_position_report(low):
@@ -2102,7 +2136,7 @@ class AtcBrain:
         if reply and not self._is_meta_reply(reply):
             # Remember the last clearance so the pilot can ask for it again
             # ("say again") — a trainer aid for missed readbacks. Meta replies
-            # ("say again", "readback incomplete") are NOT stored: storing one
+            # ("say again", readback corrections) are NOT stored: storing one
             # made a later "repeat" replay the "say again" itself, an endless
             # loop that hid the real clearance (debrief 2026-10-18 12:44:32).
             pilot.last_reply = reply
@@ -2119,11 +2153,11 @@ class AtcBrain:
         # callsign) still gets its teaching note in the pilot's feed.
         # The coach is a post-step on the utterance text: intent recognition
         # is untouched, and a note is never set on semantic feedback
-        # ("readback incomplete" already corrected this transmission) or meta
+        # (a readback correction already handled this transmission) or meta
         # chatter (trainer commands).
         if self.mode == "coach" \
                 and not ("trainer" in reply.lower() if reply else False) \
-                and "readback incomplete" not in (reply or "").lower():
+                and not self._is_meta_reply(reply or ""):
             proper = coach.note(low)
             if not proper and pilot.last_readback:
                 proper = coach.note_readback(low, callsign)
@@ -2135,13 +2169,22 @@ class AtcBrain:
     def _is_meta_reply(self, reply: str) -> bool:
         """True for housekeeping replies that must not shadow the clearance.
 
-        "say again" and "readback incomplete" are feedback about a readback,
+        "say again" and readback corrections are feedback about a readback,
         not clearances. If they replaced `last_reply`, a follow-up "repeat"
         would replay the feedback instead of the clearance the pilot asked
         for. `last_clearance` (set when a clearance is issued) is unaffected.
         """
-        return ("say again" in reply.lower()
-                or "readback incomplete" in reply.lower())
+        low = reply.lower().rstrip()
+        if ("say again" in low or "readback incomplete" in low
+                or low.endswith("no need to repeat.")):
+            return True
+        # Readback corrections now end with the expected value, without a
+        # separate "read back again" prompt. Keep them meta so "say again"
+        # still replays the clearance rather than the correction.
+        return bool(re.search(
+            r"\bnegative,\s+(?:altitude|angels|qnh|runway|heading|exit|"
+            r"entry|channel|bulls|taxi route|hold short|turn|readback)\b",
+            low))
 
     def remember_transmission(self, callsign: str, text: str) -> None:
         """Remember the latest ATC message addressed to a pilot for replay."""
@@ -2606,6 +2649,7 @@ class AtcBrain:
         pilot.phase = Phase.IDLE
         pilot.cleared_inbound = False
         pilot.cleared_landing = False
+        pilot.landing_clearance_readback_received = False
         pilot.break_cleared = False
         pilot.pattern_flown = False
         pilot.go_around_issued = False
@@ -2688,6 +2732,7 @@ class AtcBrain:
         }.get(pilot.phase, Phase.IDLE)
         pilot.phase = back
         pilot.cleared_landing = False
+        pilot.landing_clearance_readback_received = False
         pilot.break_cleared = False
         pilot.pattern_flown = False
         pilot.go_around_circuit = False
@@ -2765,16 +2810,18 @@ class AtcBrain:
         # pilot gets "say again", stalling the flow at the very first exchange.
         if pilot.phase == Phase.IDLE and pilot.info_issued and re.search(
                 r"\b(runway|in use|qnh|q\.?n\.?h\.?)\b", low):
-            spoken = self._numbers(self.callsigns.strip(low))
+            spoken = self._readback_numbers(self.callsigns.strip(low))
             if not self._number_read_back(self.runway, spoken):
                 pilot.ground_runway_readback_fails += 1
-                if pilot.ground_runway_readback_fails >= 2:
+                if (pilot.ground_runway_readback_fails
+                        > self.readback_retries):
                     # Do not trap training in an endless readback loop. State
                     # the correct information once more, then release the
                     # information step without claiming the readback was right.
                     pilot.info_issued = False
                     pilot.ground_info_readback_required = False
                     pilot.ground_runway_readback_fails = 0
+                    pilot.readback_pending = False
                     final = self._say("ground_info_final_continue", callsign)
                     if pilot.pending_ground_clearance:
                         pilot.pending_ground_clearance = False
@@ -2787,8 +2834,9 @@ class AtcBrain:
                         and spoken):
                     return self._say("ground_info_runway_correction",
                                      callsign)
-                return self._say("readback_incomplete", callsign,
-                                 agency=self.ground_short, item="runway")
+                return self._readback_failure_reply(
+                    callsign, "runway", Controller.GROUND,
+                    pilot.ground_runway_readback_fails)
             pilot.info_issued = False
             pilot.ground_info_readback_required = False
             pilot.readback_pending = False
@@ -3100,6 +3148,7 @@ class AtcBrain:
             repeated = pilot.go_around_issued
             pilot.phase = Phase.INBOUND
             pilot.cleared_landing = False
+            pilot.landing_clearance_readback_received = False
             pilot.pattern_flown = False
             pilot.go_around_issued = True
             pilot.go_around_circuit = True
@@ -3130,6 +3179,7 @@ class AtcBrain:
             if self._runway_busy(traffic, exclude=speaker):
                 pilot.phase = Phase.INBOUND
                 pilot.cleared_landing = False
+                pilot.landing_clearance_readback_received = False
                 pilot.pattern_flown = False
                 pilot.go_around_issued = True
                 pilot.go_around_circuit = True
@@ -3147,6 +3197,7 @@ class AtcBrain:
             # full-stop landing clearance.
             pilot.phase = Phase.LANDING
             pilot.cleared_landing = False
+            pilot.landing_clearance_readback_received = False
             pilot.pattern_flown = False
             pilot.go_around_circuit = True
             pilot.touch_and_go_pending = True
@@ -3322,16 +3373,23 @@ class AtcBrain:
         # position report in the base turn or on final. Only accept base-turn
         # wording after the OHB clearance; with radar available, confirm the
         # flight is in a pattern-turn slice before clearing it.
+        turning_final_report = bool(re.search(
+            r"\bturn(?:ing)?(?:\s+to|\s+onto)?\s+final\b", low))
         if re.search(r"\b(?:base(?:\s+(?:leg|turn))?|"
-                     r"turn(?:ing)?\s+(?:to\s+|onto\s+)?base)\b", low):
+                     r"turn(?:ing)?\s+(?:to\s+|onto\s+)?base)\b", low) \
+                or turning_final_report:
             pilot.phase = Phase.LANDING
             if (not pilot.break_cleared or pilot.cleared_landing
                     or pilot.touch_and_go_pending):
                 return ""
-            if (track is not None and self.airfield is not None
-                    and not self.airfield.in_pattern_turn(
-                        track.lat, track.lon, self.runway)):
-                return self._challenge(callsign, self.tower_short, track)
+            if track is not None and self.airfield is not None:
+                in_turn = self.airfield.in_pattern_turn(
+                    track.lat, track.lon, self.runway)
+                established_final = (turning_final_report
+                    and self.airfield.is_established_final(
+                        track.lat, track.lon, track.heading, self.runway))
+                if not in_turn and not established_final:
+                    return self._challenge(callsign, self.tower_short, track)
             pilot.pattern_flown = True
             if self._runway_busy(traffic, exclude=speaker):
                 pilot.phase = Phase.INBOUND
@@ -3340,10 +3398,9 @@ class AtcBrain:
                 return self._say("continue_approach", callsign)
             return self._issue_landing_clearance(callsign, pilot)
         # Other pattern position reports (MA: optional, no reply). “Downwind”,
-        # “upwind”, “crosswind”, and “turning final” are status only; “turning
-        # final” must not fall through to the bare-final clearance below.
-        if re.search(r"\b(up ?wind|cross ?wind|down ?wind|"
-                     r"turn(?:ing)?(?:\s+to|\s+onto)?\s+final)\b", low):
+        # “upwind”, and “crosswind” are status only. “Turning final” was
+        # handled above as a position report and landing-clearance request.
+        if re.search(r"\b(up ?wind|cross ?wind|down ?wind)\b", low):
             pilot.phase = Phase.LANDING
             return ""
         # Readback of the takeoff clearance once already cleared ("right turn
@@ -3376,23 +3433,17 @@ class AtcBrain:
             pilot.phase = Phase.TAXI
             pilot.pending_handoff_to = Controller.GROUND.value
             return self._say("contact_ground", callsign)
-        # Check the exit-side readback for coaching, but never make the later
-        # position-triggered Ground handoff depend on it.
+        # Once Tower has issued its vacate instruction, any pilot transmission
+        # is enough to hand off to Ground. Avoid readback correction here: the
+        # pilot is rolling and should switch/check in before reporting clear.
+        # Radar remains a fallback if the pilot does not transmit again.
         if (pilot.landing_exit_instruction_announced
                 and pilot.landing_exit_side
-                and re.search(r"\bvacate\b", low)):
-            said_side = re.search(r"\bvacate(?:\s+the)?\s+(left|right)\b",
-                                  low)
-            if (said_side is None
-                    or said_side.group(1) != pilot.landing_exit_side):
-                if not pilot.landing_exit_readback_feedback_sent:
-                    pilot.landing_exit_readback_feedback_sent = True
-                    return self._say("readback_incomplete", callsign,
-                                     agency=self.tower_short,
-                                     item="exit side")
-            else:
-                pilot.readback_fails = 0
-            return ""
+                and not pilot.landing_handoff_announced):
+            pilot.landing_handoff_announced = True
+            pilot.phase = Phase.TAXI
+            pilot.pending_handoff_to = Controller.GROUND.value
+            return self._say("contact_ground", callsign)
         # Readback of the landing clearance ("runway 25, cleared to land") once
         # already cleared. Master Arms (Landing Procedures §Comms): "after the
         # landing clearance (and your readback) there's generally no need for
@@ -3404,6 +3455,9 @@ class AtcBrain:
         # individual clearance, so it is acknowledged with silence too.
         if pilot.phase == Phase.LANDING and re.search(
                 r"\b(cleared|clear to land|copy|roger|wilco|readback)\b", low):
+            if (pilot.cleared_landing and re.search(
+                    r"\bclear(?:ed)?\s+to\s+land\b", low)):
+                pilot.landing_clearance_readback_received = True
             return ""
         if pilot.phase == Phase.INBOUND and pilot.cleared_landing \
                 and re.search(r"\b(on final|short final|final)\b", low):
@@ -3426,8 +3480,12 @@ class AtcBrain:
             if pilot.touch_and_go_pending:
                 return ""
             # After the clearance (voice or radar), this status report may
-            # mean the pilot missed the earlier call. Give one reminder.
+            # mean the pilot missed the earlier call. Remind once if its
+            # readback has not been recognized; after a recognized readback,
+            # MA practice is to stay silent on further final status calls.
             if pilot.cleared_landing:
+                if pilot.landing_clearance_readback_received:
+                    return ""
                 return self._already_cleared_landing_reminder(callsign, pilot)
             # Zones check: a pilot still in the pattern turn (inside a slice)
             # has NOT rolled out yet — their "on final" does not match the
@@ -3439,7 +3497,8 @@ class AtcBrain:
                                                       self.runway) \
                     and not self.airfield.is_established_final(
                         track.lat, track.lon, track.heading, self.runway):
-                return self._challenge(callsign, self.tower_short, track)
+                return self._say("tower_early_final_challenge", callsign,
+                                 agency=self.tower_short)
             # Cross-check: only clear to land if actually on final.
             if track is not None and self.airfield is not None \
                     and not self.airfield.is_on_final(track.lat, track.lon,
@@ -3913,8 +3972,13 @@ class AtcBrain:
         # matched any call merely containing "stingray"/"awacs", so every
         # unrecognised call ("Stingray, Colt 1, picture") got a false
         # "Colt 1, Stingray." ack instead of falling through to its own
-        # handling. A call that carries content is not a check-in.
-        if self._is_bare_checkin(low, ""):
+        # handling. A call that carries content is not a check-in. Repair two
+        # debriefed STT renderings only for this bare-check-in check: "staying
+        # ready" and "Dingray" for "Stingray".
+        checkin_text = re.sub(
+            r"\b(?:staying\s+ready|dingray)\b", "stingray", low,
+            flags=re.IGNORECASE)
+        if self._is_bare_checkin(checkin_text, ""):
             if pilot.phase in (Phase.IDLE, Phase.AIRBORNE):
                 pilot.phase = Phase.STINGRAY
             return self._say("stingray_ack", callsign)
@@ -4204,9 +4268,8 @@ class AtcBrain:
     def _takeoff_turnout(self, pilot: PilotState) -> str:
         """The turnout clause for the takeoff clearance: "left"/"right"/"straight".
 
-        Real ATC (per MA): a **left** turnout is the default and is not spoken;
-        a **right** turnout is called. A departure that flies the runway heading
-        to its exit is told "fly runway heading".
+        The turnout follows the assigned exit: left and right turns are both
+        stated. A straight-out departure is told "fly runway heading".
         """
         if self.airfield is None:
             return "straight"
@@ -4222,8 +4285,8 @@ class AtcBrain:
         """The takeoff clearance, with the turnout following the departure exit.
 
         Master Arms: "<callsign>, right turnout, cleared for take-off runway 25".
-        Only a right turnout is spoken — a left turnout is the default and gets
-        no clause; a straight-out departure is told "fly runway heading".
+        State the assigned left or right turnout; a straight-out departure is
+        told "fly runway heading".
         """
         # A pilot can land, taxi, and depart again in the same DCS spawn. The
         # Tower->Control handoff is one-shot per departure, not per spawn.
@@ -4232,6 +4295,7 @@ class AtcBrain:
         pilot.departure_handoff_zone_seen = False
         pilot.departure_previous_range_nm = None
         pilot.departure_previous_bearing_deg = None
+        pilot.readback_fails = 0
         pilot.control_checkin_received = False
         pilot.climb_issued = False
         pilot.departure_climb_angels = None
@@ -4638,8 +4702,14 @@ class AtcBrain:
                                  agency=self.stingray_short)
             return ""
         task["readback_fails"] = task.get("readback_fails", 0) + 1
-        return self._say("readback_incomplete", callsign,
-                         agency=self.stingray_short, item=item)
+        exhausted = task["readback_fails"] > self.readback_retries
+        reply = self._readback_failure_reply(
+            callsign, item, Controller.STINGRAY, task["readback_fails"])
+        if exhausted:
+            task["readback_complete"] = True
+            task["readback_fails"] = 0
+            pilot.readback_pending = False
+        return reply
 
     @staticmethod
     def _abandon_stingray_training_task(pilot: PilotState) -> None:
@@ -5064,6 +5134,7 @@ class AtcBrain:
         pilot.go_around_circuit = False
         pilot.touch_and_go_pending = False
         pilot.cleared_landing = True
+        pilot.landing_clearance_readback_received = False
         pilot.already_cleared_landing_reminder_sent = False
         pilot.landing_runway = self.runway
         pilot.landing_rollout_seen = False
@@ -5078,6 +5149,7 @@ class AtcBrain:
             if wing_state is not None and wing_state.phase in (
                     Phase.INBOUND, Phase.LANDING):
                 wing_state.cleared_landing = True
+                wing_state.landing_clearance_readback_received = False
                 wing_state.already_cleared_landing_reminder_sent = False
         return self._say("cleared_land", callsign,
                          flight=self._formation_prefix(pilot))
@@ -5113,6 +5185,7 @@ class AtcBrain:
             pilot.go_around_issued = True
             pilot.phase = Phase.INBOUND
             pilot.cleared_landing = False
+            pilot.landing_clearance_readback_received = False
             pilot.pattern_flown = False
             pilot.go_around_circuit = True
             pilot.touch_and_go_pending = False
@@ -5233,6 +5306,7 @@ class AtcBrain:
             pilot.awaiting_landing = False
             pilot.phase = Phase.LANDING
             pilot.cleared_landing = True
+            pilot.landing_clearance_readback_received = False
             pilot.landing_runway = self.runway
             pilot.already_cleared_landing_reminder_sent = False
             pilot.landing_rollout_seen = False

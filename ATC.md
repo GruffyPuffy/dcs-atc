@@ -206,7 +206,7 @@ channel.
 | "Tower, Colt 1, at runway 25, ready for departure" | **departure** (after taxi/holding) | "Colt 1, Tower, line up and wait runway 25." |
 | "Tower, Colt 1, airborne" / "…wheels up" / "…off the ground" | **departure report** (after takeoff) | "Colt 1, Tower, contact Control on channel 8." ("wheels up" is the MA call; "wheels up on the go" is a touch-and-go report and is **not** matched — see §7) |
 | "Tower, Colt 1, ready for departure" (**while an arrival**) | **wrong call** | "Colt 1, Tower, negative, report runway in sight for landing." (never clears a takeoff for a pilot who is inbound/landing) |
-| "Line up and wait 25, Colt 1" | **readback** | *(silent)* — then, once the aircraft is actually **lined up** (at the threshold, pointing down the runway, stationary), the monitor issues "cleared for takeoff runway 25" unprompted. The clearance does **not** follow the readback alone: the pilot has only acknowledged the instruction, they may still be taxiing on. (A right turnout is spoken, a left turnout is the default and is not, and a straight-out departure gets "fly runway heading".) |
+| "Line up and wait 25, Colt 1" | **readback** | *(silent)* — then, once the aircraft is actually **lined up** (at the threshold, pointing down the runway, stationary), the monitor issues the takeoff clearance unprompted. The clearance does **not** follow the readback alone: the pilot has only acknowledged the instruction, they may still be taxiing on. The assigned left or right turnout is spoken; a straight-out departure gets "fly runway heading". |
 | "Control, Colt 1, at 1500 ft" | **departure check-in** | "Colt 1, Control, radar contact, climb to the assigned Angels level (12–18)." |
 | "Climbing to Angels [assigned level], Colt 1" | **climb readback** | *(silent)* — then, once at that level, "Colt 1, Control, contact Stingray on channel 3." (Stingray is a real controller — see §11) |
 | "Kutaisi Control, Colt 1, inbound 35 miles north at Angels 12" | **inbound** | "Colt 1, Control, radar contact, turn right heading 150 to join via Entry East." (heading **and turn** computed from the live position; a pilot already pointing at the gate gets "fly heading 150" instead; entry is the best/straight-in gate for runway 25) |
@@ -252,20 +252,63 @@ follows this rule:
 | Control descent | Tower handoff | the handoff |
 | Overhead-break clearance | in the break / on final | *(silent)* |
 
-An **incomplete** readback is never silently accepted: it gets an honest
-"readback incomplete — I did not get your {item}. Continue." (the phase still
-advances, so a fumbled readback never traps the pilot).
+An incorrect or incomplete readback is corrected by stating the expected item
+directly: **"Negative, altitude 1500 ft or below."** The response uses the
+expected value whether the pilot gave a wrong value or left it out. The bot
+accepts one corrected readback by default. After the retry limit, it says **"No
+need to repeat"** and clears the check so a fumbled readback never traps the
+pilot.
+
+Example dialogs (using the default one-retry setting):
+
+**Successful readback**
+
+```text
+ATC:   Adder 1-1, Ground, after departure turn right Exit West, 1500 ft or below.
+Pilot: After departure turn right Exit West, 1500 feet or below, Adder 1-1.
+ATC:   (silent; the readback is correct)
+```
+
+**No readback**
+
+```text
+ATC:   Adder 1-1, Ground, after departure turn right Exit West, 1500 ft or below.
+Pilot: (no reply for about 20 seconds)
+ATC:   Adder 1-1, reminder, read back the clearance when able.
+Pilot: After departure turn right Exit West, 1500 feet or below, Adder 1-1.
+ATC:   (silent; the readback is correct)
+```
+
+**Wrong value, then correct**
+
+```text
+ATC:   Adder 1-1, Ground, after departure turn right Exit West, 1500 ft or below.
+Pilot: After departure turn right Exit West, 1600 ft or below, Adder 1-1.
+ATC:   Adder 1-1, Ground, negative, altitude 1500 ft or below.
+Pilot: After departure turn right Exit West, 1500 feet or below, Adder 1-1.
+ATC:   Adder 1-1, Ground, readback correct.
+```
+
+**Incorrect twice**
+
+```text
+ATC:   Adder 1-1, Ground, after departure turn right Exit West, 1500 ft or below.
+Pilot: After departure turn right Exit West, Adder 1-1.
+ATC:   Adder 1-1, Ground, negative, altitude 1500 ft or below.
+Pilot: After departure turn right Exit West, Adder 1-1.
+ATC:   Adder 1-1, Ground, negative, altitude 1500 ft or below. No need to repeat.
+```
 
 **One exception:** if an earlier attempt at that clearance was incomplete, the
 readback that **fixes** it *is* confirmed with "readback correct". Saying nothing
-after a "readback incomplete" leaves the pilot unsure whether the correction
+after a readback correction leaves the pilot unsure whether the correction
 landed. A clean first readback keeps the silent behaviour above, so no tested
 dialog changes:
 
 | Readback | Reply |
 | --- | --- |
 | First attempt, correct | *(silent — the rule above)* |
-| Corrects a prior "readback incomplete" | "readback correct." |
+| Corrects a previously flagged readback | "readback correct." |
 
 ---
 
@@ -397,8 +440,8 @@ stays silent and the pilot gets a **direct in-game message** to their own feed:
 | a readback that **begins** with their callsign ("Colt 1, cleared taxi…") | normal (silent or "readback correct") | "Apollo suggests: a readback ends with your callsign — there is none before it." |
 
 Notes are one-shot (expire with the transmission they were for), never replayed
-by `say again`, and never stack on semantic feedback ("readback incomplete"
-takes priority). Coach mode is the default; in casual mode nothing fires. The
+by `say again`, and never stack on a readback correction. Coach mode is the
+default; in casual mode nothing fires. The
 teaching target is always the canonical pilot call from the MA SOP dialogs —
 the same wording the kneeboard cards train.
 
@@ -973,8 +1016,8 @@ Tactical 265.00) — the SOP's "contact Stingray on channel 3".
   acknowledgement — no "readback correct"). The **turnout** follows the
   departure exit gate (the same gate the Ground clearance named): a **right**
   turnout is spoken (*"right turnout, cleared for takeoff runway 25"*), a
-  **left** turnout is the default and is not spoken, and a straight-out
-  departure is told *"fly runway heading"*. The exit is chosen once, at "ready
+  **left or right** turnout is spoken, and a straight-out departure is told
+  *"fly runway heading"*. The exit is chosen once, at "ready
   to copy clearance", so Ground's exit and Tower's turnout always agree.
 - "runway in sight" / "overhead break" / "initial" → overhead-break clearance.
   A correct readback is **silent** (same as takeoff/landing).

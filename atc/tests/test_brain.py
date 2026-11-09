@@ -121,7 +121,7 @@ def test_any_pilot_speech_cancels_reminder_and_wrong_readback_does_not_rearm(
     feedback = brain.handle(
         "Colt 1, cleared taxi and hold short runway 25",
         controller=Controller.GROUND, speaker="Caveman")
-    assert "readback incomplete" in feedback.lower()
+    assert "negative" in feedback.lower()
     assert pilot.readback_reminder_deadline is None
     assert pilot.readback_reminder_expected == ""
     assert brain.pop_due_readback_reminders(float("inf")) == []
@@ -336,8 +336,7 @@ def test_tower_break_clearance_readback_tolerates_stt_brake(brain):
     assert reply == ""
 
 
-def test_tower_turning_final_is_silent(brain):
-    brain.handle("Tower, Colt 1, runway in sight", controller=Controller.TOWER)
+def test_tower_turning_final_without_break_clearance_stays_silent(brain):
     assert brain.handle("Colt 1, turning final",
                         controller=Controller.TOWER) == ""
     assert brain.pilots["Colt 1"].phase == Phase.LANDING
@@ -373,15 +372,14 @@ def test_tower_pattern_calls_are_optional_before_final(brain):
     assert "cleared to land" in reply
 
 
-def test_tower_pattern_then_final(brain):
+def test_tower_turning_final_requests_landing_clearance_after_break(brain):
     brain.handle("Tower, Colt 1, runway in sight", controller=Controller.TOWER)
     brain.handle("cleared for left overhead break runway 25, Colt 1",
                  controller=Controller.TOWER)
     assert brain.handle("Colt 1, in the break",
                         controller=Controller.TOWER) == ""
-    assert brain.handle("Colt 1, turning final",
-                        controller=Controller.TOWER) == ""
-    reply = brain.handle("Colt 1, on final", controller=Controller.TOWER)
+    reply = brain.handle("Colt 1, turning final",
+                         controller=Controller.TOWER)
     assert "cleared to land" in reply
 
 
@@ -457,6 +455,50 @@ def test_ground_checks_runway_in_no_atis_readback(brain):
     assert "after departure" in corrected.lower()
 
 
+def test_ground_runway_info_allows_one_retry_then_continues(brain):
+    brain.handle("Ground, Colt 1, one ship Hornet on Ramp South",
+                 controller=Controller.GROUND)
+    first = brain.handle("Runway 27 in use, QNH 2992, Colt 1",
+                         controller=Controller.GROUND)
+    assert "negative" in first.lower()
+    assert "runway 25 in use" in first.lower()
+    assert "read back again" not in first.lower()
+    assert brain.pilots["Colt 1"].info_issued
+
+    final = brain.handle("Runway 27 in use, QNH 2992, Colt 1",
+                         controller=Controller.GROUND)
+    assert "no need to repeat" in final.lower()
+    assert not brain.pilots["Colt 1"].info_issued
+
+
+def test_ground_runway_25_readback_accepts_q5_stt_and_preserves_qnh(brain):
+    # Whisper may transcribe spoken "two five" as "Q5". QNH is a separate
+    # value and must remain intact in the same readback.
+    brain.handle("Ground, Colt 1, two-ship Hornets on Ramp South",
+                 controller=Controller.GROUND)
+
+    reply = brain.handle("Q5 in use, QNH 2996, Colt 1",
+                         controller=Controller.GROUND)
+
+    assert "readback correct" in reply.lower()
+    assert "ready for clearance" in reply.lower()
+    assert "25" in AtcBrain._readback_numbers("Q5 in use, QNH 2996")
+    assert "2996" in AtcBrain._readback_numbers("Q5 in use, QNH 2996")
+
+
+def test_ground_q5_readback_does_not_match_runway_07(brain):
+    brain.set_runway("07")
+    brain.handle("Ground, Colt 1, two-ship Hornets on Ramp South",
+                 controller=Controller.GROUND)
+
+    reply = brain.handle("Q5 in use, QNH 2996, Colt 1",
+                         controller=Controller.GROUND)
+
+    assert "negative" in reply.lower()
+    assert "runway 07 in use" in reply.lower()
+    assert "readback correct" not in reply.lower()
+
+
 def test_ground_waits_for_info_readback_before_clearance(brain):
     # Even when Ground provided weather during the initial check-in, an early
     # clearance request waits for the runway readback and is then honored.
@@ -483,7 +525,7 @@ def test_ground_final_continue_breaks_repeated_wrong_runway_loop(brain):
     second = brain.handle("Runway 25 in use, QNH 2992, Colt 1",
                           controller=Controller.GROUND)
     assert "runway 07 in use" in second.lower()
-    assert "continue" in second.lower()
+    assert "no need to repeat" in second.lower()
     assert "readback correct" not in second.lower()
     assert not brain.pilots["Colt 1"].info_issued
 
@@ -504,7 +546,7 @@ def test_ground_pending_clearance_survives_final_continue(brain):
                  controller=Controller.GROUND)
     final = brain.handle("Runway 25 in use, QNH 2992, Colt 1",
                          controller=Controller.GROUND)
-    assert "continue" in final.lower()
+    assert "no need to repeat" in final.lower()
     assert "after departure" in final.lower()
     assert brain.pilots["Colt 1"].phase == Phase.CLEARANCE
 
@@ -544,7 +586,7 @@ def test_ground_prompts_for_omitted_runway_then_accepts_spoken_digits(brain):
                  controller=Controller.GROUND)
 
     missing = brain.handle("QNH 2992, Colt 1", controller=Controller.GROUND)
-    assert "readback incomplete" in missing.lower()
+    assert "negative" in missing.lower()
     assert "runway" in missing.lower()
     assert brain.pilots["Colt 1"].info_issued
 
@@ -576,7 +618,7 @@ def test_taxi_clearance_readback_checks_route(brain):
 
     missing_route = brain.handle(
         "Taxi, hold short runway 25, Colt 1", controller=Controller.GROUND)
-    assert "readback incomplete" in missing_route.lower()
+    assert "negative" in missing_route.lower()
     assert "taxi route" in missing_route.lower()
 
     corrected = brain.handle(
@@ -689,7 +731,7 @@ def test_incomplete_readback_still_coaches(brain):
                  controller=Controller.GROUND)
     reply = brain.handle("After departure turn right Exit West, Colt 1",
                          controller=Controller.GROUND)
-    assert "readback incomplete" in reply.lower()
+    assert "negative" in reply.lower()
 
 
 def test_ground_clearance_readback_without_exit_word(brain):
@@ -736,11 +778,27 @@ def test_clearance_readback_missing_altitude_is_flagged_incomplete(brain):
     reply = brain.handle("After departure turn right Exit West, Colt 1",
                          controller=Controller.GROUND)
     low = reply.lower()
-    assert "readback incomplete" in low
+    assert "negative" in low
     assert "altitude" in low
-    assert "continue" in low
-    assert "read back when able" in low
+    assert "altitude 1500 ft or below" in low
+    assert "read back again" not in low
+    assert "continue" not in low
     assert "readback correct" not in low  # honest: it was not correct
+
+
+def test_clearance_readback_wrong_altitude_states_the_correct_limit(brain):
+    clearance = brain.handle("Ground, Colt 1, ready to copy clearance",
+                             controller=Controller.GROUND)
+    gate = "east" if "exit east" in clearance.lower() else "west"
+
+    reply = brain.handle(
+        f"After departure turn right Exit {gate}, 1600 ft or below, Colt 1",
+        controller=Controller.GROUND)
+
+    assert "negative" in reply.lower()
+    assert "altitude 1500 ft or below" in reply.lower()
+    assert "read back again" not in reply.lower()
+    assert "readback incomplete" not in reply.lower()
 
 
 def test_clearance_readback_incomplete_never_says_correct(brain):
@@ -748,7 +806,7 @@ def test_clearance_readback_incomplete_never_says_correct(brain):
                  controller=Controller.GROUND)
     reply = brain.handle("After departure turn right West, Colt 1",  # miss altitude
                          controller=Controller.GROUND)
-    assert "readback incomplete" in reply.lower()
+    assert "negative" in reply.lower()
     assert "readback correct" not in reply.lower()
 
 
@@ -758,8 +816,8 @@ def test_clearance_readback_coaches_all_missing_items_in_clearance_order(brain):
     reply = brain.handle("After departure turn right, Colt 1",
                          controller=Controller.GROUND).lower()
     gate = "east" if "exit east" in clearance else "west"
-    assert f"i did not get exit {gate} and altitude 1500 feet" in reply
-    assert "read back when able, or continue" in reply
+    assert f"negative, exit {gate} and altitude 1500 ft or below" in reply
+    assert "read back again" not in reply
 
 
 def test_readback_item_lists_multiple_missing_numeric_values(brain):
@@ -789,28 +847,66 @@ def test_mentioning_in_use_is_not_a_readback_before_ground_issues_it(brain):
     assert "readback correct" not in (reply or "").lower()
 
 
-def test_repeated_readback_attempts_are_safe(brain):
-    """A pilot who insists on readbacks must not corrupt the state machine.
-
-    The clearance readback is idempotent: repeating it keeps re-flagging the
-    miss and never advances or breaks the phase.
-    """
+def test_readback_retry_limit_then_continue(brain):
+    """Allow one retry, then end the readback loop and stop checking."""
     brain.handle("Ground, Colt 1, ready to copy clearance",
                  controller=Controller.GROUND)
     assert brain.pilots["Colt 1"].phase == Phase.CLEARANCE
-    for _ in range(3):
-        reply = brain.handle("After departure turn right West, Colt 1",
-                             controller=Controller.GROUND)
-        assert "readback incomplete" in reply.lower()
-        assert brain.pilots["Colt 1"].phase == Phase.CLEARANCE  # unchanged
-    # A readback that FIXES the flagged miss is confirmed ("readback correct"),
-    # so the pilot knows the correction landed. A clean first readback is still
-    # silent (see test_ground_clearance_readback_correct). Either way the phase
-    # stays at CLEARANCE: the pilot proceeds to taxi when ready.
-    reply = brain.handle("After departure turn right West, 1500 ft or below, Colt 1",
+    first = brain.handle("After departure turn right West, Colt 1",
                          controller=Controller.GROUND)
-    assert "readback correct" in reply.lower()
+    assert "negative" in first.lower()
+    assert "negative" in first.lower()
+    assert "read back again" not in first.lower()
+    assert "continue" not in first.lower()
+    assert brain.pilots["Colt 1"].readback_pending
+
+    final = brain.handle("After departure turn right West, Colt 1",
+                         controller=Controller.GROUND)
+    assert "negative" in final.lower()
+    assert "no need to repeat" in final.lower()
+    assert not brain.pilots["Colt 1"].readback_pending
+
+    third = brain.handle("After departure turn right West, Colt 1",
+                         controller=Controller.GROUND)
+    assert "readback incomplete" not in third.lower()
     assert brain.pilots["Colt 1"].phase == Phase.CLEARANCE
+
+
+def test_say_again_does_not_use_up_a_readback_retry(brain):
+    clearance = brain.handle("Ground, Colt 1, ready to copy clearance",
+                             controller=Controller.GROUND)
+    first = brain.handle("After departure turn right West, Colt 1",
+                         controller=Controller.GROUND)
+    assert "negative" in first.lower()
+    assert "read back again" not in first.lower()
+
+    replay = brain.handle("Colt 1, say again", controller=Controller.GROUND)
+    assert replay == clearance
+    assert brain.pilots["Colt 1"].readback_pending
+
+    final = brain.handle("After departure turn right West, Colt 1",
+                         controller=Controller.GROUND)
+    assert "no need to repeat" in final.lower()
+    assert not brain.pilots["Colt 1"].readback_pending
+
+
+def test_readback_retry_limit_is_configurable(brain):
+    assert brain.readback_retries == 1
+    brain.readback_retries = 0
+    brain.handle("Ground, Colt 1, ready to copy clearance",
+                 controller=Controller.GROUND)
+    reply = brain.handle("After departure turn right West, Colt 1",
+                         controller=Controller.GROUND)
+    assert "no need to repeat" in reply.lower()
+    assert not brain.pilots["Colt 1"].readback_pending
+
+
+def test_readback_retry_limit_loads_from_phraseology_config():
+    default = AtcBrain(phraseology=Phraseology({}, {}))
+    configured = AtcBrain(
+        phraseology=Phraseology({}, {"readback_retries": "0"}))
+    assert default.readback_retries == 1
+    assert configured.readback_retries == 0
 
 
 def test_corrected_readback_is_confirmed_once(brain):
@@ -931,8 +1027,8 @@ def test_tower_lineup_readback_clears_takeoff(brain):
 
 
 def test_takeoff_turnout_follows_the_exit_gate(brain):
-    # Only a RIGHT turnout is spoken (MA: a left turnout is the default and is
-    # not called). A straight-out departure is told "fly runway heading".
+    # The assigned left/right turnout is spoken. A straight-out departure is
+    # told "fly runway heading".
     from brain import PilotState
     pilot = PilotState(callsign="Colt 1")
     # Kutaisi 25: Exit East is a right turn, Exit West is straight.
@@ -944,14 +1040,14 @@ def test_takeoff_turnout_follows_the_exit_gate(brain):
     assert "turnout" not in reply
 
 
-def test_left_turnout_is_not_spoken(brain):
-    """A left turnout is the default, so it is never called (MA practice)."""
+def test_left_turnout_is_spoken(brain):
+    """The takeoff clearance states the assigned left turnout."""
     from brain import PilotState
     pilot = PilotState(callsign="Colt 1")
     # Kutaisi 25: Exit South is a left turn.
     pilot.exit_gate = "Exit South"
     reply = brain._takeoff_clearance("Colt 1", pilot)
-    assert "turnout" not in reply
+    assert "left turnout" in reply
     assert "fly runway heading" not in reply
     assert "cleared for takeoff" in reply
 
@@ -970,7 +1066,7 @@ def test_takeoff_turnout_matches_the_ground_clearance_turn(brain, airfield):
     if expected == "right":
         assert "right turnout" in takeoff
     elif expected == "left":
-        assert "turnout" not in takeoff
+        assert "left turnout" in takeoff
         assert "fly runway heading" not in takeoff
     else:
         assert "fly runway heading" in takeoff
@@ -1133,7 +1229,7 @@ def test_control_join_wrong_heading_gets_feedback_and_can_be_corrected(
         f"turn right heading {wrong_heading:03d} to join via Entry East, Colt 1",
         track=south, controller=Controller.CONTROL)
 
-    assert "readback incomplete" in reply.lower()
+    assert "negative" in reply.lower()
     assert f"heading {heading:03d}" in reply.lower()
     assert brain.pilots["Colt 1"].phase == Phase.INBOUND
     assert not brain.pilots["Colt 1"].arrival_join_readback_complete
@@ -1147,13 +1243,32 @@ def test_control_join_wrong_heading_gets_feedback_and_can_be_corrected(
     assert brain.pilots["Colt 1"].arrival_join_readback_complete
 
 
+def test_control_join_readback_uses_one_retry_then_continue(brain, airfield):
+    south, heading = _start_control_join_for_readback(brain, airfield)
+    wrong = (heading + 90) % 360
+    phrase = (f"turn right heading {wrong:03d} to join via Entry East, "
+              "Colt 1")
+
+    first = brain.handle(phrase, track=south,
+                         controller=Controller.CONTROL)
+    assert "negative" in first.lower()
+    assert "read back again" not in first.lower()
+    assert not brain.pilots["Colt 1"].arrival_join_readback_complete
+
+    final = brain.handle(phrase, track=south,
+                         controller=Controller.CONTROL)
+    assert "no need to repeat" in final.lower()
+    assert brain.pilots["Colt 1"].arrival_join_readback_complete
+    assert brain.pilots["Colt 1"].arrival_join_readback_fails == 0
+
+
 def test_control_join_checks_turn_when_pilot_reads_one_back(brain, airfield):
     south, heading = _start_control_join_for_readback(brain, airfield)
     reply = brain.handle(
         f"turn left heading {heading:03d} to join via Entry East, Colt 1",
         track=south, controller=Controller.CONTROL)
 
-    assert "readback incomplete" in reply.lower()
+    assert "negative" in reply.lower()
     assert "turn right" in reply.lower()
     assert brain.pilots["Colt 1"].phase == Phase.INBOUND
 
@@ -2131,6 +2246,37 @@ def test_base_turn_clearance_checks_live_position(brain, airfield):
     assert not brain.pilots["Colt 1"].cleared_landing
 
 
+def test_turning_final_report_clears_inside_pattern_turn(brain, airfield):
+    inbound = _inbound_bearing(airfield)
+    brain.handle("Tower, Colt 1, runway in sight", controller=Controller.TOWER)
+    brain.handle("cleared for overhead break runway 25, Colt 1",
+                 controller=Controller.TOWER)
+    # The 2026-11-08 debrief's "turning final" report was in this same
+    # configured turn slice. Accept the position wording, subject to radar.
+    track = _track_on(airfield, (inbound + 45) % 360, 2.0)
+
+    reply = brain.handle("Colt 1, turning final", track,
+                         controller=Controller.TOWER)
+
+    assert "cleared to land" in reply.lower()
+    assert brain.pilots["Colt 1"].cleared_landing
+
+
+def test_turning_final_report_does_not_bypass_position_validation(brain,
+                                                                  airfield):
+    inbound = _inbound_bearing(airfield)
+    brain.handle("Tower, Colt 1, runway in sight", controller=Controller.TOWER)
+    brain.handle("cleared for overhead break runway 25, Colt 1",
+                 controller=Controller.TOWER)
+    track = _track_on(airfield, (inbound + 150) % 360, 8.0)
+
+    reply = brain.handle("Colt 1, turning final", track,
+                         controller=Controller.TOWER)
+
+    assert "negative" in reply.lower()
+    assert not brain.pilots["Colt 1"].cleared_landing
+
+
 def test_base_turn_clearance_waits_for_runway_to_clear(brain, airfield):
     inbound = _inbound_bearing(airfield)
     brain.handle("Tower, Colt 1, runway in sight", controller=Controller.TOWER)
@@ -2422,7 +2568,7 @@ def test_trainer_mode_checks_readback_values_in_casual_too():
     b.mode = "casual"
     # A readback omitting the clearance's numbers is still incomplete.
     reply = b.handle("Colt 1, roger, hold short", controller=Controller.GROUND)
-    assert reply and "readback incomplete" in reply.lower(), (clearance, reply)
+    assert reply and "negative" in reply.lower(), (clearance, reply)
 
 
 def test_trainer_mode_works_on_every_agency(brain):
@@ -2997,16 +3143,17 @@ def test_runway_in_sight_instruction_readback_is_silent(brain):
     assert reply and "overhead break" in reply.lower()
 
 
-def test_repeat_after_wrong_exit_replays_the_clearance(brain):
-    # A wrong-exit readback gets "say again" — but that reply must not replace
-    # the stored clearance, or a follow-up "repeat copy clearance" replays the
-    # "say again" itself and the pilot can never recover (12:44:32).
+def test_wrong_exit_gets_correct_value_and_say_again_replays_clearance(brain):
+    # A wrong-exit readback should state the expected exit. A follow-up
+    # "say again" must still replay the original clearance.
     brain.handle("Ground, Colt 1, ready to copy clearance",
                  controller=Controller.GROUND)
     incorrect = brain.handle(
         "Ground, Colt 1, after departure, turn right, exit north,"
         " 1000 feet or below", controller=Controller.GROUND)
-    assert "say again" in incorrect.lower()
+    assert "negative" in incorrect.lower()
+    assert "exit" in incorrect.lower()
+    assert "read back again" not in incorrect.lower()
     reply = brain.handle("Colt 1, say again",
                          controller=Controller.GROUND)
     assert "exit" in reply.lower()
@@ -3156,7 +3303,24 @@ def test_premature_on_final_while_turning_base_challenged(brain, airfield):
     t = _track_on(airfield, (inbound + 45) % 360, 2.0)
     reply = brain.handle("Colt 1, on final", t, controller=Controller.TOWER)
     assert "negative" in reply.lower()
+    assert "negative, still in pattern turn" in reply.lower()
+    assert "report when on final" in reply.lower()
     assert "cleared" not in reply.lower()
+    assert not brain.pilots["Colt 1"].cleared_landing
+
+
+def test_premature_short_final_explains_what_to_report(brain, airfield):
+    inbound = _inbound_bearing(airfield)
+    brain.handle("Tower, Colt 1, at entry west", controller=Controller.TOWER)
+    brain.handle("Tower, Colt 1, runway in sight", controller=Controller.TOWER)
+    track = _track_on(airfield, (inbound + 45) % 360, 2.0)
+
+    reply = brain.handle("Colt 1, short final", track,
+                         controller=Controller.TOWER)
+
+    assert "negative" in reply.lower()
+    assert "negative, still in pattern turn" in reply.lower()
+    assert "report when on final" in reply.lower()
     assert not brain.pilots["Colt 1"].cleared_landing
 
 
@@ -3174,6 +3338,24 @@ def test_on_final_after_radar_clearance_gets_one_reminder(brain, airfield):
                             controller=Controller.TOWER)
     assert "already cleared to land runway 25" in reminder.lower()
     assert brain.handle("Colt 1, short final", t,
+                        controller=Controller.TOWER) == ""
+
+
+def test_on_final_after_recognized_landing_readback_is_silent(brain):
+    # 2026-11-08 test flight: Tower cleared Adder 1-1, the pilot read back
+    # "runway 25 cleared to land", then said "on final" a minute later. The
+    # later status report must be silent after the readback was understood.
+    brain.handle("Tower, Colt 1, runway in sight", controller=Controller.TOWER)
+    clearance = brain.handle("Colt 1, turning base",
+                             controller=Controller.TOWER)
+    assert "cleared to land" in clearance.lower()
+
+    readback = brain.handle("runway 25 cleared to land, Colt 1",
+                            controller=Controller.TOWER)
+    assert readback == ""
+    assert brain.pilots["Colt 1"].landing_clearance_readback_received
+
+    assert brain.handle("Colt 1, on final",
                         controller=Controller.TOWER) == ""
 
 
@@ -3444,10 +3626,10 @@ def test_callsign_only_call_prompts_for_pending_taxi_readback(brain):
 
     reply = brain.handle("Colt 1", controller=Controller.GROUND)
 
-    assert "readback incomplete" in reply.lower()
+    assert "negative" in reply.lower()
     assert "taxi route alpha november delta" in reply.lower()
     assert "hold short runway 25" in reply.lower()
-    assert "read back when able" in reply.lower()
+    assert "read back again" not in reply.lower()
     assert pilot.readback_pending
 
 
@@ -3463,7 +3645,7 @@ def test_callsign_only_stt_numbers_prompt_pending_readback(brain):
     reply = brain.handle("50-1-1", controller=Controller.GROUND,
                          speaker="Decoy")
 
-    assert "readback incomplete" in reply.lower()
+    assert "negative" in reply.lower()
     assert "taxi route alpha november delta" in reply.lower()
     assert pilot.readback_pending
 
@@ -4061,6 +4243,20 @@ def test_stingray_checkin_is_acknowledged(brain):
     assert "say again" not in reply.lower()
 
 
+def test_stingray_bare_checkin_accepts_debriefed_stt_variants(brain):
+    for text in ("Staying ready, Colt 1", "Dingray, Colt 1"):
+        _stingray(brain)
+        reply = brain.handle(text, controller=Controller.STINGRAY)
+        assert reply == "Colt 1-1, Stingray.", text
+
+
+def test_stingray_stt_alias_does_not_swallow_calls_with_content(brain):
+    _stingray(brain)
+    reply = brain.handle("Dingray, Colt 1, picture",
+                         controller=Controller.STINGRAY)
+    assert reply != "Colt 1-1, Stingray."
+
+
 def test_stingray_accepts_natural_position_reports(brain, airfield):
     pilot = _stingray(brain)
     track = _track(airfield, *airfield.gates["West"], alt_ft=15000)
@@ -4147,13 +4343,21 @@ def test_say_again_after_training_readback_feedback_repeats_task_order(
     feedback = brain.handle(
         "Proceed to booth 058469, angels 14, Colt 1",
         controller=Controller.STINGRAY)
-    assert "readback incomplete" in feedback.lower()
-    assert "altitude Angels 15" in feedback
+    assert "negative" in feedback.lower()
+    assert "angels 15" in feedback.lower()
 
     replay = brain.handle("Stingray, Colt 1, say again",
                           controller=Controller.STINGRAY)
     assert replay == order
     assert "readback incomplete" not in replay.lower()
+    assert pilot.readback_pending
+
+    final = brain.handle(
+        "Proceed to booth 058469, angels 14, Colt 1",
+        controller=Controller.STINGRAY)
+    assert "no need to repeat" in final.lower()
+    assert pilot.stingray_training_tasks[-1]["readback_complete"]
+    assert not pilot.readback_pending
 
 
 def test_stingray_bullseye_call_acknowledged_without_a_bullseye(brain):
