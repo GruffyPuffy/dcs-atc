@@ -252,10 +252,12 @@ follows this rule:
 | Control descent | Tower handoff | the handoff |
 | Overhead-break clearance | in the break / on final | *(silent)* |
 
-An **incomplete** readback is never silently accepted: it identifies what was
-missed and asks the pilot to read back again. After the configured retry limit
-(one retry by default), it says **"No need to repeat"** and clears the check so
-a fumbled readback never traps the pilot.
+An incorrect or incomplete readback is corrected by stating the expected item
+directly: **"Negative, altitude 1500 ft or below."** The response uses the
+expected value whether the pilot gave a wrong value or left it out. The bot
+accepts one corrected readback by default. After the retry limit, it says **"No
+need to repeat"** and clears the check so a fumbled readback never traps the
+pilot.
 
 Example dialogs (using the default one-retry setting):
 
@@ -277,12 +279,12 @@ Pilot: After departure turn right Exit West, 1500 feet or below, Adder 1-1.
 ATC:   (silent; the readback is correct)
 ```
 
-**Incorrect, then correct**
+**Wrong value, then correct**
 
 ```text
 ATC:   Adder 1-1, Ground, after departure turn right Exit West, 1500 ft or below.
-Pilot: After departure turn right Exit West, Adder 1-1.
-ATC:   Adder 1-1, Ground, readback incomplete, I did not get altitude 1500 feet. Read back again when able.
+Pilot: After departure turn right Exit West, 1600 ft or below, Adder 1-1.
+ATC:   Adder 1-1, Ground, negative, altitude 1500 ft or below.
 Pilot: After departure turn right Exit West, 1500 feet or below, Adder 1-1.
 ATC:   Adder 1-1, Ground, readback correct.
 ```
@@ -292,21 +294,21 @@ ATC:   Adder 1-1, Ground, readback correct.
 ```text
 ATC:   Adder 1-1, Ground, after departure turn right Exit West, 1500 ft or below.
 Pilot: After departure turn right Exit West, Adder 1-1.
-ATC:   Adder 1-1, Ground, readback incomplete, I did not get altitude 1500 feet. Read back again when able.
+ATC:   Adder 1-1, Ground, negative, altitude 1500 ft or below.
 Pilot: After departure turn right Exit West, Adder 1-1.
-ATC:   Adder 1-1, Ground, readback incomplete, I did not get altitude 1500 feet. No need to repeat.
+ATC:   Adder 1-1, Ground, negative, altitude 1500 ft or below. No need to repeat.
 ```
 
 **One exception:** if an earlier attempt at that clearance was incomplete, the
 readback that **fixes** it *is* confirmed with "readback correct". Saying nothing
-after a "readback incomplete" leaves the pilot unsure whether the correction
+after a readback correction leaves the pilot unsure whether the correction
 landed. A clean first readback keeps the silent behaviour above, so no tested
 dialog changes:
 
 | Readback | Reply |
 | --- | --- |
 | First attempt, correct | *(silent — the rule above)* |
-| Corrects a prior "readback incomplete" | "readback correct." |
+| Corrects a previously flagged readback | "readback correct." |
 
 ---
 
@@ -438,8 +440,8 @@ stays silent and the pilot gets a **direct in-game message** to their own feed:
 | a readback that **begins** with their callsign ("Colt 1, cleared taxi…") | normal (silent or "readback correct") | "Apollo suggests: a readback ends with your callsign — there is none before it." |
 
 Notes are one-shot (expire with the transmission they were for), never replayed
-by `say again`, and never stack on semantic feedback ("readback incomplete"
-takes priority). Coach mode is the default; in casual mode nothing fires. The
+by `say again`, and never stack on a readback correction. Coach mode is the
+default; in casual mode nothing fires. The
 teaching target is always the canonical pilot call from the MA SOP dialogs —
 the same wording the kneeboard cards train.
 

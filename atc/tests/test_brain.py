@@ -121,7 +121,7 @@ def test_any_pilot_speech_cancels_reminder_and_wrong_readback_does_not_rearm(
     feedback = brain.handle(
         "Colt 1, cleared taxi and hold short runway 25",
         controller=Controller.GROUND, speaker="Caveman")
-    assert "readback incomplete" in feedback.lower()
+    assert "negative" in feedback.lower()
     assert pilot.readback_reminder_deadline is None
     assert pilot.readback_reminder_expected == ""
     assert brain.pop_due_readback_reminders(float("inf")) == []
@@ -461,12 +461,13 @@ def test_ground_runway_info_allows_one_retry_then_continues(brain):
     first = brain.handle("Runway 27 in use, QNH 2992, Colt 1",
                          controller=Controller.GROUND)
     assert "negative" in first.lower()
-    assert "read back again" in first.lower()
+    assert "runway 25 in use" in first.lower()
+    assert "read back again" not in first.lower()
     assert brain.pilots["Colt 1"].info_issued
 
     final = brain.handle("Runway 27 in use, QNH 2992, Colt 1",
                          controller=Controller.GROUND)
-    assert "continue" in final.lower()
+    assert "no need to repeat" in final.lower()
     assert not brain.pilots["Colt 1"].info_issued
 
 
@@ -524,7 +525,7 @@ def test_ground_final_continue_breaks_repeated_wrong_runway_loop(brain):
     second = brain.handle("Runway 25 in use, QNH 2992, Colt 1",
                           controller=Controller.GROUND)
     assert "runway 07 in use" in second.lower()
-    assert "continue" in second.lower()
+    assert "no need to repeat" in second.lower()
     assert "readback correct" not in second.lower()
     assert not brain.pilots["Colt 1"].info_issued
 
@@ -545,7 +546,7 @@ def test_ground_pending_clearance_survives_final_continue(brain):
                  controller=Controller.GROUND)
     final = brain.handle("Runway 25 in use, QNH 2992, Colt 1",
                          controller=Controller.GROUND)
-    assert "continue" in final.lower()
+    assert "no need to repeat" in final.lower()
     assert "after departure" in final.lower()
     assert brain.pilots["Colt 1"].phase == Phase.CLEARANCE
 
@@ -585,7 +586,7 @@ def test_ground_prompts_for_omitted_runway_then_accepts_spoken_digits(brain):
                  controller=Controller.GROUND)
 
     missing = brain.handle("QNH 2992, Colt 1", controller=Controller.GROUND)
-    assert "readback incomplete" in missing.lower()
+    assert "negative" in missing.lower()
     assert "runway" in missing.lower()
     assert brain.pilots["Colt 1"].info_issued
 
@@ -617,7 +618,7 @@ def test_taxi_clearance_readback_checks_route(brain):
 
     missing_route = brain.handle(
         "Taxi, hold short runway 25, Colt 1", controller=Controller.GROUND)
-    assert "readback incomplete" in missing_route.lower()
+    assert "negative" in missing_route.lower()
     assert "taxi route" in missing_route.lower()
 
     corrected = brain.handle(
@@ -730,7 +731,7 @@ def test_incomplete_readback_still_coaches(brain):
                  controller=Controller.GROUND)
     reply = brain.handle("After departure turn right Exit West, Colt 1",
                          controller=Controller.GROUND)
-    assert "readback incomplete" in reply.lower()
+    assert "negative" in reply.lower()
 
 
 def test_ground_clearance_readback_without_exit_word(brain):
@@ -777,11 +778,27 @@ def test_clearance_readback_missing_altitude_is_flagged_incomplete(brain):
     reply = brain.handle("After departure turn right Exit West, Colt 1",
                          controller=Controller.GROUND)
     low = reply.lower()
-    assert "readback incomplete" in low
+    assert "negative" in low
     assert "altitude" in low
-    assert "read back again when able" in low
+    assert "altitude 1500 ft or below" in low
+    assert "read back again" not in low
     assert "continue" not in low
     assert "readback correct" not in low  # honest: it was not correct
+
+
+def test_clearance_readback_wrong_altitude_states_the_correct_limit(brain):
+    clearance = brain.handle("Ground, Colt 1, ready to copy clearance",
+                             controller=Controller.GROUND)
+    gate = "east" if "exit east" in clearance.lower() else "west"
+
+    reply = brain.handle(
+        f"After departure turn right Exit {gate}, 1600 ft or below, Colt 1",
+        controller=Controller.GROUND)
+
+    assert "negative" in reply.lower()
+    assert "altitude 1500 ft or below" in reply.lower()
+    assert "read back again" not in reply.lower()
+    assert "readback incomplete" not in reply.lower()
 
 
 def test_clearance_readback_incomplete_never_says_correct(brain):
@@ -789,7 +806,7 @@ def test_clearance_readback_incomplete_never_says_correct(brain):
                  controller=Controller.GROUND)
     reply = brain.handle("After departure turn right West, Colt 1",  # miss altitude
                          controller=Controller.GROUND)
-    assert "readback incomplete" in reply.lower()
+    assert "negative" in reply.lower()
     assert "readback correct" not in reply.lower()
 
 
@@ -799,8 +816,8 @@ def test_clearance_readback_coaches_all_missing_items_in_clearance_order(brain):
     reply = brain.handle("After departure turn right, Colt 1",
                          controller=Controller.GROUND).lower()
     gate = "east" if "exit east" in clearance else "west"
-    assert f"i did not get exit {gate} and altitude 1500 feet" in reply
-    assert "read back again when able" in reply
+    assert f"negative, exit {gate} and altitude 1500 ft or below" in reply
+    assert "read back again" not in reply
 
 
 def test_readback_item_lists_multiple_missing_numeric_values(brain):
@@ -837,14 +854,15 @@ def test_readback_retry_limit_then_continue(brain):
     assert brain.pilots["Colt 1"].phase == Phase.CLEARANCE
     first = brain.handle("After departure turn right West, Colt 1",
                          controller=Controller.GROUND)
-    assert "readback incomplete" in first.lower()
-    assert "read back again" in first.lower()
+    assert "negative" in first.lower()
+    assert "negative" in first.lower()
+    assert "read back again" not in first.lower()
     assert "continue" not in first.lower()
     assert brain.pilots["Colt 1"].readback_pending
 
     final = brain.handle("After departure turn right West, Colt 1",
                          controller=Controller.GROUND)
-    assert "readback incomplete" in final.lower()
+    assert "negative" in final.lower()
     assert "no need to repeat" in final.lower()
     assert not brain.pilots["Colt 1"].readback_pending
 
@@ -859,7 +877,8 @@ def test_say_again_does_not_use_up_a_readback_retry(brain):
                              controller=Controller.GROUND)
     first = brain.handle("After departure turn right West, Colt 1",
                          controller=Controller.GROUND)
-    assert "read back again" in first.lower()
+    assert "negative" in first.lower()
+    assert "read back again" not in first.lower()
 
     replay = brain.handle("Colt 1, say again", controller=Controller.GROUND)
     assert replay == clearance
@@ -1210,7 +1229,7 @@ def test_control_join_wrong_heading_gets_feedback_and_can_be_corrected(
         f"turn right heading {wrong_heading:03d} to join via Entry East, Colt 1",
         track=south, controller=Controller.CONTROL)
 
-    assert "readback incomplete" in reply.lower()
+    assert "negative" in reply.lower()
     assert f"heading {heading:03d}" in reply.lower()
     assert brain.pilots["Colt 1"].phase == Phase.INBOUND
     assert not brain.pilots["Colt 1"].arrival_join_readback_complete
@@ -1232,7 +1251,8 @@ def test_control_join_readback_uses_one_retry_then_continue(brain, airfield):
 
     first = brain.handle(phrase, track=south,
                          controller=Controller.CONTROL)
-    assert "read back again" in first.lower()
+    assert "negative" in first.lower()
+    assert "read back again" not in first.lower()
     assert not brain.pilots["Colt 1"].arrival_join_readback_complete
 
     final = brain.handle(phrase, track=south,
@@ -1248,7 +1268,7 @@ def test_control_join_checks_turn_when_pilot_reads_one_back(brain, airfield):
         f"turn left heading {heading:03d} to join via Entry East, Colt 1",
         track=south, controller=Controller.CONTROL)
 
-    assert "readback incomplete" in reply.lower()
+    assert "negative" in reply.lower()
     assert "turn right" in reply.lower()
     assert brain.pilots["Colt 1"].phase == Phase.INBOUND
 
@@ -2548,7 +2568,7 @@ def test_trainer_mode_checks_readback_values_in_casual_too():
     b.mode = "casual"
     # A readback omitting the clearance's numbers is still incomplete.
     reply = b.handle("Colt 1, roger, hold short", controller=Controller.GROUND)
-    assert reply and "readback incomplete" in reply.lower(), (clearance, reply)
+    assert reply and "negative" in reply.lower(), (clearance, reply)
 
 
 def test_trainer_mode_works_on_every_agency(brain):
@@ -3123,16 +3143,17 @@ def test_runway_in_sight_instruction_readback_is_silent(brain):
     assert reply and "overhead break" in reply.lower()
 
 
-def test_repeat_after_wrong_exit_replays_the_clearance(brain):
-    # A wrong-exit readback gets "say again" — but that reply must not replace
-    # the stored clearance, or a follow-up "repeat copy clearance" replays the
-    # "say again" itself and the pilot can never recover (12:44:32).
+def test_wrong_exit_gets_correct_value_and_say_again_replays_clearance(brain):
+    # A wrong-exit readback should state the expected exit. A follow-up
+    # "say again" must still replay the original clearance.
     brain.handle("Ground, Colt 1, ready to copy clearance",
                  controller=Controller.GROUND)
     incorrect = brain.handle(
         "Ground, Colt 1, after departure, turn right, exit north,"
         " 1000 feet or below", controller=Controller.GROUND)
-    assert "say again" in incorrect.lower()
+    assert "negative" in incorrect.lower()
+    assert "exit" in incorrect.lower()
+    assert "read back again" not in incorrect.lower()
     reply = brain.handle("Colt 1, say again",
                          controller=Controller.GROUND)
     assert "exit" in reply.lower()
@@ -3605,10 +3626,10 @@ def test_callsign_only_call_prompts_for_pending_taxi_readback(brain):
 
     reply = brain.handle("Colt 1", controller=Controller.GROUND)
 
-    assert "readback incomplete" in reply.lower()
+    assert "negative" in reply.lower()
     assert "taxi route alpha november delta" in reply.lower()
     assert "hold short runway 25" in reply.lower()
-    assert "read back again when able" in reply.lower()
+    assert "read back again" not in reply.lower()
     assert pilot.readback_pending
 
 
@@ -3624,7 +3645,7 @@ def test_callsign_only_stt_numbers_prompt_pending_readback(brain):
     reply = brain.handle("50-1-1", controller=Controller.GROUND,
                          speaker="Decoy")
 
-    assert "readback incomplete" in reply.lower()
+    assert "negative" in reply.lower()
     assert "taxi route alpha november delta" in reply.lower()
     assert pilot.readback_pending
 
@@ -4322,8 +4343,8 @@ def test_say_again_after_training_readback_feedback_repeats_task_order(
     feedback = brain.handle(
         "Proceed to booth 058469, angels 14, Colt 1",
         controller=Controller.STINGRAY)
-    assert "readback incomplete" in feedback.lower()
-    assert "altitude Angels 15" in feedback
+    assert "negative" in feedback.lower()
+    assert "angels 15" in feedback.lower()
 
     replay = brain.handle("Stingray, Colt 1, say again",
                           controller=Controller.STINGRAY)

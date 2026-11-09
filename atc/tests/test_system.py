@@ -1809,7 +1809,7 @@ def test_can_request_another_touch_and_go_from_downwind(airfield, brain):
 
 def test_debrief_runway_seven_taxi_readback_is_correct(airfield, brain):
     # "runway seven" (words, no leading zero) failed the check against
-    # clearance "runway 07" -> "readback incomplete, I did not get your runway".
+    # clearance "runway 07" -> a negative correction naming the expected runway.
     sc = _scenario(airfield, brain).park("Ramp South")
     brain.set_runway("07")
     sc.say("Ground, Colt 1, requesting taxi", Controller.GROUND)
@@ -1834,9 +1834,8 @@ def test_debrief_turning_base_requests_landing_clearance(airfield, brain):
     assert sc.say("downwind, Colt 1", Controller.TOWER) == ""
 
 
-def test_debrief_wrong_exit_say_again_not_did_not_get(airfield, brain):
-    # A readback that names a DIFFERENT exit must not be answered "I did not
-    # get your exit" — the pilot did read back an exit.
+def test_debrief_wrong_exit_gets_expected_exit_not_did_not_get(airfield, brain):
+    # A readback that names a different exit gets the expected exit directly.
     sc = _scenario(airfield, brain).park("Ramp South")
     sc.say("Ground, Colt 1, ready to copy clearance", Controller.GROUND)
     clearance = brain.pilots["Colt 1"].last_clearance
@@ -1847,7 +1846,9 @@ def test_debrief_wrong_exit_say_again_not_did_not_get(airfield, brain):
     text = f"after departure, turn right, exit {assume.lower()}, 1500, Colt 1"
     r = sc.say(text, Controller.GROUND)
     assert "did not get" not in (r or "").lower()
-    assert "say again" in (r or "").lower()
+    assert "negative" in (r or "").lower()
+    assert "exit" in (r or "").lower()
+    assert "read back again" not in (r or "").lower()
 
 
 def test_debrief_bare_control_checkin_after_takeoff_stays_airborne(airfield,

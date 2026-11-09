@@ -1701,14 +1701,6 @@ class AtcBrain:
                 route_missing = True
         if not missing_num and not missing_gate and not route_missing:
             return None
-        # A gate WAS named, just a different one ("after departure, turn right,
-        # exit north" when Exit East was cleared): the pilot did read back an
-        # exit — saying "I did not get your exit" is confusing. The honest
-        # controller response is to say the clearance again, so label it as a
-        # full "say again" of the clearance instead of a missing item.
-        if missing_gate and any(re.search(rf"\b(?:exit|entry)\s+{re.escape(g)}\b",
-                                          low, re.IGNORECASE) for g in self.gates):
-            return "clearance"
         # Give the pilot every missing item, with values from the clearance.
         # Sorting by source position keeps the spoken coaching in clearance
         # order instead of set iteration order.
@@ -1737,10 +1729,17 @@ class AtcBrain:
             elif re.search(r"\bchannel\s*$", prefix, re.IGNORECASE):
                 label = f"channel {number}"
             elif re.search(r"\bangels\s*$", prefix, re.IGNORECASE):
-                label = f"altitude Angels {number}"
+                label = f"Angels {number}"
             elif re.match(r"\s*(?:ft|feet)\b",
                           clearance[number_match.end():], re.IGNORECASE):
-                label = f"altitude {number} feet"
+                after_unit = re.sub(
+                    r"^\s*(?:ft|feet)\b", "",
+                    clearance[number_match.end():], count=1,
+                    flags=re.IGNORECASE)
+                restriction = re.match(r"\s+or\s+(below|above)\b",
+                                       after_unit, re.IGNORECASE)
+                suffix = f" or {restriction.group(1)}" if restriction else ""
+                label = f"altitude {number} ft{suffix}"
             elif re.search(r"\b(?:altitude|climb|descend|below)\b",
                            prefix, re.IGNORECASE):
                 label = f"altitude {number}"
@@ -1809,10 +1808,9 @@ class AtcBrain:
         A clean first readback keeps the silent behaviour, so every tested
         kneeboard dialog is unchanged.
 
-        An incomplete readback gets a retry prompt up to the configured limit.
-        Once those retries are used, it gets an honest "readback incomplete"
-        with "continue" and the active check is cleared, so repeated errors
-        cannot trap the pilot in a loop.
+        An incorrect or incomplete readback gets the expected item stated
+        directly, with a retry prompt up to the configured limit. After that,
+        the check is cleared so repeated errors cannot trap the pilot.
         """
         agency = self._agency(controller)
         pilot.readback_replay = clearance or pilot.last_clearance or pilot.last_reply
@@ -1828,10 +1826,6 @@ class AtcBrain:
             return ""
         pilot.readback_fails += 1
         exhausted = pilot.readback_fails > self.readback_retries
-        if item == "clearance" and not exhausted:
-            # A wrong item was read back (e.g. a different exit): the honest
-            # response is the clearance again, not "I did not get your exit".
-            return self._say("say_again", callsign, agency=agency)
         reply = self._readback_failure_reply(
             callsign, item, controller, pilot.readback_fails)
         if exhausted:
@@ -1842,7 +1836,7 @@ class AtcBrain:
     def _readback_failure_reply(self, callsign: str, item: str,
                                 controller: Controller, failures: int,
                                 *, force_continue: bool = False) -> str:
-        """Coach another attempt, then explicitly let the pilot continue."""
+        """State the expected item, then end the check at its retry limit."""
         key = ("readback_incomplete_retry"
                if failures <= self.readback_retries and not force_continue
                else "readback_incomplete")
@@ -2142,7 +2136,7 @@ class AtcBrain:
         if reply and not self._is_meta_reply(reply):
             # Remember the last clearance so the pilot can ask for it again
             # ("say again") — a trainer aid for missed readbacks. Meta replies
-            # ("say again", "readback incomplete") are NOT stored: storing one
+            # ("say again", readback corrections) are NOT stored: storing one
             # made a later "repeat" replay the "say again" itself, an endless
             # loop that hid the real clearance (debrief 2026-10-18 12:44:32).
             pilot.last_reply = reply
@@ -2159,11 +2153,11 @@ class AtcBrain:
         # callsign) still gets its teaching note in the pilot's feed.
         # The coach is a post-step on the utterance text: intent recognition
         # is untouched, and a note is never set on semantic feedback
-        # ("readback incomplete" already corrected this transmission) or meta
+        # (a readback correction already handled this transmission) or meta
         # chatter (trainer commands).
         if self.mode == "coach" \
                 and not ("trainer" in reply.lower() if reply else False) \
-                and "readback incomplete" not in (reply or "").lower():
+                and not self._is_meta_reply(reply or ""):
             proper = coach.note(low)
             if not proper and pilot.last_readback:
                 proper = coach.note_readback(low, callsign)
@@ -2175,13 +2169,22 @@ class AtcBrain:
     def _is_meta_reply(self, reply: str) -> bool:
         """True for housekeeping replies that must not shadow the clearance.
 
-        "say again" and "readback incomplete" are feedback about a readback,
+        "say again" and readback corrections are feedback about a readback,
         not clearances. If they replaced `last_reply`, a follow-up "repeat"
         would replay the feedback instead of the clearance the pilot asked
         for. `last_clearance` (set when a clearance is issued) is unaffected.
         """
-        return ("say again" in reply.lower()
-                or "readback incomplete" in reply.lower())
+        low = reply.lower().rstrip()
+        if ("say again" in low or "readback incomplete" in low
+                or low.endswith("no need to repeat.")):
+            return True
+        # Readback corrections now end with the expected value, without a
+        # separate "read back again" prompt. Keep them meta so "say again"
+        # still replays the clearance rather than the correction.
+        return bool(re.search(
+            r"\bnegative,\s+(?:altitude|angels|qnh|runway|heading|exit|"
+            r"entry|channel|bulls|taxi route|hold short|turn|readback)\b",
+            low))
 
     def remember_transmission(self, callsign: str, text: str) -> None:
         """Remember the latest ATC message addressed to a pilot for replay."""
