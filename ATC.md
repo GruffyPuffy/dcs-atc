@@ -259,7 +259,7 @@ a fumbled readback never traps the pilot.
 
 Example dialogs (using the default one-retry setting):
 
-**Correct readback**
+**Successful readback**
 
 ```text
 ATC:   Adder 1-1, Ground, after departure turn right Exit West, 1500 ft or below.
