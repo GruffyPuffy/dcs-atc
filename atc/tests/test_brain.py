@@ -96,7 +96,10 @@ def test_readback_reminder_waits_for_clearance_audio_and_fires_once(brain):
     assert brain.pop_due_readback_reminders(deadline - 0.001) == []
     assert brain.pop_due_readback_reminders(deadline) == ["Colt 1"]
     assert brain.pop_due_readback_reminders(deadline + 60.0) == []
-    assert "read back the clearance" in brain.readback_reminder("Colt 1")
+    reminder = brain.readback_reminder("Colt 1")
+    assert reminder == "Colt 1, read back the clearance."
+    assert "reminder" not in reminder.lower()
+    assert "when able" not in reminder.lower()
 
 
 def test_any_pilot_speech_cancels_reminder_and_wrong_readback_does_not_rearm(

@@ -47,7 +47,7 @@
     "readback_correct": "{callsign}, {agency}, readback correct.",
     "readback_incomplete_retry": "{callsign}, {agency}, negative, {item}.",
     "readback_incomplete": "{callsign}, {agency}, negative, {item}. No need to repeat.",
-    "readback_reminder": "{callsign}, reminder, read back the clearance when able.",
+    "readback_reminder": "{callsign}, read back the clearance.",
     "inbound_outside": "{callsign}, {tower}, roger, report entering the control zone, runway {runway} active.",
     "inbound_inside": "{callsign}, {tower}, radar contact {position}, cleared control zone entry, join {downwind} downwind runway {runway}.",
     "inbound_via_gate": "{callsign}, {tower}, roger, report entering the control zone via {gate}, runway {runway} active.",

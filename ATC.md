@@ -274,7 +274,7 @@ ATC:   (silent; the readback is correct)
 ```text
 ATC:   Adder 1-1, Ground, after departure turn right Exit West, 1500 ft or below.
 Pilot: (no reply for about 20 seconds)
-ATC:   Adder 1-1, reminder, read back the clearance when able.
+ATC:   Adder 1-1, read back the clearance.
 Pilot: After departure turn right Exit West, 1500 feet or below, Adder 1-1.
 ATC:   (silent; the readback is correct)
 ```
