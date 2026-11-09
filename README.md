@@ -12,7 +12,7 @@ follows the Master Arms (MA) community SOP and is deliberately a *coach*:
 - every clearance is spoken with correct phraseology, so you learn by doing;
 - **readbacks are checked** — a wrong or incomplete one gets the expected item
   stated directly ("Negative, altitude 1500 ft or below") with a retry, then
-  "No need to repeat" when the retry limit is reached; you are **never blocked**;
+  "No further readback needed" when the retry limit is reached; you are **never blocked**;
 - it is forgiving: `say again`, `reset` and `cancel` always work, and
   `Trainer, <callsign>, help` gives a state-aware hint;
 - a **live map** shows the picture, and a saved **debrief** (your trail plus

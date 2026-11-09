@@ -296,7 +296,7 @@ ATC:   Adder 1-1, Ground, after departure turn right Exit West, 1500 ft or below
 Pilot: After departure turn right Exit West, Adder 1-1.
 ATC:   Adder 1-1, Ground, negative, altitude 1500 ft or below.
 Pilot: After departure turn right Exit West, Adder 1-1.
-ATC:   Adder 1-1, Ground, negative, altitude 1500 ft or below. No need to repeat.
+ATC:   Adder 1-1, Ground, negative, altitude 1500 ft or below. No further readback needed.
 ```
 
 **One exception:** if an earlier attempt at that clearance was incomplete, the
