@@ -29,6 +29,13 @@ services:
       ATC_STT_MODEL: "${ATC_STT_MODEL:-}"
       ATC_STT_DEVICE: "${ATC_STT_DEVICE:-}"
       ATC_STT_COMPUTE: "${ATC_STT_COMPUTE:-}"
+      # STT may run locally in this container or through an OpenAI-compatible
+      # Speaches endpoint. The special dcs command supplies the API settings.
+      ATC_STT_BACKEND: "${ATC_STT_BACKEND:-local}"
+      ATC_STT_BASE_URL: "${ATC_STT_BASE_URL:-}"
+      ATC_STT_API_MODEL: "${ATC_STT_API_MODEL:-Systran/faster-whisper-large-v3}"
+      ATC_STT_API_KEY: "${ATC_STT_API_KEY:-}"
+      ATC_STT_API_TIMEOUT: "${ATC_STT_API_TIMEOUT:-45}"
       # Service names inside the compose network.
       ATC_SRS_HOST: "srs-server"
       ATC_STATE_HOST: "dcs-server"

@@ -26,6 +26,9 @@ srs-autoconnect  Install the SRS auto-connect announcer hook (port-only by defau
   srs-status Show connected SRS clients (HTTP status API)
   atc-up [REF] Start the ATC bot (latest release tag by default; REF may be a tag or SHA)
   atc-up-gpu [REF] Start the ATC bot with GPU (needs nvidia-container-toolkit)
+  atc-up-stt-server [REF] Start Speaches on GPU and the bot using API STT
+  stt-down  Stop and remove Speaches (keeps its downloaded model cache)
+  stt-status Show Speaches container and API status
   atc-down  Stop the ATC bot container
   atc-logs  Follow the ATC bot container logs (Ctrl+C to exit)
   atc-update [REF] Recreate the bot (keeps current version if omitted; keeps GPU mode)
@@ -81,6 +84,17 @@ require_gpu() {
 atc_gpu_running() {
   docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' dcs-atc-bot 2>/dev/null \
     | grep -q '^ATC_GPU=1'
+}
+
+atc_api_running() {
+  docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' dcs-atc-bot 2>/dev/null \
+    | grep -q '^ATC_STT_BACKEND=api$'
+}
+
+atc_env_value() {
+  local name="$1"
+  docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' dcs-atc-bot 2>/dev/null \
+    | sed -n "s/^${name}=//p" | head -n 1
 }
 
 latest_atc_tag() {
@@ -328,6 +342,7 @@ command="${1:-help}"
 # Commands with positional arguments are limited to these explicit cases.
 if [[ "$#" -gt 1 && "$command" != "debrief" \
       && "$command" != "atc-up" && "$command" != "atc-up-gpu" \
+      && "$command" != "atc-up-stt-server" \
       && "$command" != "atc-update" ]]; then
   usage >&2
   exit 2
@@ -391,6 +406,39 @@ case "$command" in
     cleanup_bridge_tmp
     echo "ATC bot (GPU) starting at $ref ($ATC_RESOLVED_SHA). Follow it with: ./scripts/dcs.sh atc-logs"
     ;;
+  atc-up-stt-server)
+    require_docker
+    require_gpu
+    if ss -ltn 2>/dev/null | grep -q ':8090 '; then
+      echo "Port 8090 is already in use (a host bot running?). Stop it first." >&2
+      exit 1
+    fi
+    # Bring up the standard services first so Compose creates its private
+    # network. Speaches joins that network under the DNS name 'speaches'.
+    compose_atc up -d srs-server
+    stt_network="$(docker inspect --format '{{range $name, $config := .NetworkSettings.Networks}}{{println $name}}{{end}}' dcs-atc-srs | head -n 1)"
+    if [[ -z "$stt_network" ]]; then
+      echo "Could not determine the ATC Compose network for the STT server." >&2
+      exit 1
+    fi
+    SPEACHES_DOCKER_NETWORK="$stt_network" "$repo_dir/scripts/stt-server.sh" start
+    ref="${2:-$(latest_atc_tag)}"
+    fetch_bridge_for_ref "$ref"
+    ATC_REF="$ATC_RESOLVED_SHA" \
+      ATC_STT_BACKEND=api \
+      ATC_STT_BASE_URL=http://speaches:8000/v1 \
+      ATC_STT_API_MODEL="${ATC_STT_API_MODEL:-Systran/faster-whisper-large-v3}" \
+      ATC_STT_API_KEY= \
+      compose_atc up -d --build atc-bot
+    cleanup_bridge_tmp
+    echo "ATC bot using Speaches STT starting at $ref ($ATC_RESOLVED_SHA). Follow it with: ./scripts/dcs.sh atc-logs"
+    ;;
+  stt-down)
+    "$repo_dir/scripts/stt-server.sh" down
+    ;;
+  stt-status)
+    "$repo_dir/scripts/stt-server.sh" status
+    ;;
   atc-down)
     require_docker
     compose_atc stop atc-bot
@@ -409,7 +457,20 @@ case "$command" in
     fetch_bridge_for_ref "$ref"
     # The entrypoint pulls on start, so a recreate is an update. Preserve GPU
     # mode if the running container was started with the GPU override.
-    if atc_gpu_running; then
+    if atc_api_running; then
+      # Preserve API mode on recreate. The endpoint and credentials are read
+      # from the running container without displaying them.
+      stt_base_url="$(atc_env_value ATC_STT_BASE_URL)"
+      stt_model="$(atc_env_value ATC_STT_API_MODEL)"
+      stt_api_key="$(atc_env_value ATC_STT_API_KEY)"
+      stt_timeout="$(atc_env_value ATC_STT_API_TIMEOUT)"
+      ATC_REF="$ATC_RESOLVED_SHA" ATC_STT_BACKEND=api \
+        ATC_STT_BASE_URL="$stt_base_url" ATC_STT_API_MODEL="$stt_model" \
+        ATC_STT_API_KEY="$stt_api_key" ATC_STT_API_TIMEOUT="$stt_timeout" \
+        compose_atc up -d --force-recreate atc-bot
+      cleanup_bridge_tmp
+      echo "ATC bot (API STT) restarting at $ref ($ATC_RESOLVED_SHA)."
+    elif atc_gpu_running; then
       require_gpu
       ATC_REF="$ATC_RESOLVED_SHA" compose_atc_gpu up -d --force-recreate atc-bot
       cleanup_bridge_tmp

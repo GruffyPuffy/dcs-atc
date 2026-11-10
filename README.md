@@ -206,6 +206,8 @@ terminal. Because the map server runs *inside* the bot process it cannot restart
 itself, so run the bot through the supervisor instead of `start_bot.sh`:
 
     ./atc/run_server.sh                     # supervisor (recommended)
+    ./atc/run_server.sh --stt-server        # start Speaches and use API STT
+    ./atc/run_server.sh --stt-server http://127.0.0.1:18000  # use an existing STT server
     ./atc/run_server.sh --debug             # + debrief recording
     ATC_AIRFIELD=Gudauta ./atc/run_server.sh
 

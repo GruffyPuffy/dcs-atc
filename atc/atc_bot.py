@@ -243,7 +243,6 @@ def main() -> None:
                              "all radio traffic")
     args = parser.parse_args()
 
-    from faster_whisper import WhisperModel
     from piper import PiperVoice
     from piper.config import SynthesisConfig
 
@@ -281,12 +280,35 @@ def main() -> None:
     if save_audio:
         audio_dir.mkdir(parents=True, exist_ok=True)
 
-    stt_model, stt_device, stt_compute = resolve_stt(
-        args.stt_model, args.stt_device, args.stt_compute)
-    if stt_device == "cuda":
-        preload_cuda_libs()
-    print(f"[*] Loading Whisper '{stt_model}' on {stt_device} ({stt_compute})...")
-    stt = WhisperModel(stt_model, device=stt_device, compute_type=stt_compute)
+    stt_backend = os.environ.get("ATC_STT_BACKEND", "local").strip().lower()
+    if stt_backend == "local":
+        from faster_whisper import WhisperModel
+
+        stt_model, stt_device, stt_compute = resolve_stt(
+            args.stt_model, args.stt_device, args.stt_compute)
+        if stt_device == "cuda":
+            preload_cuda_libs()
+        print(f"[*] Loading Whisper '{stt_model}' on {stt_device} ({stt_compute})...")
+        stt = WhisperModel(stt_model, device=stt_device, compute_type=stt_compute)
+    elif stt_backend == "api":
+        from speech_api import SpeachesClient
+
+        stt_device = "api"
+        stt_url = os.environ.get("ATC_STT_BASE_URL", "").strip()
+        if not stt_url:
+            raise SystemExit("ATC_STT_BASE_URL is required when ATC_STT_BACKEND=api")
+        stt_model = (os.environ.get("ATC_STT_API_MODEL")
+                     or args.stt_model
+                     or "Systran/faster-whisper-large-v3")
+        stt = SpeachesClient(
+            stt_url,
+            stt_model,
+            os.environ.get("ATC_STT_API_KEY", ""),
+            timeout=float(os.environ.get("ATC_STT_API_TIMEOUT", "45")),
+        )
+        print(f"[*] Using STT API {stt_url} (model {stt_model})")
+    else:
+        raise SystemExit("ATC_STT_BACKEND must be 'local' or 'api'")
     # A distinct voice per controller adds immersion: Tower, Ground, Control and
     # ATIS each sound like a different controller.
     voice_names = {
@@ -538,27 +560,28 @@ def main() -> None:
         started = time.monotonic()
         with lock:
             hint_names = brain.stt_flight_names()
-        segments, _ = stt.transcribe(
-            resample_16k(pcm),
-            language="en",
-            # Beam search (not greedy): on GPU we have the headroom, and a wider
-            # beam recovers more on noisy radio audio. 1 on CPU to stay fast.
-            beam_size=1 if stt_device == "cpu" else 5,
-            vad_filter=True,
-            # Don't let one segment's text bias the next: on short/noisy clips
-            # this causes repeat-hallucination loops.
-            condition_on_previous_text=False,
-            # Bias the decoder toward the callsigns currently online (and their
-            # known STT errors), not the whole mission list — 60 flights blow
-            # the 900-char cap and drown the one name the pilot is about to say.
-            #
-            # No `initial_prompt`: it becomes the decoder *prefix*, so on a
-            # near-silent clip (a PTT click or breath) Whisper echoes it back
-            # verbatim as if the pilot had said it. `hotwords` biases the same
-            # vocabulary without that failure mode.
-            hotwords=stt_hint(hint_names,
-                              [airfield.name, airfield.tower]),
-        )
+        hotwords = stt_hint(hint_names, [airfield.name, airfield.tower])
+        try:
+            if stt_backend == "api":
+                segments = stt.transcribe(resample_16k(pcm), hotwords)
+            else:
+                segments, _ = stt.transcribe(
+                    resample_16k(pcm),
+                    language="en",
+                    # Beam search (not greedy): on GPU we have the headroom, and a wider
+                    # beam recovers more on noisy radio audio. 1 on CPU to stay fast.
+                    beam_size=1 if stt_device == "cpu" else 5,
+                    vad_filter=True,
+                    # Don't let one segment's text bias the next: on short/noisy clips
+                    # this causes repeat-hallucination loops.
+                    condition_on_previous_text=False,
+                    # Bias toward callsigns currently online without making that hint
+                    # the decoder's prefix (which can hallucinate on silence).
+                    hotwords=hotwords,
+                )
+        except Exception as exc:  # noqa: BLE001 - a failed API call must not crash the ATC loop
+            log(f"[{controller.value}] STT API request failed ({type(exc).__name__}); ignoring transmission")
+            segments = []
         segments = list(segments)  # materialise: the guard below re-reads them
         text = " ".join(s.text.strip() for s in segments).strip()
         # Drop a transcript the model itself flagged as non-speech (a PTT click
