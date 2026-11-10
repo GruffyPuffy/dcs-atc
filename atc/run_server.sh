@@ -122,7 +122,7 @@ while true; do
 
   echo "[run_server] starting bot: airfield=$airfield ${debug_args[*]:-}"
   start_viewer
-  "$start_script" "$@" --airfield "$airfield" "${debug_args[@]}"
+  "$start_script" "${server_args[@]}" --airfield "$airfield" "${debug_args[@]}"
   code=$?
 
   if [[ $code -eq 75 ]]; then
