@@ -54,7 +54,7 @@
     "arrival_wrong_call": "{callsign}, {tower}, negative, report runway in sight for landing.",
     "report_runway_in_sight": "{callsign}, {tower}, report runway in sight.",
     "cleared_land": "{flight}{callsign}, {tower}, wind {wind}, runway {runway}, cleared to land.",
-    "cleared_overhead": "{flight}{callsign}, {tower}, wind {wind}, cleared for {downwind} overhead break runway {runway}.",
+    "cleared_overhead": "{flight}{callsign}, {tower}, cleared for {downwind} overhead break runway {runway}.",
     "break_ack": "{callsign}, {tower}, roger, report on final.",
     "departure_exit": "{callsign}, {ground}, after departure turn {turn} {gate}, {altitude} or below.",
     "departure_exit_straight": "{callsign}, {ground}, after departure {gate}, {altitude} or below.",
