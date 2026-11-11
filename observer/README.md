@@ -11,7 +11,7 @@ Run from the repository root:
 ```
 
 Open <http://localhost:8091>. DCS and SRS host/port, web port, polling rate,
-coalition bullseye, and initial path history can be set on the command line.
+and initial path history can be set on the command line.
 For example, `--history 180` keeps up to three hours of trails in memory;
 the map's Path minutes control can display a shorter window. No mission
 commands are sent to DCS. The SRS connection in this first prototype performs
@@ -37,9 +37,12 @@ bridge's DCS category, not a detailed symbol database for each DCS aircraft
 model. Markers shrink with zoom; at zoom levels below 8, nearby units of the
 same coalition and domain are grouped into counted markers. Aircraft expand
 into individual units at zoom 11; ground and sea units stay grouped until zoom
-15. The bridge currently doesn't expose a spawned/active flag, so the observer
-can't reliably suppress unspawned dynamic-spawn slots without a bridge change.
-The rest of the symbol code and map UI live under `observer/`.
+15. Observer hides unoccupied plane groups whose names contain `DynamicSlot`.
+It also hides units explicitly marked inactive if the bridge supplies an
+`active` field; the current bridge does not yet include that field. If a player
+occupies a dynamic slot, the bridge player name keeps it visible in Real
+Players. Blue and red coalition bullseyes are drawn as matching colored target
+rings. The rest of the symbol code and map UI live under `observer/`.
 
 The Units panel separates units with a non-empty bridge `player` name into
 Real Players and puts units without a current player name under AI / no player.

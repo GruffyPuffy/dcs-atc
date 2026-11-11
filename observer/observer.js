@@ -28,6 +28,7 @@ map.on('moveend zoomend',scheduleVectors);window.addEventListener('resize',sched
 document.querySelector('#vectors').addEventListener('change',e=>{if(e.target.checked)refreshVectors();else{if(vectorPending)map.removeLayer(vectorPending);if(vectorOverlay)map.removeLayer(vectorOverlay);vectorPending=vectorOverlay=null;}});
 const selected=new Set(), colors=['#58a6ff','#3fb950','#d29922','#bc8cff','#f778ba','#39c5cf','#ff7b72','#e3b341'];
 let colorIndex=0, colorById=new Map(), lastIds='', lastRoster=null, lastData=null;
+const unitMarkers=new Map();
 function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function label(a){return a.player?`${a.player} (${a.name})`:a.name}
 function unitSymbol(a,size,quantity,showHeading){
@@ -77,7 +78,7 @@ function update(data){
  const playerCount=data.aircraft.filter(a=>a.player).length;
  document.querySelector('#player-count').textContent=`(${playerCount})`;
  document.querySelector('#ai-count').textContent=`(${data.aircraft.length-playerCount})`;
- aircraftLayer.clearLayers();pathLayer.clearLayers();refLayer.clearLayers();
+ pathLayer.clearLayers();refLayer.clearLayers();
  const zoom=map.getZoom();
  const symbolSize=zoom<6?13:zoom<9?15:zoom<11?17:zoom<13?20:24;
  const displayUnits=[];
@@ -97,10 +98,41 @@ function update(data){
   const groupNames=[...new Set(members.map(a=>a.group).filter(Boolean))];
   displayUnits.push({unit:{...lead,lat,lon,group:groupNames.join(', ')},members});
  }
+ const seenMarkerKeys=new Set();
  for(const {unit:a,members} of displayUnits){
   const popup=members.length>1?`<b>${esc(a.group||'Nearby units')}</b> · ${members.length} units<br>${members.map(x=>esc(label(x))).join('<br>')}`:
    `<b>${esc(label(a))}</b><br>${esc(a.group)} · ${esc(a.type)}<br>${Math.round(a.alt)} ft · ${Math.round(a.heading)}°`;
-  const marker=L.marker([a.lat,a.lon],{icon:unitSymbol(a,symbolSize,members.length,zoom>=12),title:members.length>1?`${members.length} units · ${a.group||'nearby'}`:label(a)}).bindPopup(popup);marker.addTo(aircraftLayer);
+  const memberIds=members.map(x=>x.id).sort();
+  const popupKey=members.length===1?`unit:${memberIds[0]}`:`group:${memberIds.join('|')}`;
+  const showHeading=zoom>=12;
+  const iconKey=`${a.category}:${a.coalition}:${symbolSize}:${members.length}:${showHeading}:${showHeading?Math.round(a.heading):''}`;
+  const icon=unitSymbol(a,symbolSize,members.length,showHeading);
+  let marker=unitMarkers.get(popupKey);
+  if(!marker){
+   marker=L.marker([a.lat,a.lon],{icon,title:members.length>1?`${members.length} units · ${a.group||'nearby'}`:label(a)}).bindPopup(popup).addTo(aircraftLayer);
+   marker._unitIconKey=iconKey;marker._unitPopup=popup;unitMarkers.set(popupKey,marker);
+  }else{
+   const pos=marker.getLatLng();
+   if(pos.lat!==a.lat||pos.lng!==a.lon)marker.setLatLng([a.lat,a.lon]);
+   marker.options.title=members.length>1?`${members.length} units · ${a.group||'nearby'}`:label(a);
+   const popupOpen=marker.isPopupOpen();
+   if(marker._unitIconKey!==iconKey){
+    if(popupOpen)marker._pendingUnitIcon={icon,key:iconKey};
+    else{marker.setIcon(icon);marker._unitIconKey=iconKey;marker._pendingUnitIcon=null;}
+   }
+   if(marker._unitPopup!==popup){
+    if(popupOpen)marker._pendingUnitPopup=popup;
+    else{marker.setPopupContent(popup);marker._unitPopup=popup;marker._pendingUnitPopup=null;}
+   }
+   if(!popupOpen){
+    if(marker._pendingUnitIcon){marker.setIcon(marker._pendingUnitIcon.icon);marker._unitIconKey=marker._pendingUnitIcon.key;marker._pendingUnitIcon=null;}
+    if(marker._pendingUnitPopup){marker.setPopupContent(marker._pendingUnitPopup);marker._unitPopup=marker._pendingUnitPopup;marker._pendingUnitPopup=null;}
+   }
+  }
+  seenMarkerKeys.add(popupKey);
+ }
+ for(const [key,marker] of unitMarkers){
+  if(!seenMarkerKeys.has(key)){aircraftLayer.removeLayer(marker);unitMarkers.delete(key);}
  }
  for(const a of data.aircraft){
   const minutes=Math.max(1,Math.min(180,Number(document.querySelector('#history').value)||180));
@@ -108,7 +140,13 @@ function update(data){
   const points=(a.path||[]).filter(p=>p[0]>=cutoff).map(p=>[p[1],p[2]]);
   if(selected.has(a.id)&&points.length>1)L.polyline(points,{color:colorById.get(a.id),weight:2,opacity:.75}).addTo(pathLayer);
  }
- if(data.bullseye)L.marker(data.bullseye,{title:'Bullseye',icon:L.divIcon({className:'',html:'<div style="color:#ffdf5d;font-weight:bold;text-shadow:0 0 3px #000;font-size:18px">✚</div>',iconSize:[18,18],iconAnchor:[9,9]})}).bindPopup('Mission bullseye').addTo(refLayer);
+ const bullseyes=data.bullseyes||(data.bullseye?{'2':data.bullseye}:{});
+ for(const [coalition,position] of Object.entries(bullseyes)){
+  const color=coalition==='2'?'#1f6feb':'#f85149';
+  const side=coalition==='2'?'Blue':'Red';
+  for(const radius of [4,8,12])L.circleMarker(position,{radius,color,weight:1.5,opacity:.9,fill:false,interactive:false}).addTo(refLayer);
+  L.circleMarker(position,{radius:2,color,weight:1,fillColor:color,fillOpacity:1}).bindTooltip(`Bullseye (${side})`).addTo(refLayer);
+ }
  const focus=document.querySelector('#focus').value;const ac=data.aircraft.find(a=>a.id===focus);if(ac)map.panTo([ac.lat,ac.lon],{animate:true,duration:.5});
 }
 map.on('zoomend',()=>{if(lastData)update(lastData)});

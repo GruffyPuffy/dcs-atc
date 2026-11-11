@@ -18,7 +18,7 @@ class Observer:
         self.args = args
         self.lock = threading.Lock()
         self.tracks = defaultdict(deque)
-        self.snapshot = {"aircraft": [], "bullseye": None, "error": "Connecting to DCS…", "srs": "Not connected"}
+        self.snapshot = {"aircraft": [], "bullseyes": {}, "error": "Connecting to DCS…", "srs": "Not connected"}
         self.running = True
 
     def exchange(self, op, **fields):
@@ -37,22 +37,40 @@ class Observer:
             now = time.time()
             try:
                 data = self.exchange("status")
-                try:
-                    be = self.exchange("bullseye", coalition=self.args.coalition)
-                except Exception:
-                    be = None
                 aircraft = []
                 seen = set()
                 for group in data.get("groups", []):
                     for unit in group.get("units", []):
+                        player = unit.get("player", "") or ""
+                        group_name = group.get("name", "")
+                        ident = f"{group_name}/{unit.get('name', 'Unknown')}"
+                        # Newer bridge payloads may include the DCS
+                        # Unit:isActive() result. Treat only explicit false as
+                        # inactive so this remains compatible with the current
+                        # bridge, which doesn't send the field yet.
+                        if unit.get("active") is False and not player:
+                            self.tracks.pop(ident, None)
+                            continue
+                        # Unoccupied DCS dynamic aircraft slots appear in the
+                        # bridge snapshot like ordinary units. Hide those for
+                        # now; once occupied, getPlayerName() identifies them
+                        # as a real player unit and they should be shown.
+                        slot_label = (
+                            f"{group_name} {unit.get('name', '')} "
+                            f"{unit.get('type', '')}"
+                        ).lower()
+                        slot_name = "".join(c for c in slot_label if c.isalnum())
+                        if (group.get("category") == 0 and not player
+                                and "dynamicslot" in slot_name):
+                            self.tracks.pop(ident, None)
+                            continue
                         lat, lon = unit.get("lat"), unit.get("lon")
                         if lat is None or lon is None:
                             continue
                         name = unit.get("name", "Unknown")
-                        ident = f"{group.get('name', '')}/{name}"
                         seen.add(ident)
-                        ac = {"id": ident, "name": name, "group": group.get("name", ""),
-                              "player": unit.get("player", ""), "type": unit.get("type", ""),
+                        ac = {"id": ident, "name": name, "group": group_name,
+                              "player": player, "type": unit.get("type", ""),
                               "coalition": group.get("coalition", 0), "category": group.get("category", 0),
                               "lat": float(lat), "lon": float(lon), "alt": float(unit.get("alt", 0)) * 3.280839895,
                               "heading": float(unit.get("heading", 0))}
@@ -67,10 +85,17 @@ class Observer:
                         del self.tracks[key]
                 for ac in aircraft:
                     ac["path"] = [[p[0], p[1], p[2]] for p in self.tracks[ac["id"]]]
+                bullseyes = {}
+                for coalition in (2, 1):
+                    try:
+                        point = self.exchange("bullseye", coalition=coalition)
+                    except Exception:
+                        point = None
+                    if point:
+                        bullseyes[str(coalition)] = [point["lat"], point["lon"]]
                 with self.lock:
                     self.snapshot = {"aircraft": aircraft,
-                                     "bullseye": [be["lat"], be["lon"]] if be else None,
-                                     "view_coalition": self.args.coalition,
+                                     "bullseyes": bullseyes,
                                      "error": None, "updated": now,
                                      "history_minutes": self.args.history,
                                      "srs": self.snapshot.get("srs", "Not connected")}
@@ -136,7 +161,6 @@ def main():
     p.add_argument("--web-port", type=int, default=8091)
     p.add_argument("--history", type=int, default=180, help="path history in minutes (max 180)")
     p.add_argument("--rate", type=float, default=1.0, help="DCS polling samples per second")
-    p.add_argument("--coalition", type=int, choices=(1, 2), default=2)
     args = p.parse_args()
     args.history = max(1, min(180, args.history))
     app = Observer(args)
