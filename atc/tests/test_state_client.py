@@ -109,3 +109,35 @@ def test_weather_converts_dcs_blow_to_direction_to_aviation_from(monkeypatch):
     assert weather["wind_dir"] == 210
     assert weather["wind_dir_2000"] == 0
     assert weather["wind_speed_ms"] == 4
+
+
+def test_units_exclude_explicitly_inactive_placeholders_but_keep_legacy(monkeypatch):
+    client = StateClient()
+
+    def unit(name, *, active_marker=True, player=""):
+        result = {
+            "name": name, "player": player, "type": "F-5E-3",
+            "lat": 42.0, "lon": 42.5, "alt": 1000,
+            "heading": 90, "speed": 120,
+        }
+        if active_marker is not None:
+            result["active"] = active_marker
+        return result
+
+    monkeypatch.setattr(client, "status", lambda: {"groups": [{
+        "name": "Test flight", "coalition": 2, "category": 0,
+        "units": [
+            unit("Active AI", active_marker=True),
+            unit("Active pilot", active_marker=True, player="Pilot"),
+            unit("Inactive AI", active_marker=False),
+            unit("Unused slot", active_marker=False, player="Unused"),
+            unit("Legacy bridge unit", active_marker=None, player="Legacy"),
+        ],
+    }]})
+
+    assert [item.callsign for item in client.all_units()] == [
+        "Active AI", "Active pilot", "Legacy bridge unit",
+    ]
+    assert [item.callsign for item in client.aircraft()] == [
+        "Active pilot", "Legacy bridge unit",
+    ]
