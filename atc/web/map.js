@@ -12,7 +12,8 @@ let map, ctrLayer, staticLayer, arrivalHandoffLayer, aircraftLayer, aiLayer;
 let chartLayer, pathLayer, commLayer, debugLayer, trainingTaskLayer;
 let bullseyeLayer;  // STT readings, candidate repairs, and actual-position rings
 let bullseyeCompassLayer;  // shown only while inspecting an actual-position popup
-let baseLayer;  // the base-map tile layer (OSM or DCS); swapped on config change
+let baseLayer;  // selected base-map layer; swapped on config change
+let baseFallbackLayer;  // OSM underlay for missing DCS tiles
 let baseLayerName = '';
 let vectorSpec = null;     // dcsmaps WMS overlay (airbases/towns/navaids)
 let vectorOverlay = null;  // current single-tile ImageOverlay
@@ -113,8 +114,9 @@ function drawOverlay(af) {
     .addTo(chartLayer);
 }
 
-// Swap the base-map tile layer (OSM <-> DCS tiles) when the server config says
-// so. Only rebuilds when the choice actually changes.
+// Swap the base-map tile layer when the server config changes. DCS tiles cover
+// only their regional map and are missing at some zoom levels, so keep OSM
+// underneath them as geographic context wherever a DCS tile is unavailable.
 function setBaseMap(bm) {
   if (!bm || !bm.url) {
     setVectorOverlay(null);
@@ -122,12 +124,26 @@ function setBaseMap(bm) {
   }
   if (bm.name !== baseLayerName) {
     if (baseLayer) map.removeLayer(baseLayer);
+    if (baseFallbackLayer) {
+      map.removeLayer(baseFallbackLayer);
+      baseFallbackLayer = null;
+    }
+    if (bm.name === 'dcs') {
+      baseFallbackLayer = L.tileLayer(
+        'https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          maxZoom: 19,
+          attribution: '&copy; OpenStreetMap contributors',
+        }).addTo(map);
+    }
     baseLayer = L.tileLayer(bm.url, {
       maxZoom: bm.maxZoom || 19,
       maxNativeZoom: bm.maxNativeZoom || bm.maxZoom || 19,
+      errorTileUrl: bm.name === 'dcs'
+        ? 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs='
+        : undefined,
       attribution: bm.attribution || '',
       tms: !!bm.tms,
-      noWrap: true,
+      noWrap: bm.name === 'dcs',
     }).addTo(map);
     baseLayerName = bm.name;
   }
