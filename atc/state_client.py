@@ -188,6 +188,11 @@ class StateClient:
         out: list[Aircraft] = []
         for group in result.get("groups", []):
             for unit in group.get("units", []):
+                # Late-activated and unoccupied dynamic-slot placeholders may
+                # appear in the bridge snapshot at their authored positions.
+                # Keep older bridges compatible when they omit this field.
+                if unit.get("active") is False:
+                    continue
                 if players_only and not unit.get("player"):
                     continue
                 out.append(Aircraft(
@@ -205,11 +210,11 @@ class StateClient:
         return out
 
     def aircraft(self) -> list[Aircraft]:
-        """All player-occupied aircraft currently in the mission."""
+        """All active player-occupied aircraft currently in the mission."""
         return self._units(players_only=True)
 
     def all_units(self) -> list[Aircraft]:
-        """Every unit (players and AI) — used for runway occupancy checks."""
+        """Every active unit (players and AI) — used for live map/traffic checks."""
         return self._units(players_only=False)
 
     def airbase(self, name: str) -> dict | None:

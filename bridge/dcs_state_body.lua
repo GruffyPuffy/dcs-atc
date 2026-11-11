@@ -6,12 +6,19 @@
 -- the parsed request table. Must return a JSON string (built with net.lua2json).
 --
 -- This file is read fresh on every request, so edits take effect without
--- restarting DCS (the hook falls back to its embedded copy if this file is
--- missing). Deploy with: ./scripts/dcs.sh bridge
+-- restarting DCS. The hook returns an explicit error if this file is missing
+-- or invalid. Deploy with: ./scripts/dcs.sh bridge
+
+local BRIDGE_BODY_VERSION = '2026-11-11.2'
 
 local function unit_json(u)
     local p = u:getPosition()
     local lat, lon, alt = coord.LOtoLL(p.p)
+    -- Late-activated units remain in coalition.getGroups()/getUnits(), at
+    -- their authored spawn point. Report activation when the API provides it
+    -- so read-only clients can omit those placeholders. Keep the field absent
+    -- on API errors rather than misclassifying the unit as inactive.
+    local active_ok, active = pcall(function() return u:isActive() end)
     -- p.x is the unit's forward vector; DCS world is x=north, z=east, y=up.
     local heading = math.deg(math.atan2(p.x.z, p.x.x)) % 360
     -- Ground speed (m/s) from the velocity vector, for the low-and-fast check
@@ -21,7 +28,7 @@ local function unit_json(u)
     local ok, vel = pcall(u.getVelocity, u)
     if ok and vel then v = vel end
     local speed = math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z)
-    return {
+    local result = {
         name = u:getName(),
         type = u:getTypeName(),
         x = p.p.x, y = p.p.y, z = p.p.z,
@@ -30,6 +37,10 @@ local function unit_json(u)
         speed = speed,
         player = u:getPlayerName() or "",
     }
+    if active_ok and type(active) == 'boolean' then
+        result.active = active
+    end
+    return result
 end
 
 local function group_json(g, coa)
@@ -73,9 +84,17 @@ end
 
 local function envelope(ok, payload)
     if ok then
-        return net.lua2json({ v = 1, id = req.id, ok = true, result = payload })
+        return net.lua2json({
+            v = 1, id = req.id, ok = true,
+            bridge_body_version = BRIDGE_BODY_VERSION,
+            result = payload,
+        })
     end
-    return net.lua2json({ v = 1, id = req.id, ok = false, error = payload })
+    return net.lua2json({
+        v = 1, id = req.id, ok = false,
+        bridge_body_version = BRIDGE_BODY_VERSION,
+        error = payload,
+    })
 end
 
 -- Player-slot callsigns from the mission definition (env.mission). Each slot
@@ -117,6 +136,10 @@ local function callsigns()
     scan('red', env.mission.coalition.red)
     return { callsigns = out }
 end
+
+-- DCS automatically loads every .lua file in Scripts/Hooks. This file is also
+-- read as source by dcs_state_hook.lua, so do nothing during standalone loading.
+if type(req) ~= 'table' then return end
 
 local op = req.op
 if op == 'status' then
