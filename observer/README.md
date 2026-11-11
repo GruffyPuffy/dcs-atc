@@ -19,10 +19,11 @@ the client handshake only; selecting radio frequencies, receiving audio, and
 transcription are future work.
 
 The map uses the same dcsmaps Caucasus tile source and WMS overlay as the ATC
-map: DCS tiles underneath, with airbases, cities, towns, roads, railroads,
-landmarks, TACAN, VOR, NDB, DME, and database layers above. The **Map labels**
-checkbox toggles the WMS overlay, which refreshes after map movement or zoom.
-Leaflet is loaded from its public CDN.
+map: DCS tiles over an OpenStreetMap fallback, with airbases, cities, towns,
+roads, railroads, landmarks, TACAN, VOR, NDB, DME, and database layers above.
+The fallback remains visible where dcsmaps has no tile (including uncovered
+low zooms). The **Map labels** checkbox toggles the WMS overlay, which refreshes
+after map movement or zoom. Leaflet is loaded from its public CDN.
 
 ## Unit symbols
 

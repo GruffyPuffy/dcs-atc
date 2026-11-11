@@ -1,9 +1,16 @@
 const DCS_TILES='http://dcsmaps.com/caucasus/{z}/{x}/{y}.png';
+const OSM_TILES='https://tile.openstreetmap.org/{z}/{x}/{y}.png';
 const DCS_WMS='http://dcsmaps.com/cgi-bin/mapserv?map=CAUCASUS_MAPFILE';
 const DCS_LAYERS='Airbases,Cities,Towns,Roads,Railroad,Landmarks,TACAN,VOR,NDB,DME,DB';
 const map=L.map('map',{preferCanvas:true}).setView([42,44],6);
 map.createPane('dcsVectors');map.getPane('dcsVectors').style.zIndex=250;map.getPane('dcsVectors').style.pointerEvents='none';
-L.tileLayer(DCS_TILES,{maxZoom:16,maxNativeZoom:12,attribution:'&copy; <a href="http://dcsmaps.com">dcsmaps.com</a>',tms:true,noWrap:true}).addTo(map);
+// dcsmaps only has terrain tiles within its regional coverage and at a subset
+// of zoom levels. Keep a world basemap underneath so missing regional tiles
+// (especially at low zoom) reveal geographic context instead of the map's
+// dark background. The transparent error tile also prevents broken-image
+// icons from obscuring that fallback.
+L.tileLayer(OSM_TILES,{maxZoom:19,attribution:'&copy; OpenStreetMap contributors'}).addTo(map);
+L.tileLayer(DCS_TILES,{maxZoom:16,maxNativeZoom:12,errorTileUrl:'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=',attribution:'&copy; <a href="http://dcsmaps.com">dcsmaps.com</a>',tms:true,noWrap:true}).addTo(map);
 const aircraftLayer=L.layerGroup().addTo(map), pathLayer=L.layerGroup().addTo(map), refLayer=L.layerGroup().addTo(map);
 let vectorOverlay=null,vectorPending=null,vectorTimer=null;
 function refreshVectors(){
