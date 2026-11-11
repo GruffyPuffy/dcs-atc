@@ -17,6 +17,8 @@
 #
 # Usage:
 #   ./run_server.sh [extra atc_bot.py args...]
+#   ./run_server.sh --stt-server [BASE_URL] [extra atc_bot.py args...]
+#                                                      # starts Speaches if URL omitted
 #   ATC_AIRFIELD=Gudauta ./run_server.sh --debug   # initial airfield + debug
 #
 # The airfield is owned by the state file once a restart has happened, so the
@@ -27,6 +29,39 @@ repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 atc_dir="$repo_dir/atc"
 control_file="$atc_dir/.control"
 start_script="$atc_dir/start_bot.sh"
+stt_server_script="$repo_dir/scripts/stt-server.sh"
+
+# Convenience mode for local trials: start the Speaches container and route
+# this bot process to it. The flag is consumed here, not passed to atc_bot.py.
+start_stt_server=0
+stt_server_url=""
+server_args=()
+while (($#)); do
+  if [[ "$1" == "--stt-server" ]]; then
+    start_stt_server=1
+    shift
+    if (($#)) && [[ "$1" == http://* || "$1" == https://* ]]; then
+      stt_server_url="${1%/}"
+      shift
+    fi
+  else
+    server_args+=("$1")
+    shift
+  fi
+done
+if [[ "$start_stt_server" == "1" ]]; then
+  if [[ -z "$stt_server_url" ]]; then
+    if ! "$stt_server_script" start; then
+      exit 1
+    fi
+    stt_server_url="http://127.0.0.1:18000/v1"
+  elif [[ "$stt_server_url" != */v1 ]]; then
+    stt_server_url="${stt_server_url}/v1"
+  fi
+  export ATC_STT_BACKEND=api
+  export ATC_STT_BASE_URL="$stt_server_url"
+  export ATC_STT_API_MODEL="${ATC_STT_API_MODEL:-Systran/faster-whisper-large-v3}"
+fi
 
 # Viewer settings (all optional; defaults keep it on 127.0.0.1:18443 with TLS).
 viewer_port="${ATC_VIEWER_PORT:-18443}"
@@ -68,7 +103,7 @@ trap stop_viewer EXIT
 # $ATC_AIRFIELD, then the bot's own default (Kutaisi). Once a web restart has
 # happened the state file takes over (see the loop below).
 airfield="${ATC_AIRFIELD:-Kutaisi}"
-args=("$@")
+args=("${server_args[@]}")
 for ((i = 0; i < ${#args[@]}; i++)); do
   if [[ "${args[i]}" == "--airfield" && $((i + 1)) -lt ${#args[@]} ]]; then
     airfield="${args[i + 1]}"
@@ -87,7 +122,7 @@ while true; do
 
   echo "[run_server] starting bot: airfield=$airfield ${debug_args[*]:-}"
   start_viewer
-  "$start_script" "$@" --airfield "$airfield" "${debug_args[@]}"
+  "$start_script" "${server_args[@]}" --airfield "$airfield" "${debug_args[@]}"
   code=$?
 
   if [[ $code -eq 75 ]]; then

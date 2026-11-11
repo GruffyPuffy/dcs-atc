@@ -96,7 +96,10 @@ def test_readback_reminder_waits_for_clearance_audio_and_fires_once(brain):
     assert brain.pop_due_readback_reminders(deadline - 0.001) == []
     assert brain.pop_due_readback_reminders(deadline) == ["Colt 1"]
     assert brain.pop_due_readback_reminders(deadline + 60.0) == []
-    assert "read back the clearance" in brain.readback_reminder("Colt 1")
+    reminder = brain.readback_reminder("Colt 1")
+    assert reminder == "Colt 1, read back the clearance."
+    assert "reminder" not in reminder.lower()
+    assert "when able" not in reminder.lower()
 
 
 def test_any_pilot_speech_cancels_reminder_and_wrong_readback_does_not_rearm(
@@ -467,7 +470,7 @@ def test_ground_runway_info_allows_one_retry_then_continues(brain):
 
     final = brain.handle("Runway 27 in use, QNH 2992, Colt 1",
                          controller=Controller.GROUND)
-    assert "no need to repeat" in final.lower()
+    assert "no further readback needed" in final.lower()
     assert not brain.pilots["Colt 1"].info_issued
 
 
@@ -525,7 +528,7 @@ def test_ground_final_continue_breaks_repeated_wrong_runway_loop(brain):
     second = brain.handle("Runway 25 in use, QNH 2992, Colt 1",
                           controller=Controller.GROUND)
     assert "runway 07 in use" in second.lower()
-    assert "no need to repeat" in second.lower()
+    assert "no further readback needed" in second.lower()
     assert "readback correct" not in second.lower()
     assert not brain.pilots["Colt 1"].info_issued
 
@@ -546,7 +549,7 @@ def test_ground_pending_clearance_survives_final_continue(brain):
                  controller=Controller.GROUND)
     final = brain.handle("Runway 25 in use, QNH 2992, Colt 1",
                          controller=Controller.GROUND)
-    assert "no need to repeat" in final.lower()
+    assert "no further readback needed" in final.lower()
     assert "after departure" in final.lower()
     assert brain.pilots["Colt 1"].phase == Phase.CLEARANCE
 
@@ -863,7 +866,7 @@ def test_readback_retry_limit_then_continue(brain):
     final = brain.handle("After departure turn right West, Colt 1",
                          controller=Controller.GROUND)
     assert "negative" in final.lower()
-    assert "no need to repeat" in final.lower()
+    assert "no further readback needed" in final.lower()
     assert not brain.pilots["Colt 1"].readback_pending
 
     third = brain.handle("After departure turn right West, Colt 1",
@@ -886,7 +889,7 @@ def test_say_again_does_not_use_up_a_readback_retry(brain):
 
     final = brain.handle("After departure turn right West, Colt 1",
                          controller=Controller.GROUND)
-    assert "no need to repeat" in final.lower()
+    assert "no further readback needed" in final.lower()
     assert not brain.pilots["Colt 1"].readback_pending
 
 
@@ -897,7 +900,7 @@ def test_readback_retry_limit_is_configurable(brain):
                  controller=Controller.GROUND)
     reply = brain.handle("After departure turn right West, Colt 1",
                          controller=Controller.GROUND)
-    assert "no need to repeat" in reply.lower()
+    assert "no further readback needed" in reply.lower()
     assert not brain.pilots["Colt 1"].readback_pending
 
 
@@ -1257,7 +1260,7 @@ def test_control_join_readback_uses_one_retry_then_continue(brain, airfield):
 
     final = brain.handle(phrase, track=south,
                          controller=Controller.CONTROL)
-    assert "no need to repeat" in final.lower()
+    assert "no further readback needed" in final.lower()
     assert brain.pilots["Colt 1"].arrival_join_readback_complete
     assert brain.pilots["Colt 1"].arrival_join_readback_fails == 0
 
@@ -4355,7 +4358,7 @@ def test_say_again_after_training_readback_feedback_repeats_task_order(
     final = brain.handle(
         "Proceed to booth 058469, angels 14, Colt 1",
         controller=Controller.STINGRAY)
-    assert "no need to repeat" in final.lower()
+    assert "no further readback needed" in final.lower()
     assert pilot.stingray_training_tasks[-1]["readback_complete"]
     assert not pilot.readback_pending
 

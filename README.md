@@ -12,7 +12,7 @@ follows the Master Arms (MA) community SOP and is deliberately a *coach*:
 - every clearance is spoken with correct phraseology, so you learn by doing;
 - **readbacks are checked** — a wrong or incomplete one gets the expected item
   stated directly ("Negative, altitude 1500 ft or below") with a retry, then
-  "No need to repeat" when the retry limit is reached; you are **never blocked**;
+  "No further readback needed" when the retry limit is reached; you are **never blocked**;
 - it is forgiving: `say again`, `reset` and `cancel` always work, and
   `Trainer, <callsign>, help` gives a state-aware hint;
 - a **live map** shows the picture, and a saved **debrief** (your trail plus
@@ -206,6 +206,8 @@ terminal. Because the map server runs *inside* the bot process it cannot restart
 itself, so run the bot through the supervisor instead of `start_bot.sh`:
 
     ./atc/run_server.sh                     # supervisor (recommended)
+    ./atc/run_server.sh --stt-server        # start Speaches and use API STT
+    ./atc/run_server.sh --stt-server http://127.0.0.1:18000  # use an existing STT server
     ./atc/run_server.sh --debug             # + debrief recording
     ATC_AIRFIELD=Gudauta ./atc/run_server.sh
 

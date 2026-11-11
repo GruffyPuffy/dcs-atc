@@ -130,6 +130,13 @@ you to run the installer above if either is missing. Without a GPU, `atc-up`
 (CPU) is unchanged. Force a device/model with `ATC_STT_DEVICE` / `ATC_STT_MODEL`
 if needed.
 
+For a trial using a separate GPU STT container, run
+`./scripts/dcs.sh atc-up-stt-server`. This starts Speaches on the GPU and the
+bot sends transmissions to it; the bot itself does not load a local Whisper
+model. `./scripts/dcs.sh stt-status` checks the server and `stt-down` stops it
+while retaining its downloaded model. The normal `atc-up-gpu` path remains
+local Whisper inference.
+
 With the bot running, tune your radio to the tower frequency and fly the MA
 flow: request clearance and taxi on Ground, line up and take off on Tower, then
 check in with Control. See the generated kneeboard cards (`kneeboard/`) for the
@@ -154,6 +161,7 @@ viewer* section of the [README](README.md)).
 - `./scripts/dcs.sh health` — read-only summary (containers, bot mode, map, bridge)
 - `./scripts/dcs.sh srs-logs` / `srs-status` — SRS server log and connected clients
 - `./scripts/dcs.sh atc-up` / `atc-down` / `atc-logs` / `atc-update` — ATC bot
+- `./scripts/dcs.sh atc-up-stt-server` / `stt-status` / `stt-down` — bot with separate Speaches STT
 - `./scripts/dcs.sh debriefs` / `debrief <name|all>` — list/download debriefs
 - `python3 scripts/state_client.py status` — live mission picture (groups,
   airbases, positions) used by the ATC logic

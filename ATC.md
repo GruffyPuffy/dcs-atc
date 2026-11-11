@@ -213,7 +213,7 @@ channel.
 | "150 to join via Entry East, Colt 1" | **readback** | "Colt 1, Control, descend and maintain 5000 feet." (far out) / "…descend to 1500 feet." (within 15 NM of the entry) — the descent is **stepped by distance** |
 | "Descend to 1500 feet, Colt 1" | **readback** | *(silent)* — Control pushes Tower when the inbound flight enters the assigned entry's lead-in zone while closing on it. Entry arc/CTR are late fallbacks. |
 | "Tower, Colt 1, Entry East" | **entry** | "Colt 1, Tower, report runway in sight." |
-| "Tower, Colt 1, runway in sight" | **runway in sight** | "2-ship Colt 1, Tower, wind calm, cleared for left overhead break runway 25." (the "2-ship" prefix appears once a formation size has been heard) | |
+| "Tower, Colt 1, runway in sight" | **runway in sight** | "2-ship Colt 1, Tower, cleared for left overhead break runway 25." (the "2-ship" prefix appears once a formation size has been heard) | |
 | "cleared for left overhead break runway 25, Colt 1" | **readback** | *(silent)* |
 | "Colt 1, in the break" | **in the break** | *(silent)* (optional) |
 | "Colt 1, turning final" | **turning final** | *(silent)* (optional) |
@@ -274,7 +274,7 @@ ATC:   (silent; the readback is correct)
 ```text
 ATC:   Adder 1-1, Ground, after departure turn right Exit West, 1500 ft or below.
 Pilot: (no reply for about 20 seconds)
-ATC:   Adder 1-1, reminder, read back the clearance when able.
+ATC:   Adder 1-1, read back the clearance.
 Pilot: After departure turn right Exit West, 1500 feet or below, Adder 1-1.
 ATC:   (silent; the readback is correct)
 ```
@@ -296,7 +296,7 @@ ATC:   Adder 1-1, Ground, after departure turn right Exit West, 1500 ft or below
 Pilot: After departure turn right Exit West, Adder 1-1.
 ATC:   Adder 1-1, Ground, negative, altitude 1500 ft or below.
 Pilot: After departure turn right Exit West, Adder 1-1.
-ATC:   Adder 1-1, Ground, negative, altitude 1500 ft or below. No need to repeat.
+ATC:   Adder 1-1, Ground, negative, altitude 1500 ft or below. No further readback needed.
 ```
 
 **One exception:** if an earlier attempt at that clearance was incomplete, the
@@ -1313,7 +1313,7 @@ in, give a bullseye picture, and later request RTB.)
 | 2 | Control | "150 to join via Entry East, Colt 1." | "Colt 1, Control, descend to 1500 feet." |
 | 3 | Control | "Descend to 1500 feet, Colt 1." | *(silent)* — then, on entering the assigned entry's lead-in zone while inbound, "Colt 1, Control, contact Tower on channel 7." |
 | 4 | Tower | "Tower, Colt 1, Entry North." | "Colt 1, Tower, report runway in sight." |
-| 5 | Tower | "Tower, Colt 1, runway in sight." | "2-ship Colt 1, Tower, wind calm, cleared for left overhead break runway 25." |
+| 5 | Tower | "Tower, Colt 1, runway in sight." | "2-ship Colt 1, Tower, cleared for left overhead break runway 25." |
 | 6 | Tower | "Tower, Colt 1, on final." | "Colt 1, Tower, wind calm, runway 25, cleared to land." |
 | 7 | Tower | *(touch down — no call needed)* | "Colt 1, Tower, contact Ground on channel 6." (Tower pushes you to Ground **unprompted** once you are rolling out) |
 | 8 | Ground | "Ground, Colt 1, rolling off runway 25, requesting taxi to parking." | "Colt 1, Ground, cleared taxi to Ramp North via Alpha November." |
@@ -1387,7 +1387,7 @@ Every reply here is the bot's actual output. Kneeboard card:
 | 6 | Control | "150 to join via Entry East, Colt 1." | "Colt 1, Control, descend to 1500 feet." |
 | 7 | Control | "Descend to 1500 feet, Colt 1." | *(silent)* — then, in the assigned entry's lead-in zone while inbound, "Colt 1, Control, contact Tower on channel 7." |
 | 8 | Tower | "Tower, Colt 1, Entry East." | "Colt 1, Tower, report runway in sight." |
-| 9 | Tower | "Colt 1, runway in sight." | "Colt 1, Tower, wind calm, cleared for left overhead break runway 25." |
+| 9 | Tower | "Colt 1, runway in sight." | "Colt 1, Tower, cleared for left overhead break runway 25." |
 | 10 | Tower | "Colt 1, on final." | "Colt 1, Tower, wind calm, runway 25, cleared to land." |
 | 11 | Tower | *(touch down — no call needed)* | "Colt 1, Tower, contact Ground on channel 6." *(unprompted handoff once rolling out; a "runway vacated" call also works)* |
 

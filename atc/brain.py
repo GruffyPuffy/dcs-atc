@@ -2176,7 +2176,7 @@ class AtcBrain:
         """
         low = reply.lower().rstrip()
         if ("say again" in low or "readback incomplete" in low
-                or low.endswith("no need to repeat.")):
+                or low.endswith("no further readback needed.")):
             return True
         # Readback corrections now end with the expected value, without a
         # separate "read back again" prompt. Keep them meta so "say again"
