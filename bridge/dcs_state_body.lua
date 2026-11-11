@@ -9,7 +9,7 @@
 -- restarting DCS. The hook returns an explicit error if this file is missing
 -- or invalid. Deploy with: ./scripts/dcs.sh bridge
 
-local BRIDGE_BODY_VERSION = '2026-11-11.1'
+local BRIDGE_BODY_VERSION = '2026-11-11.2'
 
 local function unit_json(u)
     local p = u:getPosition()
@@ -136,6 +136,10 @@ local function callsigns()
     scan('red', env.mission.coalition.red)
     return { callsigns = out }
 end
+
+-- DCS automatically loads every .lua file in Scripts/Hooks. This file is also
+-- read as source by dcs_state_hook.lua, so do nothing during standalone loading.
+if type(req) ~= 'table' then return end
 
 local op = req.op
 if op == 'status' then

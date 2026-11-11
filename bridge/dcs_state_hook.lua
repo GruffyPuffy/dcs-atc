@@ -60,6 +60,32 @@ local function diag(id)
     return '{"v":1,"id":"' .. id .. '","ok":true,"result":{' .. table.concat(parts, ',') .. '}}'
 end
 
+-- Convert a validated request back to a Lua literal for a_do_script. Keep this
+-- separate from the mission body: the body is loaded from disk on every call.
+local function literal(value, depth, budget)
+    budget.count = budget.count + 1
+    if budget.count > 512 or depth > 12 then error('REQUEST_COMPLEXITY') end
+    local kind = type(value)
+    if kind == 'string' then
+        if #value > 2048 then error('STRING_TOO_LONG') end
+        return string.format('%q', value)
+    end
+    if kind == 'number' then
+        if value ~= value or value == math.huge or value == -math.huge then error('INVALID_NUMBER') end
+        return string.format('%.17g', value)
+    end
+    if kind == 'boolean' then return tostring(value) end
+    if kind ~= 'table' then error('INVALID_VALUE') end
+    local parts = {}
+    for key, item in pairs(value) do
+        if (type(key) ~= 'string' and type(key) ~= 'number')
+            or (type(key) == 'string' and #key > 64) then error('INVALID_KEY') end
+        parts[#parts + 1] = '[' .. literal(key, depth + 1, budget) .. ']='
+            .. literal(item, depth + 1, budget)
+    end
+    return '{' .. table.concat(parts, ',') .. '}'
+end
+
 -- Mission-side logic is maintained only in dcs_state_body.lua. The file is
 -- re-read on every request so edits take effect without restarting DCS.
 -- Missing, unreadable, or invalid files fail closed; never run a stale copy.
