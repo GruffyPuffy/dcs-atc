@@ -232,18 +232,6 @@ deploy_state_bridge() {
 deploy_bridge_from() {
   local source_dir="$1"
   BRIDGE_HOOK_CHANGED=0
-  python3 - "$source_dir/dcs_state_hook.lua" "$source_dir/dcs_state_body.lua" <<'PY'
-from pathlib import Path
-import sys
-
-hook = Path(sys.argv[1]).read_text()
-body = Path(sys.argv[2]).read_text().strip()
-start_marker = "local MISSION_BODY = [==["
-start = hook.index(start_marker) + len(start_marker)
-end = hook.index("]==]", start)
-if hook[start:end].strip() != body:
-    raise SystemExit("DCS bridge hook fallback does not match dcs_state_body.lua")
-PY
   deploy_hook "$source_dir/dcs_state_hook.lua" "dcs_state_hook.lua" restart
   deploy_hook "$source_dir/dcs_state_body.lua" "dcs_state_body.lua" hot
 }
