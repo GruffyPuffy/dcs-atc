@@ -1539,6 +1539,26 @@ def test_ctr_entry_after_inbound_is_silent(airfield, brain):
     assert warning is None  # already cleared inbound
 
 
+def test_departure_reentry_suppression_does_not_follow_pilot_into_arrival(
+        airfield, brain):
+    from ctr import CtrEvent
+
+    pilot = brain._pilot("Colt 1")
+    pilot.departure_handoff_announced = True
+    pilot.phase = Phase.AIRBORNE
+    track = _scenario(airfield, brain).at_gate("North")._track()
+
+    # The departure has climbed above the CTR ceiling and then descends through
+    # its horizontal footprint; do not report this vertical re-entry.
+    assert brain.on_ctr_event("Colt 1", CtrEvent.ENTERED, track) is None
+
+    # The same pilot may later return without an inbound clearance. The
+    # departure handoff flag is still set, but it must not hide that warning.
+    pilot.phase = Phase.INBOUND
+    warning = brain.on_ctr_event("Colt 1", CtrEvent.ENTERED, track)
+    assert warning is not None and "without clearance" in warning.lower()
+
+
 # ---------- Wind-based runway switch mid-flight ----------
 
 def test_runway_switch_changes_taxi_route(airfield, brain):
@@ -1580,7 +1600,15 @@ def test_altitude_bust_warns_under_tower_control(airfield, brain):
     sc.say("Line up and wait 25, Colt 1", Controller.TOWER)  # -> Departure
     sc.set_alt(airfield.ctr.ceiling_ft_msl + 500)
     call = brain.check_altitude("Colt 1", sc._track())
-    assert call is not None and "control zone" in call.lower()
+    assert call is not None and "above 1500 ft" in call.lower()
+    assert "reduce altitude immediately" in call.lower()
+
+
+def test_altitude_bust_exempts_stingray(airfield, brain):
+    sc = _scenario(airfield, brain).at_threshold("25")
+    brain._pilot("Colt 1").phase = Phase.STINGRAY
+    sc.set_alt(airfield.ctr.ceiling_ft_msl + 500)
+    assert brain.check_altitude("Colt 1", sc._track()) is None
 
 
 def test_altitude_bust_fires_once(airfield, brain):

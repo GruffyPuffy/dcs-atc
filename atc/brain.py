@@ -88,6 +88,7 @@ RADIO_ANSWER_KEYS = frozenset({
     "stingray_bullseye_challenge", "stingray_marking_unclear",
     "stingray_angels_rounding",
     "stingray_angels_and_position",
+    "stingray_training_cancelled", "stingray_training_no_active",
     "control_picture_challenge", "control_picture_unclear",
     "position_reference_prompt",
 })
@@ -211,6 +212,11 @@ _RTB_INTENT_RE = re.compile(
     rf"(?:to base|home)|"
     rf"request(?:ing)?\s+(?:to\s+)?(?:{_RTB_STT_VARIANT}|return)|"
     rf"recover(?:ing|y))\b", re.IGNORECASE)
+_STINGRAY_TRAINING_CANCEL_RE = re.compile(
+    r"\b(?:abort|end|stop|cancel|skip)\s+"
+    r"(?:(?:the|this|current)\s+)?"
+    r"(?:(?:training)\s+)?(?:task(?:ing)?|training)\b",
+    re.IGNORECASE)
 
 # The words a figure may be built from, longest first so "twenty" is preferred
 # over a hypothetical "two" prefix match inside it.
@@ -287,6 +293,10 @@ def _normalize_picture_transcription(text: str) -> str:
     # Whisper sometimes hears "marking bulls" as "marking balls". In a
     # marking/BRA report, that is the bullseye reference, not a named point.
     text = re.sub(r"\b(marking\s+)balls?\b", r"\1bulls", text,
+                  flags=re.IGNORECASE)
+    # Whisper can render "marking bulls" as "marking both sides". In this
+    # constrained marking/BRA phrase, accept it as the Bullseye reference.
+    text = re.sub(r"\bmarking\s+both\s+sides\b", "marking bulls", text,
                   flags=re.IGNORECASE)
     # Whisper sometimes inserts a comma after "marking" and between each
     # spoken digit: "marking, Kutaisi, one, three, five, four, eight miles".
@@ -2335,6 +2345,9 @@ class AtcBrain:
             return self._reset(callsign, pilot, controller)
         if re.search(r"\bnever\s*mind\b", low):
             return ""
+        if (controller == Controller.STINGRAY
+                and _STINGRAY_TRAINING_CANCEL_RE.search(low)):
+            return self._cancel_stingray_training_task(callsign, pilot)
         if re.search(r"\b(cancel|cancelling|canceling|disregard|abort|aborting|"
                      r"scratch that|scratch|belay|cancel clearance)\b", low):
             return self._cancel(callsign, pilot, controller)
@@ -3887,6 +3900,12 @@ class AtcBrain:
                 return ""
             return self._say("stingray_rtb_copy", callsign)
 
+        # A pilot may drop the optional task and continue the tactical sortie.
+        # Keep this ahead of readback handling so an order containing "task"
+        # cannot swallow an explicit cancellation.
+        if _STINGRAY_TRAINING_CANCEL_RE.search(low):
+            return self._cancel_stingray_training_task(callsign, pilot)
+
         # A task order is an instruction to be read back. Use the same
         # expected-content checker as other clearances, with the task's exact
         # Bullseye and altitude values. The narrow STT repair handles the
@@ -4653,6 +4672,7 @@ class AtcBrain:
             "completed_at": None,
             "abandoned": False,
             "inside_samples": 0,
+            "altitude_cue_sent": False,
             "readback_complete": False,
             "readback_fails": 0,
             "bearing": self._format_cockpit_bearing(bearing),
@@ -4721,6 +4741,17 @@ class AtcBrain:
             task["abandoned"] = True
             task["abandoned_at"] = time.time()
 
+    def _cancel_stingray_training_task(self, callsign: str,
+                                       pilot: PilotState) -> str:
+        """Cancel the active optional task without leaving the Stingray leg."""
+        active = next((task for task in reversed(
+            pilot.stingray_training_tasks)
+            if not task["completed"] and not task["abandoned"]), None)
+        if active is None:
+            return self._say("stingray_training_no_active", callsign)
+        self._abandon_stingray_training_task(pilot)
+        return self._say("stingray_training_cancelled", callsign)
+
     def check_stingray_training_task(self, callsign: str,
                                     track: AircraftTrack | None
                                     ) -> str | None:
@@ -4736,11 +4767,20 @@ class AtcBrain:
             return None
         _, distance = bearing_distance(
             task["target_lat"], task["target_lon"], track.lat, track.lon)
-        inside = (distance <= task["radius_nm"]
-                  and abs(track.alt_ft - task["angels"] * 1000)
-                  <= task["altitude_tolerance_ft"])
+        horizontal_inside = distance <= task["radius_nm"]
+        target_altitude = task["angels"] * 1000
+        altitude_error = track.alt_ft - target_altitude
+        inside = (horizontal_inside
+                  and abs(altitude_error) <= task["altitude_tolerance_ft"])
         if not inside:
             task["inside_samples"] = 0
+            if (horizontal_inside
+                    and not task.get("altitude_cue_sent", False)):
+                task["altitude_cue_sent"] = True
+                return self._say(
+                    "stingray_training_altitude", callsign,
+                    direction="above" if altitude_error > 0 else "below",
+                    angels=task["angels"])
             return None
         task["inside_samples"] += 1
         if task["inside_samples"] < STINGRAY_TRAINING_INSIDE_SAMPLES:
@@ -5045,7 +5085,11 @@ class AtcBrain:
         """React to a CTR boundary crossing. Returns a warning to broadcast,
         or None if no action is needed."""
         pilot = self._pilot(callsign)
-        if event == CtrEvent.ENTERED and not pilot.cleared_inbound:
+        if (event == CtrEvent.ENTERED and not pilot.cleared_inbound
+                and not pilot.altitude_warned
+                and not (pilot.departure_handoff_announced
+                         and pilot.phase == Phase.AIRBORNE)
+                and pilot.phase != Phase.STINGRAY):
             agency = self._agency(self.working_controller(callsign))
             return self._say("ctr_warning", callsign, agency=agency)
         return None
@@ -5230,12 +5274,15 @@ class AtcBrain:
             pilot.altitude_warned = False
             return None
         # Only warn pilots still under Tower/Ground control (not handed off).
-        if pilot.phase in (Phase.AIRBORNE, Phase.INBOUND, Phase.LANDING):
+        if (pilot.control_checkin_received
+                or pilot.phase in (Phase.STINGRAY, Phase.INBOUND,
+                                   Phase.LANDING)):
             return None
         if pilot.altitude_warned:
             return None
         pilot.altitude_warned = True
-        return self._say("altitude_bust", callsign)
+        return self._say("altitude_bust", callsign,
+                         altitude=round(ctr.ceiling_ft_agl))
 
     def check_incursion(self, callsign: str, on_runway: bool) -> str | None:
         """Warn a pilot who is on the runway without a takeoff/landing clearance.

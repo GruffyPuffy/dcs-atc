@@ -49,7 +49,7 @@
         "inner_range_nm": 20.0,
         "outer_range_nm": 40.0,
         "target_radius_nm": 2.0,
-        "altitude_tolerance_ft": 500.0
+        "altitude_tolerance_ft": 1000.0
       },
       "elevation_ft": 148,
       "tower_pos": [

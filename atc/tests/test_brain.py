@@ -4928,6 +4928,83 @@ def test_marking_bull_means_the_bullseye(brain):
     assert parse_marking_call(folded) == ("bullseye", 77.0, 440.0)
 
 
+def test_stingray_accepts_both_sides_as_bulls(brain, airfield):
+    from scenario import _bearing_range_point
+
+    brain.cockpit_bearing_offset_deg = 0
+    bull_lat, bull_lon = 42.05, 42.40
+    brain.set_bullseye(bull_lat, bull_lon)
+    lat, lon = _bearing_range_point(bull_lat, bull_lon, 63, 45)
+    track = _track(airfield, lat, lon, alt_ft=12000)
+    _stingray(brain)
+
+    reply = brain.handle(
+        "Stingray, Colt 1, marking both sides, 63, 445, at angels 12, "
+        "as flagged", controller=Controller.STINGRAY, track=track)
+    assert "radar contact" in reply.lower(), reply
+
+
+def test_stingray_training_task_cues_once_and_completes_within_one_angels(
+        brain, airfield, monkeypatch):
+    from airspace import _destination
+
+    pilot = _stingray(brain)
+    pilot.stingray_radar_contact_confirmed = True
+    pilot.departure_climb_angels = 12
+    bull_lat, bull_lon = brain.bullseye
+    target = _destination(bull_lat, bull_lon, 90, 30)
+    monkeypatch.setattr(airfield, "random_stingray_training_target",
+                        lambda: target)
+    task_track = _track(airfield, bull_lat, bull_lon, alt_ft=12000)
+    order = brain._request_stingray_training_task(
+        "Colt 1", pilot, task_track)
+    task = pilot.stingray_training_tasks[-1]
+    assert task["altitude_tolerance_ft"] == 1000
+    assert "report on station" not in order.lower()
+
+    high_track = _track(airfield, *target, alt_ft=13001)
+    cue = brain.check_stingray_training_task("Colt 1", high_track)
+    assert cue and "above angels 12" in cue.lower()
+    assert brain.check_stingray_training_task("Colt 1", high_track) is None
+    assert not task["completed"]
+
+    # The upper edge of the configured ±1,000 ft tolerance is accepted.
+    on_altitude_track = _track(airfield, *target, alt_ft=13000)
+    complete = None
+    for _ in range(20):
+        complete = brain.check_stingray_training_task(
+            "Colt 1", on_altitude_track)
+        if complete:
+            break
+    assert complete and "good work" in complete.lower()
+    assert task["completed"]
+
+
+def test_stingray_training_cancel_commands_and_no_active_reply(brain):
+    pilot = _stingray(brain)
+    commands = (
+        "abort training tasking", "end task", "stop training",
+        "cancel tasking", "skip the task",
+    )
+    for command in commands:
+        pilot.stingray_training_tasks = [{
+            "completed": False, "abandoned": False,
+        }]
+        reply = brain.handle(
+            f"Stingray, Colt 1, {command}",
+            controller=Controller.STINGRAY)
+        assert "stingray" in reply.lower()
+        assert "training task cancelled" in reply.lower()
+        assert pilot.stingray_training_tasks[-1]["abandoned"]
+        assert pilot.phase == Phase.STINGRAY
+
+    pilot.stingray_training_tasks.clear()
+    reply = brain.handle(
+        "Stingray, Colt 1, cancel training tasking",
+        controller=Controller.STINGRAY)
+    assert "negative, no training tasking active" in reply.lower()
+
+
 def test_marking_bulls_stt_four_is_repaired_as_for(brain):
     from scenario import _bearing_range_point
 

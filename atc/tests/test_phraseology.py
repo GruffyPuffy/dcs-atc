@@ -34,6 +34,9 @@ REQUIRED_TEMPLATES = {
     "contact_stingray", "contact_agency", "agency_ack",
     "stingray_ack", "stingray_radar_contact", "stingray_rtb_copy",
     "stingray_contact_control", "stingray_bullseye_challenge",
+    "stingray_training_task", "stingray_training_active",
+    "stingray_training_complete", "stingray_training_altitude",
+    "stingray_training_cancelled", "stingray_training_no_active",
     "contact_tower_from_control",
     "go_around", "go_around_continue_circuit", "ctr_warning", "roger", "say_again",
     "say_again_no_callsign",
@@ -91,6 +94,7 @@ def test_every_template_renders_with_common_fields():
                   agency="Kutaisi Tower", bearing="090", distance="12",
                   airfield="Kutaisi", vector_runway="25", parking="Ramp South",
                   holding="Holding C", stingray="Stingray", range="40",
+                  direction="above",
                   target="Control", target_channel="8", bullseye="bullseye 065 for 40",
                   point="bullseye", actual_angels="15", capability="PICTURE")
     common["speed"] = "300"

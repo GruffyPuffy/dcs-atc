@@ -89,7 +89,7 @@
     "go_around_continue_circuit": "{callsign}, {tower}, continue circuit, report on final.",
     "already_cleared_landing": "{callsign}, you are already cleared to land runway {landing_runway}.",
     "touch_and_go_approved": "{callsign}, {tower}, cleared touch and go runway {runway}, {downwind}-hand circuit.",
-    "altitude_bust": "{callsign}, {tower}, you are leaving the control zone, contact {control} on channel {channel}.",
+    "altitude_bust": "{callsign}, {tower}, you are above {altitude} ft, reduce altitude immediately.",
     "runway_incursion": "{callsign}, {tower}, you are on the runway without clearance, vacate immediately.",
     "ctr_warning": "{callsign}, {agency}, you are entering controlled airspace without clearance. Squawk {squawk} and state intentions.",
     "roger": "{callsign}, {agency}, roger.",
@@ -139,14 +139,17 @@
     "authentication_not_implemented": "{callsign}, {agency}, authentication is not implemented in this trainer. Continue as fragged.",
     "capability_not_implemented": "{callsign}, {agency}, {capability} is not implemented in this trainer. Continue as fragged.",
     "emergency_not_implemented": "{callsign}, {agency}, copy your emergency. Emergency handling is not implemented in this trainer. Continue as fragged.",
-    "help_stingray": "{callsign}, {help_prefix}: you are with Stingray. Give a bullseye picture — you are {bullseye} — then \"as fragged\". After radar contact, optionally request training tasking. To head home, call \"bugout\" (or bingo / Miller Time / requesting RTB). Stingray will push Control between 25 and 80 miles from Kutaisi; if you have not heard the push by 25 miles, request Control on channel {channel}.",
+    "help_stingray": "{callsign}, {help_prefix}: you are with Stingray. Give a bullseye picture — you are {bullseye} — then \"as fragged\". After radar contact, optionally request training tasking. To cancel it, say \"cancel training tasking\" (or abort / end / stop / skip task). To head home, call \"bugout\" (or bingo / Miller Time / requesting RTB). Stingray will push Control between 25 and 80 miles from Kutaisi; if you have not heard the push by 25 miles, request Control on channel {channel}.",
     "agency_ack": "{callsign}, {agency}.",
     "contact_agency": "{callsign}, {agency}, contact {target} on channel {target_channel}.",
-    "help_stingray_nobullseye": "{callsign}, {help_prefix}: you are with Stingray. Give a bullseye picture (\"bullseye 065 for 40, Angels {angels}, as fragged\"). After radar contact, optionally request training tasking. To head home, call \"bugout\" (or bingo / Miller Time / requesting RTB). Stingray will push Control between 25 and 80 miles from Kutaisi; if you have not heard the push by 25 miles, request Control on channel {channel}.",
+    "help_stingray_nobullseye": "{callsign}, {help_prefix}: you are with Stingray. Give a bullseye picture (\"bullseye 065 for 40, Angels {angels}, as fragged\"). After radar contact, optionally request training tasking. To cancel it, say \"cancel training tasking\" (or abort / end / stop / skip task). To head home, call \"bugout\" (or bingo / Miller Time / requesting RTB). Stingray will push Control between 25 and 80 miles from Kutaisi; if you have not heard the push by 25 miles, request Control on channel {channel}.",
     "stingray_training_not_ready": "{callsign}, {stingray}, training tasking is available after radar contact. State your Bullseye position first.",
     "stingray_training_unavailable": "{callsign}, {stingray}, unable training tasking; training area or Bullseye is unavailable.",
     "stingray_training_active": "{callsign}, {stingray}, training task already assigned: proceed to Bulls {bearing} for {range}, Angels {angels}.",
-    "stingray_training_task": "{callsign}, {stingray}, training task: proceed to Bulls {bearing} for {range}, Angels {angels}. Report on station.",
-    "stingray_training_complete": "{callsign}, {stingray}, task complete. Continue free flight, request another task, or report RTB when ready."
+    "stingray_training_task": "{callsign}, {stingray}, training task: proceed to Bulls {bearing} for {range}, Angels {angels}.",
+    "stingray_training_complete": "{callsign}, {stingray}, good work, task complete. Continue free flight, request another task, or report RTB when ready.",
+    "stingray_training_altitude": "{callsign}, {stingray}, you are in the task area, {direction} Angels {angels}.",
+    "stingray_training_cancelled": "{callsign}, {stingray}, training task cancelled. Continue free flight, request new tasking, or RTB when ready.",
+    "stingray_training_no_active": "{callsign}, {stingray}, negative, no training tasking active."
   }
 }
