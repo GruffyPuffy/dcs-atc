@@ -408,10 +408,14 @@ PAGES = [
                 ("AID", "Also understood: request tasking; request a "
                        "training task; request another task; request new task."),
                 ("AWACS", "Adder11, Stingray, training task: proceed to "
-                         "Bulls [bearing] for [range], Angels [assigned]. "
-                         "Report on station."),
+                         "Bulls [bearing] for [range], Angels [assigned]."),
+                ("P", "Proceed to Bulls [bearing] for [range], Angels "
+                     "[assigned], Adder11."),
+                ("AWACS", "Adder11, Stingray, readback correct."),
+                ("AID", "Wrong readback? Stingray says: negative, Angels "
+                       "[assigned]. Correct it, then expect readback correct."),
                 ("AID", "Task completes after 3 consecutive samples (about "
-                       "2 seconds apart) inside the 2 NM circle and ±500 ft "
+                       "2 seconds apart) inside the 2 NM circle and ±1000 ft "
                        "altitude band. Then free fly, request another task, "
                        "or RTB."),
             ]),

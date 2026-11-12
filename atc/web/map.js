@@ -644,6 +644,7 @@ function drawBullseyeCalls(aircraft, af) {
       // (for example, "proceed to Bulls 131 for 24") but are instructions,
       // not a marking call.
       if (c.kind !== 'rx') continue;
+      if (/\bproceed\s+to\b/i.test(c.text || '')) continue;
       const call = parsePictureCall(c.text, af, c.lat, c.lon);
       if (!call) continue;
       const bearings = [call.bearing];

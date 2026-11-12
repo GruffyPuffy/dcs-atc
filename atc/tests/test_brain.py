@@ -4323,8 +4323,15 @@ def test_stingray_training_task_accepts_logged_readback(brain, airfield,
     # Observed session STT fused "Bulls 058 for 69" into "booth 058469".
     reply = brain.handle("Proceed to booth 058469, angels 15, Colt 1",
                          controller=Controller.STINGRAY)
-    assert reply == ""
+    assert "readback correct" in reply.lower()
     assert task["readback_complete"]
+
+    # A duplicate transcript with the task figures must remain a task
+    # readback, not be challenged as a live Bullseye position report.
+    duplicate = brain.handle(
+        "Proceed to Bulls 058, 469, Angels 15, Colt 1",
+        controller=Controller.STINGRAY)
+    assert duplicate == ""
 
 
 def test_say_again_after_training_readback_feedback_repeats_task_order(

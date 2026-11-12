@@ -3914,9 +3914,19 @@ class AtcBrain:
             pilot.stingray_training_tasks)
             if not task["completed"] and not task["abandoned"]), None)
         if (active_task is not None
-                and not active_task.get("readback_complete", False)
-                and re.search(r"\b(proceed|bulls?|bull'?s?eye|booth|angels)\b",
+                and re.search(r"\bproceed\s+to\s+(?:bulls?|bull'?s?eye|booth)\b",
                               low)):
+            # STT/debrief can duplicate a task readback after it has already
+            # been accepted. Keep that instruction-shaped repeat out of the
+            # picture-call verifier, which would otherwise challenge it as an
+            # incorrect live Bullseye report.
+            if active_task.get("readback_complete", False):
+                return ""
+            return self._stingray_training_readback(
+                callsign, pilot, active_task, low)
+        if (active_task is not None
+                and not active_task.get("readback_complete", False)
+                and re.search(r"\b(bulls?|bull'?s?eye|booth|angels)\b", low)):
             return self._stingray_training_readback(
                 callsign, pilot, active_task, low)
 
@@ -4714,13 +4724,10 @@ class AtcBrain:
         item = self._readback_item(normalized, clearance)
         if item is None:
             pilot.readback_pending = False
-            corrected = task.get("readback_fails", 0) > 0
             task["readback_fails"] = 0
             task["readback_complete"] = True
-            if corrected:
-                return self._say("readback_correct", callsign,
-                                 agency=self.stingray_short)
-            return ""
+            return self._say("readback_correct", callsign,
+                             agency=self.stingray_short)
         task["readback_fails"] = task.get("readback_fails", 0) + 1
         exhausted = task["readback_fails"] > self.readback_retries
         reply = self._readback_failure_reply(

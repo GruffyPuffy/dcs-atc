@@ -810,6 +810,7 @@ def _assert_picture_overlay_review_contract(js):
     # ATC tasking can also say "Bulls <bearing> for <range>"; only a pilot
     # transmission (rx) is eligible for the marking-call overlay.
     assert b"if (c.kind !== 'rx') continue;" in draw_calls
+    assert b"proceed\\s+to" in draw_calls
     assert b".setLatLng(" not in draw_calls  # redraw never moves an open popup
     assert b".setLatLng(event.latlng)" in js
     assert b"popup.on('remove'" in js
