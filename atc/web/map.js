@@ -639,6 +639,11 @@ function drawBullseyeCalls(aircraft, af) {
   bullseyeLayer.clearLayers();
   for (const ac of aircraft) {
     for (const c of (ac.comms || [])) {
+      // Only plot the pilot's own picture report. Stingray tasking and other
+      // ATC replies can contain the same "Bulls <bearing> for <range>" shape
+      // (for example, "proceed to Bulls 131 for 24") but are instructions,
+      // not a marking call.
+      if (c.kind !== 'rx') continue;
       const call = parsePictureCall(c.text, af, c.lat, c.lon);
       if (!call) continue;
       const bearings = [call.bearing];

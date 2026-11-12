@@ -807,6 +807,9 @@ def _assert_picture_overlay_review_contract(js):
     draw_calls = js.split(b"function drawBullseyeCalls", 1)[1].split(
         b"function bindBullseyePopup", 1)[0]
     assert b"bullseyeLayer.clearLayers()" in draw_calls  # each poll redraws
+    # ATC tasking can also say "Bulls <bearing> for <range>"; only a pilot
+    # transmission (rx) is eligible for the marking-call overlay.
+    assert b"if (c.kind !== 'rx') continue;" in draw_calls
     assert b".setLatLng(" not in draw_calls  # redraw never moves an open popup
     assert b".setLatLng(event.latlng)" in js
     assert b"popup.on('remove'" in js
