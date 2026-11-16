@@ -398,6 +398,21 @@ def _fold_spoken_figures(text: str) -> str:
     return _FIGURE_CONTEXT_RE.sub(merge, text)
 
 
+def _normalize_gate_transcription(text: str) -> str:
+    """Repair two observed STT variants for named gate prefixes.
+
+    Keep these tied to a cardinal direction and the relevant gate phrase so
+    ordinary calls containing letters/numbers are not rewritten.
+    """
+    text = re.sub(
+        r"\b(join\s+(?:via|the)\s+)n\s*(?:3|three)\s+"
+        r"(east|west|north|south)\b",
+        r"\1entry \2", text, flags=re.IGNORECASE)
+    return re.sub(
+        r"\b(?:x\s+it|xit)\s+(east|west|north|south)\b",
+        r"exit \1", text, flags=re.IGNORECASE)
+
+
 # A bullseye or marking call's figures, folded as one unit. The bearing follows
 # the point name ("marking Kutaisi two zero zero") or the keyword itself
 # ("bullseye zero six five"); the range follows "for"/"at" — or just a comma, as
@@ -2099,6 +2114,7 @@ class AtcBrain:
         low = _normalize_picture_transcription(low)
         low = _fold_spoken_figures(low)
         low = _fold_bullseye_figures(low)
+        low = _normalize_gate_transcription(low)
         # The position-reference prompt applies to the next transmission only.
         # A clear position/BRA report or an unrelated call starts a fresh turn.
         if (pilot.position_reference_prompt_pending

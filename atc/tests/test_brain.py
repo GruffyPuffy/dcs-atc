@@ -748,6 +748,17 @@ def test_ground_clearance_readback_without_exit_word(brain):
     assert reply == ""
 
 
+def test_ground_clearance_readback_accepts_stt_x_it_exit(brain):
+    clearance = brain.handle("Ground, Colt 1, ready to copy clearance",
+                             controller=Controller.GROUND)
+    gate = brain.pilots["Colt 1"].exit_gate
+    assert gate
+    reply = brain.handle(
+        f"After departure, turn right X IT {gate}, 1500 ft or below, Colt 1",
+        controller=Controller.GROUND)
+    assert "negative" not in reply.lower()
+
+
 def test_ground_clearance_readback_correct(brain):
     brain.handle("Ground, Colt 1, ready to copy clearance",
                  controller=Controller.GROUND)
@@ -1212,6 +1223,28 @@ def test_control_join_readback_descends(brain):
                          controller=Controller.CONTROL)
     assert "descend to 1500 feet" in reply
     assert brain.pilots["Colt 1"].descend_issued
+
+
+def test_control_join_readback_accepts_stt_n3_for_entry(brain, airfield):
+    _, heading = _start_control_join_for_readback(brain, airfield)
+    reply = brain.handle(
+        f"{heading:03d}, join via N3 East, Colt 1",
+        controller=Controller.CONTROL)
+    assert "negative" not in reply.lower()
+    assert "taxi route" not in reply.lower()
+    assert brain.pilots["Colt 1"].arrival_join_readback_complete
+
+
+def test_gate_stt_aliases_are_contextual_and_readback_safe(brain):
+    from brain import _normalize_gate_transcription
+
+    assert _normalize_gate_transcription(
+        "306, join via N3 East, Colt one") == \
+        "306, join via entry East, Colt one"
+    assert _normalize_gate_transcription(
+        "After departure, turn right X IT East, 1500 feet or below") == \
+        "After departure, turn right exit East, 1500 feet or below"
+    assert _normalize_gate_transcription("N3 East traffic") == "N3 East traffic"
 
 
 def _start_control_join_for_readback(brain, airfield):
