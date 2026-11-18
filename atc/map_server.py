@@ -52,11 +52,10 @@ AI_RADIUS_NM = 150.0
 # How many chatter-log entries to keep for the map's log drawer.
 CHATTER_LIMIT = 200
 
-# Flight-path trails. A full flight (inbound call -> parked) can run 15-30 min,
-# and this is a *debug* tool, so keep a very long history: at the ~2 s poll,
-# 3600 points is ~2 hours. Nothing is time-expired — the trail stays until the
-# aircraft leaves the mission (or the server restarts).
-TRACK_MAX_POINTS = 3600
+# Flight-path trails. Keep about three hours at the observed rate of roughly
+# one recorded point per second. Nothing is time-expired — the trail stays
+# until the aircraft leaves the mission (or the server restarts).
+TRACK_MAX_POINTS = 10800
 # Stop recording a trail once the aircraft is this far from the field (it is
 # off-station; the trail would only clutter the map and waste memory).
 TRACK_RADIUS_NM = 60.0
