@@ -958,6 +958,9 @@ class AtcBrain:
         # Last DCS unit name per player from `sync_speakers`. A change is a new
         # spawn: the previous callsign is forgotten so the new slot can bind.
         self._online_players: dict[str, str] = {}
+        # Last known pilot callsign for each DCS unit name. Synthetic slot names
+        # cannot be parsed as callsigns, but a later player may reuse that slot.
+        self._unit_callsigns: dict[str, str] = {}
         # Single-pilot training aid: when true, a transmission we do not
         # understand is prompted with "say again" (addressed to the one pilot)
         # instead of being ignored. Set from the live pilot count (see
@@ -1018,6 +1021,10 @@ class AtcBrain:
             return
         for key in self.callsigns.speaker_spellings(who):
             self.speaker_callsigns[key] = callsign
+        who_keys = set(self._speaker_keys(who))
+        for player, unit_name in self._online_players.items():
+            if who_keys.intersection(self._speaker_keys(player)):
+                self._unit_callsigns[unit_name] = callsign
 
     def sync_speakers(self, pairs: list[tuple[str, str]]) -> None:
         """Sync the callsign registry and speaker map from the live unit list.
@@ -1065,10 +1072,32 @@ class AtcBrain:
         for player, unit_name in live_players.items():
             prev = self._online_players.get(player)
             if prev is not None and prev != unit_name:
+                # A unit change is a respawn: clear the old flight and any
+                # stale state already attached to the newly occupied slot.
+                old_callsign = self.callsign_for_speaker(player)
+                if old_callsign == player:
+                    old_callsign = slot_callsign(prev) or ""
+                if old_callsign:
+                    self.reset_pilot_state(old_callsign)
                 self._forget_speaker(player)
+                new_callsign = (discovered.get(player)
+                                or self._unit_callsigns.get(unit_name, ""))
+                if new_callsign:
+                    self.reset_pilot_state(new_callsign)
         for player in list(self._online_players):
             if player not in live_players:
+                # Leaving drops the speaker binding. State is cleared at the
+                # next detected join, so join and respawn share one reset rule.
                 self._forget_speaker(player)
+        for player, unit_name in live_players.items():
+            if player not in self._online_players:
+                # A player who reconnects in the same unit name has no unit
+                # name change to signal a fresh flight; the online transition
+                # itself must still clear their previous ATC phase.
+                callsign = (discovered.get(player)
+                            or self._unit_callsigns.get(unit_name, ""))
+                if callsign:
+                    self.reset_pilot_state(callsign)
         self._online_players = dict(live_players)
         self._seeded_keys = {}
         for player, callsign in discovered.items():
@@ -1076,6 +1105,17 @@ class AtcBrain:
                 for key in self._speaker_keys(player):
                     self.speaker_callsigns[key] = callsign
                     self._seeded_keys[key] = callsign
+        for player, unit_name in live_players.items():
+            callsign = discovered.get(player) or self.callsign_for_speaker(player)
+            if callsign and callsign != player:
+                self._unit_callsigns[unit_name] = callsign
+
+    def reset_pilot_state(self, callsign: str) -> None:
+        """Drop state that belongs to a completed or newly joined flight."""
+        if not callsign:
+            return
+        self.pilots.pop(callsign, None)
+        self.disarm_topgun(callsign)
 
     def known_callsigns(self, players: list[str]) -> list[str]:
         """The real callsigns of these online pilots, unknown ones omitted.

@@ -1770,6 +1770,74 @@ def test_sync_speakers_drops_the_seed_when_the_slot_goes_away(brain):
     assert brain.callsign_for_speaker("Caveman") == "Caveman"
 
 
+def test_rejoining_clears_old_pilot_state_before_ground_readback(brain):
+    """A leave/rejoin in the same slot starts a fresh Ground sequence."""
+    pairs = [("Caveman", "Adder11")]
+    brain.sync_speakers(pairs)
+    pilot = brain._pilot("Adder 1-1")
+    pilot.phase = Phase.TAKEOFF
+    pilot.info_issued = True
+
+    # The bridge observes the player leaving, then returning in the same unit.
+    brain.sync_speakers([])
+    assert brain.pilots["Adder 1-1"].phase == Phase.TAKEOFF
+    brain.sync_speakers(pairs)
+    assert "Adder 1-1" not in brain.pilots
+    assert brain.callsign_for_speaker("Caveman") == "Adder 1-1"
+
+    brain.handle("Ground, Adder one", controller=Controller.GROUND,
+                 speaker="Caveman")
+    info = brain.handle(
+        "Adder one, one ship Hornet, on ramp south, with information Kilo",
+        controller=Controller.GROUND, speaker="Caveman")
+    assert "runway 25 in use" in info
+    readback = brain.handle(
+        "Runway 25 in use, QNH 2996, Adder one",
+        controller=Controller.GROUND, speaker="Caveman")
+    assert "readback correct" in readback.lower()
+
+
+def test_newly_detected_player_starts_with_no_previous_pilot_state(brain):
+    """A first detected join also clears stale state for the occupied slot."""
+    brain._pilot("Adder 1-1").phase = Phase.TAKEOFF
+    brain.sync_speakers([("Caveman", "Adder11")])
+    assert "Adder 1-1" not in brain.pilots
+
+
+def test_new_player_reusing_a_slot_gets_fresh_pilot_state(brain):
+    """A different player taking the same slot cannot inherit its old phase."""
+    brain.sync_speakers([("Caveman", "Adder11")])
+    old = brain._pilot("Adder 1-1")
+    old.phase = Phase.LANDING
+    old.stingray_training_tasks.append({"status": "old flight"})
+
+    # One bridge poll can observe the replacement without an empty interval.
+    brain.sync_speakers([("Maverick", "Adder11")])
+
+    assert brain.callsign_for_speaker("Maverick") == "Adder 1-1"
+    assert "Adder 1-1" not in brain.pilots
+    fresh = brain._pilot("Adder 1-1")
+    assert fresh.phase == Phase.IDLE
+    assert fresh.stingray_training_tasks == []
+
+
+def test_new_player_reusing_synthetic_slot_clears_previous_callsign(brain):
+    """A dynamic DCS unit name still identifies reused-slot state."""
+    unit = "Kutaisi_F/A-18C Lot 20_2- 1"
+    brain.sync_speakers([("Caveman", unit)])
+    brain.remember_speaker("Caveman", "Ford 1")
+    brain.sync_speakers([("Caveman", unit)])
+    old = brain._pilot("Ford 1")
+    old.phase = Phase.LANDING
+    old.stingray_training_tasks.append({"status": "old flight"})
+
+    brain.sync_speakers([("Maverick", unit)])
+
+    assert "Ford 1" not in brain.pilots
+    assert brain._pilot("Ford 1").phase == Phase.IDLE
+    assert brain._pilot("Ford 1").stingray_training_tasks == []
+
+
 def test_radio_cannot_steal_a_live_slot_callsign(brain):
     """A DCS slot is the seat for this spawn; STT cannot jump the pilot.
 
@@ -1799,9 +1867,16 @@ def test_respawn_in_another_flight_reseeds_callsign(brain):
     """A new DCS unit name is a new spawn; the previous seat is released."""
     brain.sync_speakers([("Caveman", "Adder11")])
     assert brain.callsign_for_speaker("Caveman") == "Adder 1-1"
+    brain._pilot("Adder 1-1").phase = Phase.TAKEOFF
+    brain._pilot("Adder 2-1").phase = Phase.AIRBORNE
+    brain._topgun_armed.update({"Adder 1-1", "Adder 2-1"})
     brain.remember_speaker("Caveman", "Ford 1")
     brain.sync_speakers([("Caveman", "Adder21")])
     assert brain.callsign_for_speaker("Caveman") == "Adder 2-1"
+    assert "Adder 1-1" not in brain.pilots
+    assert "Adder 2-1" not in brain.pilots
+    assert not brain.topgun_armed("Adder 1-1")
+    assert not brain.topgun_armed("Adder 2-1")
 
 
 def test_radio_learned_binding_is_dropped_when_the_player_leaves(brain):

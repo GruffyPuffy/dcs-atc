@@ -1059,6 +1059,11 @@ def main() -> None:
                             ac.lat, ac.lon, max_distance_nm=0.75)
                     if spawn_callsign:
                         with lock:
+                            # This branch runs only for a newly detected join
+                            # or respawn. A callsign can outlive its DCS player
+                            # session, so every new spawn starts with a wholly
+                            # fresh phase and task state.
+                            brain.reset_pilot_state(spawn_callsign)
                             brain.set_spawn_ramp(spawn_callsign, spawn_ramp)
                     if respawned:
                         log(f"PLAYER RESPAWN: {ac.player}  "
